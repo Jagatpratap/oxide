@@ -37,6 +37,45 @@ pub fn create_primitive(world: &mut World, p: PrimitiveType) -> GameObjectId {
 }
 
 /// A material asset with a color (Unity: Create > Material, then set Base Map color).
+/// A primitive mesh without a collider (visual-only parts of a larger object).
+pub fn create_visual(
+    world: &mut World,
+    name: &str,
+    p: PrimitiveType,
+    material: Option<Handle<Material>>,
+) -> GameObjectId {
+    let id = world.create(name);
+    world.add_component(
+        id,
+        MeshFilter {
+            mesh: Some(Handle::from_path(p.mesh_path())),
+        },
+    );
+    world.add_component(
+        id,
+        match material {
+            Some(m) => MeshRenderer::with_material(m),
+            None => MeshRenderer::default(),
+        },
+    );
+    id
+}
+
+/// Sets local position/rotation (degrees)/scale in one call.
+pub fn set_local(
+    world: &mut World,
+    id: GameObjectId,
+    position: Vector3,
+    euler: Vector3,
+    scale: Vector3,
+) {
+    if let Some(t) = world.transform_mut(id) {
+        t.local_position = position;
+        t.local_rotation = Quaternion::euler_v(euler);
+        t.local_scale = scale;
+    }
+}
+
 pub fn color_material(world: &mut World, name: &str, color: Color) -> Handle<Material> {
     world
         .resource_mut::<AssetServer>()

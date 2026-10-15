@@ -21,6 +21,11 @@ pub fn value_to_json(world: Option<&World>, v: &Value) -> Json {
             }
         }
         Value::List(items) => Json::Array(items.iter().map(|i| value_to_json(world, i)).collect()),
+        Value::Object(map) => Json::Object(
+            map.iter()
+                .map(|(k, v)| (k.clone(), value_to_json(world, v)))
+                .collect(),
+        ),
         Value::Null => Json::Null,
     }
 }
@@ -185,7 +190,9 @@ fn scalar(kind: ValueKind, options: &[&str], v: &Json, world: &World) -> Result<
                 .ok_or("no such GameObject")?
                 .to_bits(),
         ),
-        ValueKind::List | ValueKind::Null => return Err("unsupported nested value".into()),
+        ValueKind::List | ValueKind::Object | ValueKind::Null => {
+            return Err("unsupported nested value".into());
+        }
     })
 }
 
@@ -204,10 +211,51 @@ pub fn json_to_value(f: &FieldInfo, v: &Json, world: &World) -> Result<Value, St
 
 /// Converts `{field: value, ...}` for a type into reflected values (resolving object
 /// references against `world`). Returns the values and per-field errors.
+/// Parses JSON shaped like `template` (the field's current value), for nested structs whose
+/// inner field kinds are only known from an existing value.
+pub fn json_like(template: &Value, v: &Json, world: &World) -> Result<Value, String> {
+    let kind = template.kind();
+    match template {
+        Value::Object(map) => {
+            let obj = v.as_object().ok_or("expected an object")?;
+            let mut out = std::collections::BTreeMap::new();
+            for (k, jv) in obj {
+                let t = map.get(k).ok_or_else(|| {
+                    format!(
+                        "no field `{k}` (fields: {:?})",
+                        map.keys().collect::<Vec<_>>()
+                    )
+                })?;
+                out.insert(k.clone(), json_like(t, jv, world)?);
+            }
+            Ok(Value::Object(out))
+        }
+        Value::List(items) => {
+            let arr = v.as_array().ok_or("expected an array")?;
+            match items.first() {
+                Some(t) => arr
+                    .iter()
+                    .map(|i| json_like(t, i, world))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map(Value::List),
+                None => Err("cannot infer the element type of an empty list".into()),
+            }
+        }
+        Value::Enum(_) => Ok(Value::Enum(
+            v.as_str().ok_or("expected a variant name")?.to_owned(),
+        )),
+        Value::Null => Err(
+            "cannot infer the type of a null field; set it with set_component's typed path".into(),
+        ),
+        _ => scalar(kind, &[], v, world),
+    }
+}
+
 pub fn parse_fields(
     info: &oxide_core::reflect::TypeInfo,
     fields: &serde_json::Map<String, Json>,
     world: &World,
+    current: Option<&dyn Reflect>,
 ) -> (Vec<(&'static str, Value)>, Vec<String>) {
     let mut out = Vec::new();
     let mut errors = Vec::new();
@@ -221,7 +269,15 @@ pub fn parse_fields(
             errors.push(format!("{}: no field `{k}` (fields: {names:?})", info.name));
             continue;
         };
-        match json_to_value(f, v, world) {
+        let parsed = if f.kind == ValueKind::Object {
+            match current.and_then(|c| c.get_field(f.name)) {
+                Some(t) => json_like(&t, v, world),
+                None => Err("nested value without a template".into()),
+            }
+        } else {
+            json_to_value(f, v, world)
+        };
+        match parsed {
             Ok(val) => out.push((f.name, val)),
             Err(e) => errors.push(format!("{}.{}: {e}", info.name, f.name)),
         }

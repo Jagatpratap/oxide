@@ -14,6 +14,7 @@ oxide_assets.workspace = true
 oxide_scene.workspace = true
 oxide_input.workspace = true
 oxide_physics.workspace = true
+oxide_standard.workspace = true
 winit.workspace = true
 log.workspace = true
 serde_json.workspace = true

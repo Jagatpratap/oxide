@@ -40,7 +40,8 @@ pub enum CollisionDetectionMode {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum RbCommand {
+#[doc(hidden)]
+pub enum RbCommand {
     Force(Vector3, ForceMode),
     ForceAt(Vector3, Vector3, ForceMode),
     Torque(Vector3, ForceMode),
@@ -72,13 +73,17 @@ pub struct Rigidbody {
     pub freeze_rotation_y: bool,
     pub freeze_rotation_z: bool,
     #[reflect(skip)]
-    pub(crate) velocity: Vector3,
+    #[doc(hidden)]
+    pub velocity: Vector3,
     #[reflect(skip)]
-    pub(crate) angular_velocity: Vector3,
+    #[doc(hidden)]
+    pub angular_velocity: Vector3,
     #[reflect(skip)]
-    pub(crate) sleeping: bool,
+    #[doc(hidden)]
+    pub sleeping: bool,
     #[reflect(skip)]
-    pub(crate) commands: Vec<RbCommand>,
+    #[doc(hidden)]
+    pub commands: Vec<RbCommand>,
 }
 
 impl Default for Rigidbody {
@@ -326,9 +331,11 @@ pub struct TerrainCollider {
     pub size: Vector3,
     pub resolution: u32,
     #[reflect(skip)]
+    #[doc(hidden)]
     pub heights: std::sync::Arc<Vec<f32>>,
     /// Bumped when `heights` changes so the physics shape is rebuilt.
     #[reflect(skip)]
+    #[doc(hidden)]
     pub version: u64,
     #[reflect(range(0, 1))]
     pub friction: f32,
@@ -368,10 +375,13 @@ pub struct CharacterController {
     pub radius: f32,
     pub height: f32,
     #[reflect(skip)]
+    #[doc(hidden)]
     pub is_grounded: bool,
     #[reflect(skip)]
+    #[doc(hidden)]
     pub velocity: Vector3,
     #[reflect(skip)]
+    #[doc(hidden)]
     pub collision_flags: CollisionFlags,
 }
 
@@ -421,11 +431,13 @@ pub struct WheelCollider {
     /// Optional wheel mesh object posed automatically every frame (spin, steer, suspension).
     pub wheel_model: Option<GameObjectId>,
     #[reflect(skip)]
-    pub(crate) state: WheelState,
+    #[doc(hidden)]
+    pub state: WheelState,
 }
 
 #[derive(Clone, Debug, Default)]
-pub(crate) struct WheelState {
+#[doc(hidden)]
+pub struct WheelState {
     pub grounded: bool,
     pub rpm: f32,
     pub position: Vector3,

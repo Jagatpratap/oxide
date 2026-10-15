@@ -1,0 +1,13 @@
+[package]
+name = "oxide_standard"
+description = "Oxide standard assets: car controller, follow/orbit/fly cameras, first- and third-person controllers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+oxide_math.workspace = true
+oxide_core.workspace = true
+oxide_scene.workspace = true
+oxide_input.workspace = true
+oxide_physics.workspace = true

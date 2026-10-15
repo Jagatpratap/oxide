@@ -32,6 +32,8 @@ pub enum Value {
     /// A GameObject reference, by raw id.
     ObjectRef(u64),
     List(Vec<Value>),
+    /// A nested serializable struct (Unity `[Serializable]` class field), by field name.
+    Object(BTreeMap<String, Value>),
     /// Unity's `null` (an empty `Option`).
     Null,
 }
@@ -51,6 +53,7 @@ pub enum ValueKind {
     Asset,
     ObjectRef,
     List,
+    Object,
     Null,
 }
 
@@ -70,6 +73,7 @@ impl Value {
             Value::Asset(_) => ValueKind::Asset,
             Value::ObjectRef(_) => ValueKind::ObjectRef,
             Value::List(_) => ValueKind::List,
+            Value::Object(_) => ValueKind::Object,
             Value::Null => ValueKind::Null,
         }
     }
@@ -86,6 +90,16 @@ pub trait FieldValue: Sized {
     const ELEMENT: Option<ValueKind> = None;
     fn to_value(&self) -> Value;
     fn from_value(v: Value) -> Option<Self>;
+    /// Updates `self` in place (nested structs merge field by field).
+    fn set_from(&mut self, v: Value) -> bool {
+        match Self::from_value(v) {
+            Some(n) => {
+                *self = n;
+                true
+            }
+            None => false,
+        }
+    }
 }
 
 macro_rules! field_value {
@@ -110,8 +124,33 @@ field_value!(bool, Bool, |s| *s, |v| v);
 field_value!(i32, Int, |s| *s as i64, |v| i32::try_from(v).ok()?);
 field_value!(i64, Int, |s| *s, |v| v);
 field_value!(u32, Int, |s| *s as i64, |v| u32::try_from(v).ok()?);
-field_value!(f32, Float, |s| *s as f64, |v| v as f32);
-field_value!(f64, Float, |s| *s, |v| v);
+impl FieldValue for f32 {
+    const KIND: ValueKind = ValueKind::Float;
+    fn to_value(&self) -> Value {
+        Value::Float(*self as f64)
+    }
+    fn from_value(v: Value) -> Option<Self> {
+        match v {
+            Value::Float(f) => Some(f as f32),
+            Value::Int(i) => Some(i as f32),
+            _ => None,
+        }
+    }
+}
+
+impl FieldValue for f64 {
+    const KIND: ValueKind = ValueKind::Float;
+    fn to_value(&self) -> Value {
+        Value::Float(*self)
+    }
+    fn from_value(v: Value) -> Option<Self> {
+        match v {
+            Value::Float(f) => Some(f),
+            Value::Int(i) => Some(i as f64),
+            _ => None,
+        }
+    }
+}
 field_value!(String, String, |s| s.clone(), |v| v);
 field_value!(Vector2, Vector2, |s| s.to_array(), |v| Vector2::from_array(
     v
@@ -260,13 +299,14 @@ macro_rules! reflect_struct {
                 match name {
                     $(stringify!($field) => {
                         let expected = $crate::reflect::field_kind(&self.$field);
-                        self.$field = $crate::reflect::FieldValue::from_value(value).ok_or_else(|| {
-                            $crate::reflect::ReflectError::WrongType {
+                        if $crate::reflect::FieldValue::set_from(&mut self.$field, value) {
+                            Ok(())
+                        } else {
+                            Err($crate::reflect::ReflectError::WrongType {
                                 field: name.to_owned(),
                                 expected,
-                            }
-                        })?;
-                        Ok(())
+                            })
+                        }
                     })*
                     _ => Err($crate::reflect::ReflectError::NoSuchField(name.to_owned())),
                 }

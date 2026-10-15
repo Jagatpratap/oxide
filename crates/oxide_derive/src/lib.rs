@@ -157,10 +157,11 @@ fn derive_struct(input: &DeriveInput, fields: &Fields) -> syn::Result<TokenStrea
         sets.push(quote! {
             #name => {
                 let expected = #core::reflect::field_kind(&self.#id);
-                self.#id = #core::reflect::FieldValue::from_value(value).ok_or_else(|| {
-                    #core::reflect::ReflectError::WrongType { field: name.to_owned(), expected }
-                })?;
-                Ok(())
+                if #core::reflect::FieldValue::set_from(&mut self.#id, value) {
+                    Ok(())
+                } else {
+                    Err(#core::reflect::ReflectError::WrongType { field: name.to_owned(), expected })
+                }
             }
         });
     }
@@ -181,6 +182,28 @@ fn derive_struct(input: &DeriveInput, fields: &Fields) -> syn::Result<TokenStrea
                 match name {
                     #(#sets)*
                     _ => Err(#core::reflect::ReflectError::NoSuchField(name.to_owned())),
+                }
+            }
+        }
+
+        /// Nested use as a field of another reflected type (serialized as an object).
+        impl #impl_g #core::reflect::FieldValue for #ty #ty_g #where_g {
+            const KIND: #core::reflect::ValueKind = #core::reflect::ValueKind::Object;
+            const TYPE_NAME: Option<&'static str> = Some(#ty_name);
+            fn to_value(&self) -> #core::reflect::Value {
+                #core::reflect::Value::Object(
+                    #core::reflect::Reflect::fields(self).into_iter().map(|(k, v)| (k.to_string(), v)).collect()
+                )
+            }
+            fn from_value(_: #core::reflect::Value) -> Option<Self> {
+                None
+            }
+            fn set_from(&mut self, v: #core::reflect::Value) -> bool {
+                match v {
+                    #core::reflect::Value::Object(map) => map
+                        .into_iter()
+                        .all(|(k, v)| #core::reflect::Reflect::set_field(self, &k, v).is_ok()),
+                    _ => false,
                 }
             }
         }

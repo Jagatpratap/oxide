@@ -20,6 +20,7 @@ pub use oxide_math as math;
 pub use oxide_physics as physics;
 pub use oxide_render as render;
 pub use oxide_scene as scene;
+pub use oxide_standard as standard;
 
 /// Physics (Rapier) with Unity's components and `Physics` API.
 pub struct PhysicsPlugin;
@@ -34,9 +35,18 @@ impl Plugin for PhysicsPlugin {
     }
 }
 
+/// Standard assets: car controller, cameras, character controllers.
+pub struct StandardAssetsPlugin;
+
+impl Plugin for StandardAssetsPlugin {
+    fn build(&self, world: &mut oxide_scene::World, _: &mut Vec<Box<dyn oxide_scene::System>>) {
+        oxide_standard::register(&mut world.registry);
+    }
+}
+
 /// Subsystems installed into every App.
 pub fn default_plugins() -> Vec<Box<dyn Plugin>> {
-    vec![Box::new(PhysicsPlugin)]
+    vec![Box::new(PhysicsPlugin), Box::new(StandardAssetsPlugin)]
 }
 
 /// Everything a game script usually needs.
@@ -65,6 +75,7 @@ pub mod prelude {
         LightType, MeshFilter, MeshRenderer, Projection, RenderSettings, ShadowCastingMode,
         SkinnedMeshRenderer, Space, World,
     };
+    pub use oxide_standard::*;
 }
 
 pub mod json_values;

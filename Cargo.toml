@@ -20,6 +20,7 @@ oxide_scene = { path = "crates/oxide_scene" }
 oxide_input = { path = "crates/oxide_input" }
 oxide_physics = { path = "crates/oxide_physics" }
 oxide_audio = { path = "crates/oxide_audio" }
+oxide_standard = { path = "crates/oxide_standard" }
 
 glam = { version = "0.33", features = ["bytemuck", "serde"] }
 serde = { version = "1", features = ["derive"] }

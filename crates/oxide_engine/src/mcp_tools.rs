@@ -177,7 +177,13 @@ fn set_component(
         .component_dyn(id, cid)
         .ok_or("component busy")?
         .type_info();
-    let (values, mut errors) = parse_fields(&info, fields, w);
+    let (values, mut errors) = parse_fields(
+        &info,
+        fields,
+        w,
+        w.component_dyn(id, cid)
+            .map(|c| c as &dyn oxide_core::reflect::Reflect),
+    );
     let comp = w.component_dyn_mut(id, cid).ok_or("component busy")?;
     set_fields(comp, values, &mut errors);
     Ok(errors)
@@ -610,7 +616,12 @@ pub fn build_server(bus: Arc<Bus>) -> McpServer {
             let mut errors = Vec::new();
             if let Some(f) = args.get("fields").and_then(Json::as_object) {
                 let info = comp.type_info();
-                let (values, errs) = parse_fields(&info, f, w);
+                let (values, errs) = parse_fields(
+                    &info,
+                    f,
+                    w,
+                    Some(comp.as_ref() as &dyn oxide_core::reflect::Reflect),
+                );
                 errors = errs;
                 set_fields(comp.as_mut(), values, &mut errors);
             }
@@ -835,7 +846,12 @@ pub fn build_server(bus: Arc<Bus>) -> McpServer {
                 .unwrap_or(&empty);
             let info =
                 oxide_core::reflect::Reflect::type_info(e.world.resource::<RenderSettings>());
-            let (values, mut errors) = parse_fields(&info, fields, &e.world);
+            let (values, mut errors) = parse_fields(
+                &info,
+                fields,
+                &e.world,
+                Some(e.world.resource::<RenderSettings>() as &dyn oxide_core::reflect::Reflect),
+            );
             set_fields(
                 e.world.resource_mut::<RenderSettings>(),
                 values,
@@ -906,7 +922,12 @@ pub fn build_server(bus: Arc<Bus>) -> McpServer {
                     ..Default::default()
                 });
             let info = oxide_core::reflect::Reflect::type_info(&mat);
-            let (values, mut errors) = parse_fields(&info, &fields, &e.world);
+            let (values, mut errors) = parse_fields(
+                &info,
+                &fields,
+                &e.world,
+                Some(&mat as &dyn oxide_core::reflect::Reflect),
+            );
             set_fields(&mut mat, values, &mut errors);
             let json = reflect_to_json(None, &mat);
             e.world

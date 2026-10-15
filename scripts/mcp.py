@@ -24,7 +24,10 @@ def main():
         i = argv.index("--png"); png = argv[i + 1]; del argv[i:i + 2]
     tool = argv[0]
     args = json.loads(argv[1]) if len(argv) > 1 else {}
-    resp = call(tool, args)
+    try:
+        resp = call(tool, args)
+    except OSError as e:
+        print(f"cannot reach the engine at {URL}: {e}"); sys.exit(2)
     if "error" in resp:
         print("RPC error:", resp["error"]); sys.exit(1)
     res = resp["result"]

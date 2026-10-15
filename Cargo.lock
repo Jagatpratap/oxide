@@ -1680,6 +1680,7 @@ dependencies = [
  "oxide_physics",
  "oxide_render",
  "oxide_scene",
+ "oxide_standard",
  "serde_json",
  "winit",
 ]
@@ -1756,6 +1757,17 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
+]
+
+[[package]]
+name = "oxide_standard"
+version = "0.1.0"
+dependencies = [
+ "oxide_core",
+ "oxide_input",
+ "oxide_math",
+ "oxide_physics",
+ "oxide_scene",
 ]
 
 [[package]]
