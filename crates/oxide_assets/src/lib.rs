@@ -15,6 +15,7 @@ pub mod mesh;
 pub mod model;
 pub mod primitives;
 pub mod server;
+pub mod terrain;
 pub mod texture;
 
 pub use animation::{
@@ -27,4 +28,5 @@ pub use mesh::Mesh;
 pub use model::{Model, ModelNode, ModelSkin};
 pub use primitives::PrimitiveType;
 pub use server::{AssetServer, AudioClip, DEFAULT_MATERIAL};
+pub use terrain::{TerrainData, TerrainLayer, TreeInstance, TreePrototype};
 pub use texture::{FilterMode, Texture2D, TextureWrapMode};

@@ -120,6 +120,7 @@ fn grow_buffer(
 
 pub struct SceneRenderer {
     pub gpu_assets: GpuAssets,
+    terrain: crate::terrain::TerrainGpu,
     sample_count: u32,
     frame_layout: wgpu::BindGroupLayout,
     shadow_layout: wgpu::BindGroupLayout,
@@ -275,7 +276,13 @@ impl SceneRenderer {
             bind_group_layouts: &[Some(&frame_layout)],
             immediate_size: 0,
         });
-        let lit_module = shader(device, "lit.wgsl", include_str!("shaders/lit.wgsl"));
+        let lit_src = format!(
+            "{}\n{}",
+            include_str!("shaders/lit.wgsl"),
+            include_str!("shaders/lighting.wgsl")
+        );
+        let lit_module = shader(device, "lit.wgsl", &lit_src);
+
         let shadow_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("shadow.wgsl"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/shadow.wgsl").into()),
@@ -420,7 +427,60 @@ impl SceneRenderer {
             .map(|_| buf("shadow view", 64, wgpu::BufferUsages::UNIFORM))
             .collect();
         let post = PostProcessor::new(device);
+        let mut terrain = crate::terrain::TerrainGpu::new(device);
+        {
+            let terrain_src = format!(
+                "{}\n{}",
+                include_str!("shaders/terrain.wgsl"),
+                include_str!("shaders/lighting.wgsl")
+            );
+            let module = shader(device, "terrain.wgsl", &terrain_src);
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("terrain pipeline layout"),
+                bind_group_layouts: &[Some(&frame_layout), Some(&terrain.layout)],
+                immediate_size: 0,
+            });
+            let buffers = vertex_layouts(false);
+            terrain.pipeline = Some(device.create_render_pipeline(
+                &wgpu::RenderPipelineDescriptor {
+                    label: Some("terrain pipeline"),
+                    layout: Some(&layout),
+                    vertex: wgpu::VertexState {
+                        module: &module,
+                        entry_point: Some("vs_main"),
+                        compilation_options: Default::default(),
+                        buffers: &buffers,
+                    },
+                    primitive: wgpu::PrimitiveState {
+                        front_face: wgpu::FrontFace::Cw,
+                        cull_mode: Some(wgpu::Face::Back),
+                        ..Default::default()
+                    },
+                    depth_stencil: Some(wgpu::DepthStencilState {
+                        format: DEPTH_FORMAT,
+                        depth_write_enabled: Some(true),
+                        depth_compare: Some(wgpu::CompareFunction::Greater),
+                        stencil: Default::default(),
+                        bias: Default::default(),
+                    }),
+                    multisample: ms,
+                    fragment: Some(wgpu::FragmentState {
+                        module: &module,
+                        entry_point: Some("fs_main"),
+                        compilation_options: Default::default(),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format: HDR_FORMAT,
+                            blend: None,
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                    }),
+                    multiview_mask: None,
+                    cache: None,
+                },
+            ));
+        }
         Self {
+            terrain,
             gpu_assets,
             sample_count,
             frame_layout,
@@ -739,6 +799,19 @@ impl SceneRenderer {
             });
         }
 
+        // Terrain chunks: (data, mesh, model, receive, center, radius).
+        let mut terrain_items = Vec::new();
+        for t in &frame.terrain_draws {
+            if !self.gpu_assets.ensure_mesh(device, assets, t.mesh)
+                || !self.terrain.prepare(device, queue, assets, t.data)
+            {
+                continue;
+            }
+            let mesh = &self.gpu_assets.meshes[&t.mesh];
+            let c = t.model.transform_point3(mesh.bounds.center);
+            terrain_items.push((t, c, mesh.bounds.extents.length()));
+        }
+
         // ---- lights and joints --------------------------------------------------------
         let lights: Vec<LightUniform> = frame
             .lights
@@ -877,6 +950,7 @@ impl SceneRenderer {
 
         // ---- per-camera culling and batching -------------------------------------------
         let mut camera_batches: Vec<(Vec<Batch>, Vec<Batch>)> = Vec::new();
+        let mut camera_terrain: Vec<Vec<(AssetId, AssetId, u32)>> = Vec::new();
         for (ci, cam) in frame.cameras.iter().enumerate() {
             let aspect = aspect0(cam);
             let vp = cam.view_projection(aspect);
@@ -958,6 +1032,25 @@ impl SceneRenderer {
                 })
                 .collect();
             camera_batches.push((ob, tb));
+            let mut tl = Vec::new();
+            for (t, c, r) in &terrain_items {
+                if !sphere_visible(&planes, *c, *r) {
+                    stats.culled += 1;
+                    continue;
+                }
+                let idx = instances.len() as u32;
+                instances.push(Instance {
+                    model: t.model.to_cols_array(),
+                    normal: [
+                        [1.0, 0.0, 0.0, 0.0],
+                        [0.0, 1.0, 0.0, 0.0],
+                        [0.0, 0.0, 1.0, 0.0],
+                    ],
+                    extra: [0, t.receive_shadows as u32, 0, 0],
+                });
+                tl.push((t.data, t.mesh, idx));
+            }
+            camera_terrain.push(tl);
 
             // Frame uniform for this camera.
             let view = cam.view();
@@ -1159,6 +1252,26 @@ impl SceneRenderer {
                     pass.draw(0..3, 0..1);
                 }
                 pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+                if let Some(tp) = &self.terrain.pipeline
+                    && !camera_terrain[ci].is_empty()
+                {
+                    pass.set_pipeline(tp);
+                    for &(data, mesh_id, idx) in &camera_terrain[ci] {
+                        let (Some(bg), Some(mesh)) = (
+                            self.terrain.bind_group(data),
+                            self.gpu_assets.meshes.get(&mesh_id),
+                        ) else {
+                            continue;
+                        };
+                        pass.set_bind_group(1, bg, &[]);
+                        pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                        pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                        let range = mesh.submeshes[0].clone();
+                        stats.triangles += ((range.end - range.start) / 3) as u64;
+                        stats.draw_calls += 1;
+                        pass.draw_indexed(range, 0, idx..idx + 1);
+                    }
+                }
                 let (ob, tb) = &camera_batches[ci];
                 for b in ob.iter().chain(tb) {
                     let mesh = &self.gpu_assets.meshes[&b.mesh];

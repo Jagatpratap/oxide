@@ -12,6 +12,7 @@ pub mod gpu;
 pub mod gpu_assets;
 pub mod post;
 pub mod renderer;
+pub mod terrain;
 
 pub use capture::{CapturedImage, capture_frame};
 pub use frame::*;

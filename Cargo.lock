@@ -2384,6 +2384,7 @@ dependencies = [
  "oxide_render",
  "oxide_scene",
  "oxide_standard",
+ "oxide_terrain",
  "oxide_ui",
  "serde_json",
  "winit",
@@ -2472,6 +2473,18 @@ dependencies = [
  "oxide_input",
  "oxide_math",
  "oxide_physics",
+ "oxide_scene",
+]
+
+[[package]]
+name = "oxide_terrain"
+version = "0.1.0"
+dependencies = [
+ "oxide_assets",
+ "oxide_core",
+ "oxide_math",
+ "oxide_physics",
+ "oxide_render",
  "oxide_scene",
 ]
 

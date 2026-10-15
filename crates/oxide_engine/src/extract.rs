@@ -136,6 +136,13 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
     }
     frame.sun = sun.map(|(_, s)| s);
 
+    // Terrains choose chunk LODs for the first camera.
+    let cam_pos = frame
+        .cameras
+        .first()
+        .map_or(oxide_math::Vector3::ZERO, |c| c.position);
+    oxide_terrain::extract(world, cam_pos, &mut frame.terrain_draws, &mut frame.draws);
+
     let default_mat = AssetId::from_path(DEFAULT_MATERIAL);
     let layer_of = |id| world.get(id).map_or(0, |o| o.layer);
     for (id, r) in world.query::<MeshRenderer>() {

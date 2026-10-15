@@ -448,3 +448,72 @@ fn vehicle_hud(world: &mut World, car: GameObjectId) {
         },
     );
 }
+
+/// Open world: a 2 km generated terrain with forests, a flattened clearing, the drivable
+/// car and fog — the starting point for open-world / battle-royale maps.
+pub fn open_world(world: &mut World) {
+    let cam = sun_and_camera(world);
+    {
+        let rs = world.resource_mut::<RenderSettings>();
+        rs.fog = true;
+        rs.fog_density = 0.0012;
+        rs.fog_color = Color::rgb(0.66, 0.74, 0.84);
+        rs.shadow_distance = 250.0;
+    }
+    let size = Vector3::new(2000.0, 220.0, 2000.0);
+    let terrain = create_terrain(world, "Terrain", size, 1025, 7);
+    world.set_position(terrain, Vector3::new(-1000.0, 0.0, -1000.0));
+    let data_h = world
+        .get_component::<Terrain>(terrain)
+        .unwrap()
+        .data
+        .clone()
+        .unwrap();
+    let tree_mesh = world
+        .resource_mut::<AssetServer>()
+        .meshes
+        .add(simple_tree_mesh(9.0));
+    let bark = mat(world, "Bark", Color::rgb(0.33, 0.22, 0.14), 0.0, 0.2);
+    let leaves = mat(world, "Leaves", Color::rgb(0.16, 0.36, 0.12), 0.0, 0.25);
+    {
+        let d = world
+            .resource_mut::<AssetServer>()
+            .terrains
+            .get_mut(&data_h)
+            .unwrap();
+        // A flat clearing at the center for spawning.
+        let h = d.interpolated_height(0.5, 0.5) / d.size.y;
+        d.flatten(0.5, 0.5, 60.0, 50.0, h);
+        d.auto_splat(0.06, 0.82, 32.0);
+        d.tree_prototypes.push(TreePrototype {
+            mesh: tree_mesh,
+            materials: vec![bark, leaves],
+        });
+        d.scatter_trees(0, 6000, 42, 28.0, (0.08, 0.7));
+    }
+    let ground_y = world
+        .resource::<AssetServer>()
+        .terrains
+        .get(&data_h)
+        .unwrap()
+        .interpolated_height(0.5, 0.5);
+    let car = spawn_car(
+        world,
+        Vector3::new(0.0, ground_y + 1.0, 0.0),
+        Color::rgb(0.95, 0.75, 0.1),
+    );
+    vehicle_hud(world, car);
+    world.add_component(cam, AudioListener);
+    world.add_component(
+        cam,
+        FollowCamera {
+            target: Some(car),
+            ..Default::default()
+        },
+    );
+    world.set_position(cam, Vector3::new(0.0, ground_y + 4.0, -9.0));
+    world
+        .get_component_mut::<Camera>(cam)
+        .unwrap()
+        .far_clip_plane = 3000.0;
+}

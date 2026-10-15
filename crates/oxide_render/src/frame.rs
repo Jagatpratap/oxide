@@ -116,6 +116,16 @@ pub struct DrawItem {
     pub joint_offset: Option<u32>,
 }
 
+/// One terrain chunk drawn with the terrain (splat) shader.
+#[derive(Clone, Debug)]
+pub struct TerrainDraw {
+    /// The `TerrainData` asset (layers, splat map).
+    pub data: AssetId,
+    pub mesh: AssetId,
+    pub model: Matrix4x4,
+    pub receive_shadows: bool,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum FogKind {
     Linear { start: f32, end: f32 },
@@ -173,6 +183,8 @@ pub struct RenderFrame {
     pub sun: Option<SunLight>,
     pub lights: Vec<PunctualLight>,
     pub draws: Vec<DrawItem>,
+    pub terrain_draws: Vec<TerrainDraw>,
+
     /// World-space skinning matrices (bone local-to-world × bind pose).
     pub joints: Vec<Matrix4x4>,
     pub environment: Environment,

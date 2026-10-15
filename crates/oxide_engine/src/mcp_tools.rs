@@ -1064,6 +1064,7 @@ pub fn build_server(bus: Arc<Bus>) -> McpServer {
     crate::mcp_physics::register(&mut s, bus);
     crate::mcp_audio::register(&mut s, bus);
     crate::mcp_animation::register(&mut s, bus);
+    crate::mcp_terrain::register(&mut s, bus);
 
     tool(
         &mut s,

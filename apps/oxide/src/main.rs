@@ -1,7 +1,7 @@
 //! `oxide` — runs the engine in a window with the MCP server on.
 //!
 //! ```text
-//! oxide [--scene Assets/Scenes/Main.scene] [--sample demo|vehicle|character] [--project DIR]
+//! oxide [--scene Assets/Scenes/Main.scene] [--sample demo|vehicle|character|open_world] [--project DIR]
 //!       [--mcp-addr 127.0.0.1:47474] [--no-mcp] [--size 1280x720]
 //! ```
 //! With no scene it opens Unity's default new scene (Main Camera + Directional Light);
@@ -13,7 +13,7 @@ use oxide_engine::prelude::*;
 use oxide_engine::{App, EngineConfig};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: oxide [--scene PATH] [--sample demo|vehicle|character] [--project DIR] [--mcp-addr HOST:PORT] [--no-mcp] [--size WxH]";
+const USAGE: &str = "usage: oxide [--scene PATH] [--sample demo|vehicle|character|open_world] [--project DIR] [--mcp-addr HOST:PORT] [--no-mcp] [--size WxH]";
 
 struct Args {
     config: EngineConfig,
@@ -80,6 +80,8 @@ fn main() -> ExitCode {
             "demo" => samples::demo,
             "vehicle" => samples::vehicle,
             "character" => samples::character,
+            "open_world" => samples::open_world,
+
             other => {
                 eprintln!("unknown sample `{other}` (demo, vehicle, character)");
                 return ExitCode::from(2);

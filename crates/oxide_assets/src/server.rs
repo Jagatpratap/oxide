@@ -33,6 +33,7 @@ pub struct AssetServer {
     pub animations: Assets<AnimationClip>,
     pub controllers: Assets<AnimatorController>,
     pub audio: Assets<AudioClip>,
+    pub terrains: Assets<crate::terrain::TerrainData>,
 }
 
 pub const DEFAULT_MATERIAL: &str = "builtin:Default-Material";
@@ -50,6 +51,7 @@ impl AssetServer {
             animations: Assets::default(),
             controllers: Assets::default(),
             audio: Assets::default(),
+            terrains: Assets::default(),
         };
         for p in PrimitiveType::ALL {
             s.meshes.insert(p.mesh_path(), p.mesh());

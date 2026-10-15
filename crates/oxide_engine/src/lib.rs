@@ -10,6 +10,7 @@ pub mod input_map;
 pub mod mcp_animation;
 pub mod mcp_audio;
 pub mod mcp_physics;
+pub mod mcp_terrain;
 pub mod mcp_tools;
 pub mod objects;
 
@@ -26,6 +27,7 @@ pub use oxide_physics as physics;
 pub use oxide_render as render;
 pub use oxide_scene as scene;
 pub use oxide_standard as standard;
+pub use oxide_terrain as terrain;
 pub use oxide_ui as ui;
 
 /// Physics (Rapier) with Unity's components and `Physics` API.
@@ -80,6 +82,19 @@ impl Plugin for UiPlugin {
     }
 }
 
+/// Terrain: heightmap terrain, splat layers, trees, collider.
+pub struct TerrainPlugin;
+
+impl Plugin for TerrainPlugin {
+    fn build(
+        &self,
+        world: &mut oxide_scene::World,
+        systems: &mut Vec<Box<dyn oxide_scene::System>>,
+    ) {
+        systems.push(oxide_terrain::install(world));
+    }
+}
+
 /// Standard assets: car controller, cameras, character controllers.
 pub struct StandardAssetsPlugin;
 
@@ -96,6 +111,7 @@ pub fn default_plugins() -> Vec<Box<dyn Plugin>> {
         Box::new(AnimationPlugin),
         Box::new(AudioPlugin),
         Box::new(UiPlugin),
+        Box::new(TerrainPlugin),
         Box::new(StandardAssetsPlugin),
     ]
 }
@@ -114,7 +130,9 @@ pub mod prelude {
     pub use oxide_assets::{
         AssetServer, Handle, Material, Mesh, PrimitiveType, ShaderKind, SurfaceType, Texture2D,
     };
+    pub use oxide_assets::{TerrainData, TerrainLayer, TreeInstance, TreePrototype};
     pub use oxide_audio::{Audio, AudioExt, AudioListener, AudioSource};
+    pub use oxide_terrain::{Terrain, create_terrain, sample_height, simple_tree_mesh};
     pub use oxide_ui::{
         Anchor, Canvas, Gui, GuiExt, TextAlign, UIButton, UIImage, UISlider, UIText, UIToggle, egui,
     };
