@@ -9,10 +9,12 @@
 
 pub mod cameras;
 pub mod car;
+pub mod car_audio;
 pub mod characters;
 
 pub use cameras::{FlyCamera, FollowCamera, OrbitCamera};
 pub use car::{CarController, DriveType};
+pub use car_audio::CarAudio;
 pub use characters::{FirstPersonController, Locomotion, ThirdPersonController};
 
 use oxide_core::Reflect;
@@ -57,6 +59,7 @@ impl Component for Lifetime {
 
 pub fn register(reg: &mut ComponentRegistry) {
     reg.register::<CarController>("Vehicles/Car Controller");
+    reg.register::<CarAudio>("Vehicles/Car Audio");
     reg.register::<FollowCamera>("Camera/Follow Camera");
     reg.register::<OrbitCamera>("Camera/Orbit Camera");
     reg.register::<FlyCamera>("Camera/Fly Camera");

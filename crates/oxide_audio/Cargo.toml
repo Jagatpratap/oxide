@@ -1,0 +1,13 @@
+[package]
+name = "oxide_audio"
+description = "Oxide audio (kira): AudioSource, AudioListener, 3D spatial sound, mixer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+oxide_math.workspace = true
+oxide_core.workspace = true
+oxide_assets.workspace = true
+oxide_scene.workspace = true
+kira.workspace = true

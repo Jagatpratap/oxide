@@ -131,6 +131,7 @@ pub fn spawn_car(world: &mut World, position: Vector3, paint: Color) -> GameObje
         },
     );
     world.add_component(car, CarController::default());
+    world.add_component(car, CarAudio::default());
     let body = create_visual(world, "Body", PrimitiveType::Cube, Some(body_mat.clone()));
     world.set_parent(body, Some(car), false).unwrap();
     set_local(

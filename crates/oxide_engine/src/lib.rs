@@ -6,6 +6,7 @@ pub mod bus;
 pub mod engine;
 pub mod extract;
 pub mod input_map;
+pub mod mcp_audio;
 pub mod mcp_physics;
 pub mod mcp_tools;
 pub mod objects;
@@ -14,6 +15,7 @@ pub use app::{App, AppControl, EngineConfig};
 pub use engine::{Engine, Plugin, init_world};
 
 pub use oxide_assets as assets;
+pub use oxide_audio as audio;
 pub use oxide_core as core;
 pub use oxide_input as input;
 pub use oxide_math as math;
@@ -35,6 +37,19 @@ impl Plugin for PhysicsPlugin {
     }
 }
 
+/// Audio (kira): AudioSource, AudioListener, built-in clips.
+pub struct AudioPlugin;
+
+impl Plugin for AudioPlugin {
+    fn build(
+        &self,
+        world: &mut oxide_scene::World,
+        systems: &mut Vec<Box<dyn oxide_scene::System>>,
+    ) {
+        systems.push(oxide_audio::install(world));
+    }
+}
+
 /// Standard assets: car controller, cameras, character controllers.
 pub struct StandardAssetsPlugin;
 
@@ -46,7 +61,11 @@ impl Plugin for StandardAssetsPlugin {
 
 /// Subsystems installed into every App.
 pub fn default_plugins() -> Vec<Box<dyn Plugin>> {
-    vec![Box::new(PhysicsPlugin), Box::new(StandardAssetsPlugin)]
+    vec![
+        Box::new(PhysicsPlugin),
+        Box::new(AudioPlugin),
+        Box::new(StandardAssetsPlugin),
+    ]
 }
 
 /// Everything a game script usually needs.
@@ -59,6 +78,7 @@ pub mod prelude {
     pub use oxide_assets::{
         AssetServer, Handle, Material, Mesh, PrimitiveType, ShaderKind, SurfaceType, Texture2D,
     };
+    pub use oxide_audio::{Audio, AudioExt, AudioListener, AudioSource};
     pub use oxide_core::{Reflect, Time, debug_log, debug_log_error, debug_log_warning};
     pub use oxide_input::{
         CursorLockMode, GamepadAxis, GamepadButton, Input, KeyCode, MouseButton,
