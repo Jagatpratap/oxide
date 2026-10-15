@@ -81,11 +81,27 @@ impl QuaternionExt for Quaternion {
 pub trait Matrix4x4Ext: Sized {
     /// Translation, rotation, scale (Unity `Matrix4x4.TRS`).
     fn trs(pos: Vector3, q: Quaternion, s: Vector3) -> Self;
+    /// Left-handed view matrix looking along `dir`.
+    fn look_to(eye: Vector3, dir: Vector3, up: Vector3) -> Self;
+    /// Left-handed perspective, depth 0..1 (pass `far, near` swapped for reversed-Z).
+    fn perspective(fov_y_rad: f32, aspect: f32, near: f32, far: f32) -> Self;
+    /// Left-handed orthographic, depth 0..1.
+    fn ortho(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) -> Self;
 }
 
+#[allow(deprecated)]
 impl Matrix4x4Ext for Matrix4x4 {
     fn trs(pos: Vector3, q: Quaternion, s: Vector3) -> Self {
         Matrix4x4::from_scale_rotation_translation(s, q, pos)
+    }
+    fn look_to(eye: Vector3, dir: Vector3, up: Vector3) -> Self {
+        Matrix4x4::look_to_lh(eye, dir, up)
+    }
+    fn perspective(fov_y_rad: f32, aspect: f32, near: f32, far: f32) -> Self {
+        Matrix4x4::perspective_lh(fov_y_rad, aspect, near, far)
+    }
+    fn ortho(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) -> Self {
+        Matrix4x4::orthographic_lh(left, right, bottom, top, near, far)
     }
 }
 

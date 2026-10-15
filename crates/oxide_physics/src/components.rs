@@ -1,0 +1,545 @@
+//! Physics components with Unity's names and fields.
+//! References: <https://docs.unity3d.com/Manual/class-Rigidbody.html>,
+//! <https://docs.unity3d.com/Manual/CollidersOverview.html>,
+//! <https://docs.unity3d.com/Manual/class-CharacterController.html>,
+//! <https://docs.unity3d.com/Manual/class-WheelCollider.html>
+
+use oxide_assets::{Handle, Mesh};
+use oxide_core::Reflect;
+use oxide_math::{Quaternion, Vector3};
+use oxide_scene::{Component, GameObjectId};
+
+/// Unity `ForceMode`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
+pub enum ForceMode {
+    /// Continuous force, uses mass (N).
+    #[default]
+    Force,
+    /// Continuous acceleration, ignores mass.
+    Acceleration,
+    /// Instant impulse, uses mass (N·s).
+    Impulse,
+    /// Instant velocity change, ignores mass.
+    VelocityChange,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
+pub enum RigidbodyInterpolation {
+    None,
+    /// Smooths rendering between physics steps (recommended for player vehicles/characters).
+    #[default]
+    Interpolate,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
+pub enum CollisionDetectionMode {
+    #[default]
+    Discrete,
+    /// Continuous collision detection for fast objects (bullets, cars).
+    Continuous,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum RbCommand {
+    Force(Vector3, ForceMode),
+    ForceAt(Vector3, Vector3, ForceMode),
+    Torque(Vector3, ForceMode),
+    SetVelocity(Vector3),
+    SetAngularVelocity(Vector3),
+    MovePosition(Vector3),
+    MoveRotation(Quaternion),
+    Sleep,
+    WakeUp,
+}
+
+/// Unity `Rigidbody`.
+#[derive(Clone, Debug, Reflect)]
+pub struct Rigidbody {
+    pub mass: f32,
+    /// Linear damping (Unity "Linear Damping"/drag).
+    pub linear_damping: f32,
+    pub angular_damping: f32,
+    pub use_gravity: bool,
+    pub is_kinematic: bool,
+    pub interpolation: RigidbodyInterpolation,
+    pub collision_detection: CollisionDetectionMode,
+    /// Local center of mass offset (zero = computed from colliders).
+    pub center_of_mass: Vector3,
+    pub freeze_position_x: bool,
+    pub freeze_position_y: bool,
+    pub freeze_position_z: bool,
+    pub freeze_rotation_x: bool,
+    pub freeze_rotation_y: bool,
+    pub freeze_rotation_z: bool,
+    #[reflect(skip)]
+    pub(crate) velocity: Vector3,
+    #[reflect(skip)]
+    pub(crate) angular_velocity: Vector3,
+    #[reflect(skip)]
+    pub(crate) sleeping: bool,
+    #[reflect(skip)]
+    pub(crate) commands: Vec<RbCommand>,
+}
+
+impl Default for Rigidbody {
+    fn default() -> Self {
+        Self {
+            mass: 1.0,
+            linear_damping: 0.0,
+            angular_damping: 0.05,
+            use_gravity: true,
+            is_kinematic: false,
+            interpolation: RigidbodyInterpolation::None,
+            collision_detection: CollisionDetectionMode::Discrete,
+            center_of_mass: Vector3::ZERO,
+            freeze_position_x: false,
+            freeze_position_y: false,
+            freeze_position_z: false,
+            freeze_rotation_x: false,
+            freeze_rotation_y: false,
+            freeze_rotation_z: false,
+            velocity: Vector3::ZERO,
+            angular_velocity: Vector3::ZERO,
+            sleeping: false,
+            commands: Vec::new(),
+        }
+    }
+}
+
+impl Rigidbody {
+    pub fn with_mass(mass: f32) -> Self {
+        Self {
+            mass,
+            ..Default::default()
+        }
+    }
+    /// World-space velocity (m/s) as of the last physics step (Unity `linearVelocity`).
+    pub fn velocity(&self) -> Vector3 {
+        self.velocity
+    }
+    pub fn set_velocity(&mut self, v: Vector3) {
+        self.velocity = v;
+        self.commands.push(RbCommand::SetVelocity(v));
+    }
+    /// World-space angular velocity in radians/s.
+    pub fn angular_velocity(&self) -> Vector3 {
+        self.angular_velocity
+    }
+    pub fn set_angular_velocity(&mut self, v: Vector3) {
+        self.angular_velocity = v;
+        self.commands.push(RbCommand::SetAngularVelocity(v));
+    }
+    /// Unity `AddForce(force, mode)` (world space).
+    pub fn add_force(&mut self, force: Vector3, mode: ForceMode) {
+        self.commands.push(RbCommand::Force(force, mode));
+    }
+    pub fn add_force_at_position(&mut self, force: Vector3, position: Vector3, mode: ForceMode) {
+        self.commands
+            .push(RbCommand::ForceAt(force, position, mode));
+    }
+    /// Unity `AddTorque` (world space).
+    pub fn add_torque(&mut self, torque: Vector3, mode: ForceMode) {
+        self.commands.push(RbCommand::Torque(torque, mode));
+    }
+    /// Unity `MovePosition` (kinematic bodies interpolate to it during the next step).
+    pub fn move_position(&mut self, p: Vector3) {
+        self.commands.push(RbCommand::MovePosition(p));
+    }
+    pub fn move_rotation(&mut self, q: Quaternion) {
+        self.commands.push(RbCommand::MoveRotation(q));
+    }
+    pub fn sleep(&mut self) {
+        self.commands.push(RbCommand::Sleep);
+    }
+    pub fn wake_up(&mut self) {
+        self.commands.push(RbCommand::WakeUp);
+    }
+    pub fn is_sleeping(&self) -> bool {
+        self.sleeping
+    }
+    /// Speed in m/s.
+    pub fn speed(&self) -> f32 {
+        self.velocity.length()
+    }
+}
+
+impl Component for Rigidbody {
+    fn allow_multiple(&self) -> bool {
+        false
+    }
+}
+
+/// Shared collider settings (Unity Collider + PhysicMaterial fields).
+macro_rules! collider_common {
+    () => {
+        pub fn is_trigger(&self) -> bool {
+            self.is_trigger
+        }
+    };
+}
+
+/// Unity `BoxCollider`.
+#[derive(Clone, Debug, Reflect)]
+pub struct BoxCollider {
+    pub is_trigger: bool,
+    pub center: Vector3,
+    pub size: Vector3,
+    #[reflect(range(0, 1))]
+    pub friction: f32,
+    #[reflect(range(0, 1))]
+    pub bounciness: f32,
+}
+
+impl Default for BoxCollider {
+    fn default() -> Self {
+        Self {
+            is_trigger: false,
+            center: Vector3::ZERO,
+            size: Vector3::ONE,
+            friction: 0.6,
+            bounciness: 0.0,
+        }
+    }
+}
+
+impl BoxCollider {
+    collider_common!();
+    pub fn new(size: Vector3) -> Self {
+        Self {
+            size,
+            ..Default::default()
+        }
+    }
+}
+
+impl Component for BoxCollider {}
+
+/// Unity `SphereCollider`.
+#[derive(Clone, Debug, Reflect)]
+pub struct SphereCollider {
+    pub is_trigger: bool,
+    pub center: Vector3,
+    pub radius: f32,
+    #[reflect(range(0, 1))]
+    pub friction: f32,
+    #[reflect(range(0, 1))]
+    pub bounciness: f32,
+}
+
+impl Default for SphereCollider {
+    fn default() -> Self {
+        Self {
+            is_trigger: false,
+            center: Vector3::ZERO,
+            radius: 0.5,
+            friction: 0.6,
+            bounciness: 0.0,
+        }
+    }
+}
+
+impl SphereCollider {
+    collider_common!();
+}
+
+impl Component for SphereCollider {}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
+pub enum CapsuleDirection {
+    XAxis,
+    #[default]
+    YAxis,
+    ZAxis,
+}
+
+/// Unity `CapsuleCollider`.
+#[derive(Clone, Debug, Reflect)]
+pub struct CapsuleCollider {
+    pub is_trigger: bool,
+    pub center: Vector3,
+    pub radius: f32,
+    /// Total height including the caps.
+    pub height: f32,
+    pub direction: CapsuleDirection,
+    #[reflect(range(0, 1))]
+    pub friction: f32,
+    #[reflect(range(0, 1))]
+    pub bounciness: f32,
+}
+
+impl Default for CapsuleCollider {
+    fn default() -> Self {
+        Self {
+            is_trigger: false,
+            center: Vector3::ZERO,
+            radius: 0.5,
+            height: 2.0,
+            direction: CapsuleDirection::YAxis,
+            friction: 0.6,
+            bounciness: 0.0,
+        }
+    }
+}
+
+impl CapsuleCollider {
+    collider_common!();
+}
+
+impl Component for CapsuleCollider {}
+
+/// Unity `MeshCollider`. Uses the MeshFilter's mesh when `mesh` is empty. Non-convex mesh
+/// colliders only work on static objects or kinematic bodies, like in Unity.
+#[derive(Clone, Debug, Reflect)]
+pub struct MeshCollider {
+    pub is_trigger: bool,
+    pub mesh: Option<Handle<Mesh>>,
+    pub convex: bool,
+    #[reflect(range(0, 1))]
+    pub friction: f32,
+    #[reflect(range(0, 1))]
+    pub bounciness: f32,
+}
+
+impl Default for MeshCollider {
+    fn default() -> Self {
+        Self {
+            is_trigger: false,
+            mesh: None,
+            convex: false,
+            friction: 0.6,
+            bounciness: 0.0,
+        }
+    }
+}
+
+impl MeshCollider {
+    collider_common!();
+}
+
+impl Component for MeshCollider {}
+
+/// Height grid collider (used by Terrain). `heights` is row-major `resolution × resolution`,
+/// rows along +Z, normalized 0..1 and scaled by `size.y`; the grid spans `size.x × size.z`
+/// starting at the object's origin.
+#[derive(Clone, Debug, Reflect)]
+pub struct TerrainCollider {
+    pub size: Vector3,
+    pub resolution: u32,
+    #[reflect(skip)]
+    pub heights: std::sync::Arc<Vec<f32>>,
+    /// Bumped when `heights` changes so the physics shape is rebuilt.
+    #[reflect(skip)]
+    pub version: u64,
+    #[reflect(range(0, 1))]
+    pub friction: f32,
+}
+
+impl Default for TerrainCollider {
+    fn default() -> Self {
+        Self {
+            size: Vector3::new(100.0, 30.0, 100.0),
+            resolution: 2,
+            heights: std::sync::Arc::new(vec![0.0; 4]),
+            version: 0,
+            friction: 0.8,
+        }
+    }
+}
+
+impl Component for TerrainCollider {}
+
+/// Unity `CollisionFlags` returned by `CharacterController.Move`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CollisionFlags {
+    pub below: bool,
+    pub sides: bool,
+    pub above: bool,
+}
+
+/// Unity `CharacterController`: a capsule moved with `move_character` that slides along
+/// walls, climbs steps and slopes, and snaps to the ground.
+#[derive(Clone, Debug, Reflect)]
+pub struct CharacterController {
+    #[reflect(range(0, 90))]
+    pub slope_limit: f32,
+    pub step_offset: f32,
+    pub skin_width: f32,
+    pub center: Vector3,
+    pub radius: f32,
+    pub height: f32,
+    #[reflect(skip)]
+    pub is_grounded: bool,
+    #[reflect(skip)]
+    pub velocity: Vector3,
+    #[reflect(skip)]
+    pub collision_flags: CollisionFlags,
+}
+
+impl Default for CharacterController {
+    fn default() -> Self {
+        Self {
+            slope_limit: 45.0,
+            step_offset: 0.3,
+            skin_width: 0.02,
+            center: Vector3::new(0.0, 1.0, 0.0),
+            radius: 0.5,
+            height: 2.0,
+            is_grounded: false,
+            velocity: Vector3::ZERO,
+            collision_flags: CollisionFlags::default(),
+        }
+    }
+}
+
+impl Component for CharacterController {
+    fn allow_multiple(&self) -> bool {
+        false
+    }
+}
+
+/// Unity `JointSpring` used by the wheel suspension.
+#[derive(Clone, Debug, Reflect)]
+pub struct WheelCollider {
+    /// Wheel mass (affects rolling inertia in Unity; informational here).
+    pub mass: f32,
+    pub radius: f32,
+    /// Max suspension extension in meters.
+    pub suspension_distance: f32,
+    pub center: Vector3,
+    /// Spring stiffness (N/m per kg of sprung mass, Rapier scale).
+    pub suspension_spring: f32,
+    pub suspension_damper: f32,
+    /// Friction slip limit forwards (higher = more grip).
+    pub forward_friction: f32,
+    /// Side grip stiffness.
+    pub sideways_friction: f32,
+    /// Driving torque in N·m (set every frame by the car script).
+    pub motor_torque: f32,
+    pub brake_torque: f32,
+    /// Steering angle in degrees (positive = right).
+    pub steer_angle: f32,
+    /// Optional wheel mesh object posed automatically every frame (spin, steer, suspension).
+    pub wheel_model: Option<GameObjectId>,
+    #[reflect(skip)]
+    pub(crate) state: WheelState,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct WheelState {
+    pub grounded: bool,
+    pub rpm: f32,
+    pub position: Vector3,
+    pub rotation: Quaternion,
+    pub contact_point: Vector3,
+    pub contact_normal: Vector3,
+    pub ground: Option<GameObjectId>,
+    pub forward_slip: f32,
+    pub sideways_slip: f32,
+    pub suspension_length: f32,
+    /// Wheel pose relative to the vehicle body.
+    pub local_position: Vector3,
+    pub local_rotation: Quaternion,
+    pub spin: f32,
+}
+
+impl Default for WheelCollider {
+    fn default() -> Self {
+        Self {
+            mass: 20.0,
+            radius: 0.35,
+            suspension_distance: 0.3,
+            center: Vector3::ZERO,
+            suspension_spring: 35.0,
+            suspension_damper: 4.5,
+            forward_friction: 10.5,
+            sideways_friction: 1.2,
+            motor_torque: 0.0,
+            brake_torque: 0.0,
+            steer_angle: 0.0,
+            wheel_model: None,
+            state: WheelState {
+                rotation: Quaternion::IDENTITY,
+                local_rotation: Quaternion::IDENTITY,
+                ..Default::default()
+            },
+        }
+    }
+}
+
+impl WheelCollider {
+    pub fn is_grounded(&self) -> bool {
+        self.state.grounded
+    }
+    pub fn rpm(&self) -> f32 {
+        self.state.rpm
+    }
+    /// Unity `GetWorldPose`: where to draw the wheel mesh (center and spin/steer rotation).
+    pub fn world_pose(&self) -> (Vector3, Quaternion) {
+        (self.state.position, self.state.rotation)
+    }
+    /// Unity `GetGroundHit`: (point, normal, object) while grounded.
+    pub fn ground_hit(&self) -> Option<(Vector3, Vector3, Option<GameObjectId>)> {
+        self.state.grounded.then_some((
+            self.state.contact_point,
+            self.state.contact_normal,
+            self.state.ground,
+        ))
+    }
+    /// Slip magnitudes (for tire smoke and skid sounds).
+    pub fn slip(&self) -> (f32, f32) {
+        (self.state.forward_slip, self.state.sideways_slip)
+    }
+    pub fn suspension_compression(&self) -> f32 {
+        1.0 - (self.state.suspension_length / self.suspension_distance.max(1e-4)).clamp(0.0, 1.0)
+    }
+}
+
+impl Component for WheelCollider {
+    fn allow_multiple(&self) -> bool {
+        false
+    }
+}
+
+/// Unity `FixedJoint`: welds this body to `connected_body` (or the world).
+#[derive(Clone, Debug, Default, Reflect)]
+pub struct FixedJoint {
+    pub connected_body: Option<GameObjectId>,
+    /// Force above which the joint breaks (0 = unbreakable).
+    pub break_force: f32,
+}
+
+impl Component for FixedJoint {}
+
+/// Unity `HingeJoint`: rotation around `axis` through `anchor` (local), with optional limits
+/// and motor.
+#[derive(Clone, Debug, Reflect)]
+pub struct HingeJoint {
+    pub connected_body: Option<GameObjectId>,
+    pub anchor: Vector3,
+    pub axis: Vector3,
+    pub use_limits: bool,
+    pub min_angle: f32,
+    pub max_angle: f32,
+    pub use_motor: bool,
+    /// Degrees per second.
+    pub motor_target_velocity: f32,
+    pub motor_force: f32,
+}
+
+impl Default for HingeJoint {
+    fn default() -> Self {
+        Self {
+            connected_body: None,
+            anchor: Vector3::ZERO,
+            axis: Vector3::X,
+            use_limits: false,
+            min_angle: -90.0,
+            max_angle: 90.0,
+            use_motor: false,
+            motor_target_velocity: 0.0,
+            motor_force: 0.0,
+        }
+    }
+}
+
+impl Component for HingeJoint {}

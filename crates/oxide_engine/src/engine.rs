@@ -28,9 +28,6 @@ pub fn init_world(world: &mut World, project_root: std::path::PathBuf) {
     world.resources.insert(Timers::default());
     world.resources.insert(DebugDraw::default());
     world.resources.insert(RenderSettings::default());
-    world
-        .resources
-        .insert(crate::objects::PrimitiveHooks::default());
     world.resources.insert(crate::AppControl::default());
 }
 
@@ -113,6 +110,12 @@ impl Engine {
         }
         self.gamepads.poll(self.world.resource_mut::<Input>());
 
+        // Debug lines live until the next frame starts (so screenshots taken between
+        // frames still see them), or until their `until` time.
+        let now = self.world.resource::<Time>().time();
+        if let Some(d) = self.world.try_resource_mut::<DebugDraw>() {
+            d.lines.retain(|l| l.until > now);
+        }
         let step = self.paused && self.pending_steps > 0;
         if !self.paused || step {
             if step {
@@ -154,10 +157,6 @@ impl Engine {
     }
 
     fn end_frame(&mut self) {
-        let now = self.world.resource::<Time>().time();
-        if let Some(d) = self.world.try_resource_mut::<DebugDraw>() {
-            d.lines.retain(|l| l.until > now);
-        }
         let input = self.world.resource_mut::<Input>();
         input.end_frame();
         let want = (input.cursor_lock, input.cursor_visible);

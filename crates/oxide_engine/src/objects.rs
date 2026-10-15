@@ -7,14 +7,8 @@ use oxide_scene::{
     Camera, GameObjectId, Light, MeshFilter, MeshRenderer, SkinnedMeshRenderer, World,
 };
 
-/// Callbacks other crates (physics) use to decorate primitives, e.g. adding a collider —
-/// Unity's `CreatePrimitive` adds a matching collider.
-#[derive(Default)]
-pub struct PrimitiveHooks {
-    pub on_create: Vec<fn(&mut World, GameObjectId, PrimitiveType)>,
-}
-
-/// Unity `GameObject.CreatePrimitive`.
+/// Unity `GameObject.CreatePrimitive`: mesh, renderer and the matching collider
+/// (Cylinder gets a CapsuleCollider and Plane/Quad a MeshCollider, as in Unity).
 pub fn create_primitive(world: &mut World, p: PrimitiveType) -> GameObjectId {
     let id = world.create(p.name());
     world.add_component(
@@ -24,12 +18,20 @@ pub fn create_primitive(world: &mut World, p: PrimitiveType) -> GameObjectId {
         },
     );
     world.add_component(id, MeshRenderer::default());
-    let hooks: Vec<_> = world
-        .try_resource::<PrimitiveHooks>()
-        .map(|h| h.on_create.clone())
-        .unwrap_or_default();
-    for h in hooks {
-        h(world, id, p);
+    use oxide_physics::*;
+    match p {
+        PrimitiveType::Cube => {
+            world.add_component(id, BoxCollider::default());
+        }
+        PrimitiveType::Sphere => {
+            world.add_component(id, SphereCollider::default());
+        }
+        PrimitiveType::Capsule | PrimitiveType::Cylinder => {
+            world.add_component(id, CapsuleCollider::default());
+        }
+        PrimitiveType::Plane | PrimitiveType::Quad => {
+            world.add_component(id, MeshCollider::default());
+        }
     }
     id
 }

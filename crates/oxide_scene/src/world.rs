@@ -720,6 +720,51 @@ impl World {
             })
     }
 
+    /// `(object, component id)` of every enabled `T` on an active object.
+    pub fn query_ids<T: Component>(&self) -> Vec<(GameObjectId, ComponentId)> {
+        let tid = TypeId::of::<T>();
+        self.objects()
+            .filter(|(_, o)| o.active_in_hierarchy)
+            .flat_map(|(id, o)| {
+                o.components
+                    .iter()
+                    .filter(move |c| c.type_id == tid && c.enabled && !c.destroy_pending)
+                    .map(move |c| (id, c.id))
+            })
+            .collect()
+    }
+
+    /// A specific component instance, typed.
+    pub fn component<T: Component>(&self, id: GameObjectId, cid: ComponentId) -> Option<&T> {
+        self.entry(id, cid)?
+            .comp
+            .as_deref()
+            .and_then(downcast_ref::<T>)
+    }
+
+    pub fn component_mut<T: Component>(
+        &mut self,
+        id: GameObjectId,
+        cid: ComponentId,
+    ) -> Option<&mut T> {
+        self.entry_mut(id, cid)?
+            .comp
+            .as_deref_mut()
+            .and_then(downcast_mut::<T>)
+    }
+
+    /// Nearest object at or above `id` carrying a `T` (Unity's rigidbody lookup for colliders).
+    pub fn ancestor_with<T: Component>(&self, id: GameObjectId) -> Option<GameObjectId> {
+        let mut cur = Some(id);
+        while let Some(c) = cur {
+            if self.has_component::<T>(c) {
+                return Some(c);
+            }
+            cur = self.parent(c);
+        }
+        None
+    }
+
     /// Ids of objects carrying an enabled `T` (including inactive objects if `include_inactive`).
     pub fn find_objects_of_type<T: Component>(&self, include_inactive: bool) -> Vec<GameObjectId> {
         let tid = TypeId::of::<T>();

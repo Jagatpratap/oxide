@@ -1,0 +1,16 @@
+[package]
+name = "oxide_physics"
+description = "Oxide physics (Rapier): Rigidbody, colliders, triggers, raycasts, CharacterController, WheelCollider"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+oxide_math.workspace = true
+oxide_core.workspace = true
+oxide_assets.workspace = true
+oxide_scene.workspace = true
+rapier3d.workspace = true
+
+[dev-dependencies]
+oxide_input.workspace = true

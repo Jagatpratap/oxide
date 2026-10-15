@@ -6,6 +6,7 @@ pub mod bus;
 pub mod engine;
 pub mod extract;
 pub mod input_map;
+pub mod mcp_physics;
 pub mod mcp_tools;
 pub mod objects;
 
@@ -16,12 +17,26 @@ pub use oxide_assets as assets;
 pub use oxide_core as core;
 pub use oxide_input as input;
 pub use oxide_math as math;
+pub use oxide_physics as physics;
 pub use oxide_render as render;
 pub use oxide_scene as scene;
 
-/// Subsystems installed into every App (physics, audio, animation as they are added).
+/// Physics (Rapier) with Unity's components and `Physics` API.
+pub struct PhysicsPlugin;
+
+impl Plugin for PhysicsPlugin {
+    fn build(
+        &self,
+        world: &mut oxide_scene::World,
+        systems: &mut Vec<Box<dyn oxide_scene::System>>,
+    ) {
+        systems.push(oxide_physics::install(world));
+    }
+}
+
+/// Subsystems installed into every App.
 pub fn default_plugins() -> Vec<Box<dyn Plugin>> {
-    Vec::new()
+    vec![Box::new(PhysicsPlugin)]
 }
 
 /// Everything a game script usually needs.
@@ -39,6 +54,12 @@ pub mod prelude {
         CursorLockMode, GamepadAxis, GamepadButton, Input, KeyCode, MouseButton,
     };
     pub use oxide_math::prelude::*;
+    pub use oxide_physics::{
+        BoxCollider, CapsuleCollider, CharacterController, CharacterExt, CollisionDetectionMode,
+        DEFAULT_RAYCAST_LAYERS, FixedJoint, ForceMode, HingeJoint, MeshCollider, Physics,
+        PhysicsExt, RaycastHit, Rigidbody, RigidbodyInterpolation, SphereCollider, TerrainCollider,
+        WheelCollider,
+    };
     pub use oxide_scene::{
         Camera, CameraClearFlags, Collision, Component, Ctx, GameObjectId, Light, LightShadows,
         LightType, MeshFilter, MeshRenderer, Projection, RenderSettings, ShadowCastingMode,

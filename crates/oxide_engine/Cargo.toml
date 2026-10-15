@@ -13,6 +13,7 @@ oxide_mcp.workspace = true
 oxide_assets.workspace = true
 oxide_scene.workspace = true
 oxide_input.workspace = true
+oxide_physics.workspace = true
 winit.workspace = true
 log.workspace = true
 serde_json.workspace = true

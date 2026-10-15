@@ -13,7 +13,7 @@ use crate::frame::*;
 use crate::gpu_assets::{GpuAssets, SkinVertex, Vertex};
 use crate::post::PostProcessor;
 use oxide_assets::{AssetId, AssetServer};
-use oxide_math::{Matrix4x4, Vector3, Vector4};
+use oxide_math::{Matrix4x4, Matrix4x4Ext, Vector3, Vector4};
 use std::collections::HashMap;
 
 pub const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -1243,7 +1243,7 @@ fn compute_cascades(
     } else {
         Vector3::Y
     };
-    let light_view = Matrix4x4::look_to_lh(Vector3::ZERO, dir, up);
+    let light_view = Matrix4x4::look_to(Vector3::ZERO, dir, up);
     let mut out = Vec::new();
     let mut prev = near;
     for i in 0..CASCADES {
@@ -1279,7 +1279,7 @@ fn compute_cascades(
         c.x = (c.x / texel).floor() * texel;
         c.y = (c.y / texel).floor() * texel;
         let back = radius.max(300.0);
-        let proj = Matrix4x4::orthographic_lh(
+        let proj = Matrix4x4::ortho(
             c.x - radius,
             c.x + radius,
             c.y - radius,

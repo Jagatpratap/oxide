@@ -2,7 +2,7 @@
 //! by the engine (cameras, lights, draw items, environment, debug lines).
 
 use oxide_assets::AssetId;
-use oxide_math::{Color, Matrix4x4, Quaternion, Vector3};
+use oxide_math::{Color, Matrix4x4, Matrix4x4Ext, Quaternion, Vector3};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ProjectionKind {
@@ -36,7 +36,7 @@ pub struct CameraView {
 
 impl CameraView {
     pub fn view(&self) -> Matrix4x4 {
-        Matrix4x4::look_to_lh(
+        Matrix4x4::look_to(
             self.position,
             self.rotation * Vector3::Z,
             self.rotation * Vector3::Y,
@@ -46,7 +46,7 @@ impl CameraView {
     /// Reversed-Z projection (near → 1, far → 0) for precision in large worlds.
     pub fn projection(&self, aspect: f32) -> Matrix4x4 {
         match self.projection {
-            ProjectionKind::Perspective { fov } => Matrix4x4::perspective_lh(
+            ProjectionKind::Perspective { fov } => Matrix4x4::perspective(
                 fov.clamp(1.0, 179.0).to_radians(),
                 aspect,
                 self.far,
@@ -54,7 +54,7 @@ impl CameraView {
             ),
             ProjectionKind::Orthographic { size } => {
                 let w = size * aspect;
-                Matrix4x4::orthographic_lh(-w, w, -size, size, self.far, self.near)
+                Matrix4x4::ortho(-w, w, -size, size, self.far, self.near)
             }
         }
     }

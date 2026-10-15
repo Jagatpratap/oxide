@@ -27,7 +27,7 @@ to look at the result (pass camera_position/look_at for any viewpoint) → get_c
 
 type Args = Map<String, Json>;
 
-fn tool<F>(s: &mut McpServer, bus: &Arc<Bus>, def: ToolDef, f: F)
+pub(crate) fn tool<F>(s: &mut McpServer, bus: &Arc<Bus>, def: ToolDef, f: F)
 where
     F: Fn(&Args, &mut Engine) -> ToolResult + Send + Sync + 'static,
 {
@@ -40,7 +40,7 @@ where
     });
 }
 
-fn schema(props: Json, required: &[&str]) -> Json {
+pub(crate) fn schema(props: Json, required: &[&str]) -> Json {
     json!({ "type": "object", "properties": props, "required": required, "additionalProperties": false })
 }
 
@@ -51,7 +51,7 @@ fn obj_arg(args: &Args, world: &World, key: &str) -> Result<GameObjectId, ToolRe
     resolve_object(world, v).ok_or_else(|| ToolResult::error(format!("no GameObject matches {v}")))
 }
 
-fn vec3_arg(args: &Args, key: &str) -> Result<Option<Vector3>, ToolResult> {
+pub(crate) fn vec3_arg(args: &Args, key: &str) -> Result<Option<Vector3>, ToolResult> {
     match args.get(key) {
         None | Some(Json::Null) => Ok(None),
         Some(v) => {
@@ -72,6 +72,8 @@ fn vec3_arg(args: &Args, key: &str) -> Result<Option<Vector3>, ToolResult> {
     }
 }
 
+#[macro_export]
+#[doc(hidden)]
 macro_rules! tri {
     ($e:expr) => {
         match $e {
@@ -1037,6 +1039,8 @@ pub fn build_server(bus: Arc<Bus>) -> McpServer {
             )
         },
     );
+
+    crate::mcp_physics::register(&mut s, bus);
 
     tool(
         &mut s,
