@@ -187,6 +187,11 @@ debug = "line-tables-only"
         &dir.join(".cargo/config.toml"),
         "[build]\ntarget-dir = \"Library/Build/target\"\n",
     )?;
+    // Player builds need the engine source too.
+    write(
+        &dir.join("Library/Build/EngineRoot.txt"),
+        &manifest_path(engine_root),
+    )?;
     write_if_missing(
         &dir.join("Scripts/Cargo.toml"),
         &format!(

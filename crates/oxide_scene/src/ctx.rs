@@ -141,6 +141,21 @@ impl<'w> Ctx<'w> {
         Some(id)
     }
 
+    /// Unity `SceneManager.LoadScene`: a scene path (`Assets/Scenes/Level2.scene`), name
+    /// (`Level2`) or build index (`"1"`). Happens at the end of this frame.
+    pub fn load_scene(&mut self, scene: &str) {
+        if let Some(app) = self.world.try_resource_mut::<crate::Application>() {
+            app.pending_scene = Some(scene.to_owned());
+        }
+    }
+
+    /// Unity `Application.Quit()` (ignored in the editor's Play mode, like Unity).
+    pub fn quit(&mut self) {
+        if let Some(app) = self.world.try_resource_mut::<crate::Application>() {
+            app.quit = true;
+        }
+    }
+
     /// Unity `Destroy(obj)`.
     pub fn destroy(&mut self, id: GameObjectId) {
         self.world.destroy(id);

@@ -50,6 +50,8 @@ mod keys {
     pub const STEP: &str = "⌥⌘P";
     pub const EMPTY: &str = "⇧⌘N";
     pub const CHILD: &str = "⌥⇧N";
+    pub const BUILD_SETTINGS: &str = "⇧⌘B";
+    pub const BUILD_RUN: &str = "⌘B";
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -68,6 +70,8 @@ mod keys {
     pub const STEP: &str = "Ctrl+Alt+P";
     pub const EMPTY: &str = "Ctrl+Shift+N";
     pub const CHILD: &str = "Alt+Shift+N";
+    pub const BUILD_SETTINGS: &str = "Ctrl+Shift+B";
+    pub const BUILD_RUN: &str = "Ctrl+B";
 }
 
 fn create_items(prefix: &str) -> Vec<MenuItem> {
@@ -128,6 +132,17 @@ pub fn menu_items(world: &World) -> Vec<MenuItem> {
         sep("File"),
         item("File/Save", keys::SAVE, Action::SaveScene),
         item("File/Save As...", keys::SAVE_AS, Action::SaveSceneAsDialog),
+        sep("File"),
+        item(
+            "File/Build Settings...",
+            keys::BUILD_SETTINGS,
+            Action::BuildSettingsDialog,
+        ),
+        item(
+            "File/Build And Run",
+            keys::BUILD_RUN,
+            Action::BuildPlayer(true),
+        ),
         item("Edit/Undo", keys::UNDO, Action::Undo),
         item("Edit/Redo", keys::REDO, Action::Redo),
         sep("Edit"),
@@ -365,6 +380,14 @@ pub fn status_bar(
             };
             ui.weak(mode);
             ui.separator();
+            if st.builder.is_building() {
+                ui.spinner();
+                ui.label(
+                    egui::RichText::new(format!("Building player {:.0}s", st.builder.elapsed()))
+                        .size(11.5),
+                );
+                ui.separator();
+            }
             if let Some(h) = scripts {
                 use crate::scripting::ScriptState;
                 match h.state {
@@ -418,7 +441,9 @@ pub fn shortcuts(st: &mut EditorState, engine: &mut Engine, ctx: &egui::Context)
     if ctx.egui_wants_keyboard_input() {
         return;
     }
-    let pairs: [(Modifiers, Key, Action); 13] = [
+    let pairs: [(Modifiers, Key, Action); 15] = [
+        (cmd | Modifiers::SHIFT, Key::B, Action::BuildSettingsDialog),
+        (cmd, Key::B, Action::BuildPlayer(true)),
         (cmd | Modifiers::SHIFT, Key::Z, Action::Redo),
         (cmd, Key::Z, Action::Undo),
         (cmd, Key::Y, Action::Redo),

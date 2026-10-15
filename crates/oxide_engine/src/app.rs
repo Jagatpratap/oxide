@@ -27,10 +27,7 @@ use winit::keyboard::PhysicalKey;
 use winit::window::{Window, WindowId};
 
 /// Requests from game code to the application (Unity `Application.Quit`, scene loading).
-#[derive(Default)]
-pub struct AppControl {
-    pub quit: bool,
-}
+pub type AppControl = oxide_scene::Application;
 
 #[derive(Clone, Debug)]
 pub struct EngineConfig {
@@ -41,6 +38,8 @@ pub struct EngineConfig {
     pub mcp_addr: Option<String>,
     /// Project folder containing `Assets/`.
     pub project_root: PathBuf,
+    /// Borderless fullscreen window (a player's Build Settings).
+    pub fullscreen: bool,
 }
 
 impl Default for EngineConfig {
@@ -53,6 +52,7 @@ impl Default for EngineConfig {
                 std::env::var("OXIDE_MCP_ADDR").unwrap_or_else(|_| oxide_mcp::DEFAULT_ADDR.into()),
             ),
             project_root: std::env::current_dir().unwrap_or_default(),
+            fullscreen: false,
         }
     }
 }
@@ -187,9 +187,12 @@ impl ApplicationHandler<Wake> for Runner {
         let Some((world, systems, shell)) = self.pending.take() else {
             return;
         };
-        let attrs = Window::default_attributes()
+        let mut attrs = Window::default_attributes()
             .with_title(&self.config.title)
             .with_inner_size(LogicalSize::new(self.config.width, self.config.height));
+        if self.config.fullscreen {
+            attrs = attrs.with_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
+        }
         let result = event_loop
             .create_window(attrs)
             .map_err(|e| Box::new(e) as Box<dyn Error>)

@@ -384,7 +384,7 @@ runner, native plugins.
   ([Project Auditor](https://docs.unity3d.com/Manual/project-auditor/project-auditor.html))
 
 ### P10 — Build & platforms
-- ☐ Build Profiles window: scene list, target, dev build, scripts-only build, clean build
+- ◐ Build Profiles window: scene list, target, dev build, scripts-only build, clean build
   ([Create a build](https://docs.unity3d.com/Manual/BuildSettings.html))
 - ☐ Content cooking: strip unused assets, compress textures per platform, pack into archives
   ([Content output](https://docs.unity3d.com/Manual/build-content-output.html),
@@ -392,12 +392,20 @@ runner, native plugins.
 - ☐ Command-line builds + editor CLI args
   ([CLI builds](https://docs.unity3d.com/Manual/build-command-line.html),
   [Editor CLI](https://docs.unity3d.com/Manual/EditorCommandLineArguments.html))
-- ☐ Player settings (icon, splash, resolution, company/product name)
-- ☐ Targets in order: macOS → Windows → Linux → Web (wgpu/WebGPU) → Android → iOS → Dedicated Server
+- ◐ Player settings (icon, splash, resolution, company/product name)
+- ◐ Targets in order: macOS → Windows → Linux → Web (wgpu/WebGPU) → Android → iOS → Dedicated Server
   ([Platform development](https://docs.unity3d.com/Manual/PlatformSpecific.html))
 - ☐ Deterministic builds, build reports
   ([Deterministic builds](https://docs.unity3d.com/Manual/build-deterministic-builds.html),
   [Analyze builds](https://docs.unity3d.com/Manual/build-analyze-builds.html))
+
+**Status:** desktop builds work. File → Build Settings (scene list, product name,
+resolution, fullscreen, output) → Build / Build And Run compiles a release player
+(`oxide_player`, static, no editor) with the project's Scripts and copies `Assets/` next to it
+(`<Product>.app` on macOS, `<Product>` + `<Product>_Data/` elsewhere). Scripts switch scenes
+with `ctx.load_scene` and quit with `ctx.quit`. MCP is off in shipped games (`--mcp` turns it
+on). Not yet: stripping unused assets, texture compression, icons/splash, cross-compiling,
+web/mobile, dedicated server.
 
 ### P11 — Extended (after a usable 1.0)
 - ☐ XR via OpenXR
@@ -426,9 +434,9 @@ needs, and where the engine is:
 | Audio (engine, 3D, mixer) | ✔ | ✔ | ◐ 3D sources, car audio; mixer ☐ |
 | AI (opponents, bots) | ✔ | ✔ | ☐ NavMesh, waypoint tools |
 | Multiplayer | ◐ | ✔ | ☐ netcode (server-authoritative, prediction, interpolation), dedicated server |
-| Ship the game | ✔ | ✔ | ☐ P10 player builds (desktop first, then Android/iOS) |
+| Ship the game | ✔ | ✔ | ◐ desktop player builds (macOS/Windows/Linux); Android/iOS ☐ |
 
-Build order from here: player builds → big-world rendering (LOD,
+Build order from here: big-world rendering (LOD,
 occlusion, streaming) → animation (2D blend trees, root motion, IK, ragdolls) → NavMesh →
 netcode and dedicated server → mobile.
 

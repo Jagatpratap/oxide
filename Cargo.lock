@@ -2453,6 +2453,7 @@ dependencies = [
  "oxide_ui",
  "serde",
  "serde_json",
+ "serde_yaml_ng",
 ]
 
 [[package]]
@@ -2538,6 +2539,15 @@ dependencies = [
  "oxide_math",
  "oxide_scene",
  "rapier3d",
+]
+
+[[package]]
+name = "oxide_player"
+version = "0.1.0"
+dependencies = [
+ "oxide_engine",
+ "serde",
+ "serde_yaml_ng",
 ]
 
 [[package]]

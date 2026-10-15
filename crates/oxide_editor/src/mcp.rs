@@ -375,6 +375,89 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
         },
     );
 
+    tool(
+        s,
+        bus,
+        ToolDef::new(
+            "editor_build",
+            "Build the game",
+            "Unity Build Settings: `status` (default), `settings` (read; or change with `scenes`, `product_name`, `width`, \
+         `height`, `fullscreen`, `output`), `build` or `build_and_run` (starts in the background; poll `status`). \
+         Builds a standalone release executable of the project with its Scripts and Assets.",
+            schema(
+                json!({ "action": { "type": "string", "enum": ["status", "settings", "build", "build_and_run"] },
+                       "scenes": { "type": "array", "items": { "type": "string" } }, "product_name": { "type": "string" },
+                       "width": { "type": "integer" }, "height": { "type": "integer" }, "fullscreen": { "type": "boolean" },
+                       "output": { "type": "string" } }),
+                &[],
+            ),
+        ),
+        |args, e| {
+            with_editor(e, |ed, e| {
+                let project = e
+                    .world
+                    .resource::<oxide_assets::AssetServer>()
+                    .full_path("");
+                let mut settings = crate::player_build::BuildSettings::load(&project);
+                let mut changed = false;
+                if let Some(v) = args.get("scenes").and_then(Json::as_array) {
+                    settings.scenes = v
+                        .iter()
+                        .filter_map(Json::as_str)
+                        .map(str::to_owned)
+                        .collect();
+                    changed = true;
+                }
+                if let Some(v) = args.get("product_name").and_then(Json::as_str) {
+                    settings.product_name = v.into();
+                    changed = true;
+                }
+                if let Some(v) = args.get("output").and_then(Json::as_str) {
+                    settings.output = v.into();
+                    changed = true;
+                }
+                if let Some(v) = args.get("width").and_then(Json::as_u64) {
+                    settings.width = v as u32;
+                    changed = true;
+                }
+                if let Some(v) = args.get("height").and_then(Json::as_u64) {
+                    settings.height = v as u32;
+                    changed = true;
+                }
+                if let Some(v) = args.get("fullscreen").and_then(Json::as_bool) {
+                    settings.fullscreen = v;
+                    changed = true;
+                }
+                if changed && let Err(err) = settings.save(&project) {
+                    return ToolResult::error(err);
+                }
+                let action = args
+                    .get("action")
+                    .and_then(Json::as_str)
+                    .unwrap_or("status");
+                if matches!(action, "build" | "build_and_run")
+                    && let Err(err) = ed.apply(e, Action::BuildPlayer(action == "build_and_run"))
+                {
+                    return ToolResult::error(err);
+                }
+                let b = &ed.st.builder;
+                let state = match &b.state {
+                    crate::player_build::BuildState::Idle => json!({ "state": "idle" }),
+                    crate::player_build::BuildState::Building => {
+                        json!({ "state": "building", "seconds": b.elapsed() })
+                    }
+                    crate::player_build::BuildState::Succeeded(p) => {
+                        json!({ "state": "succeeded", "executable": p })
+                    }
+                    crate::player_build::BuildState::Failed(err) => {
+                        json!({ "state": "failed", "error": err })
+                    }
+                };
+                ToolResult::json(json!({ "build": state, "settings": settings }))
+            })
+        },
+    );
+
     tool(s, bus, ToolDef::new("editor_capture", "Screenshot the editor",
         "PNG of the whole editor window (menus, Hierarchy, Scene/Game views, Inspector, ...), as the user sees it. \
          Long side capped by `max_size` (default 1600).",

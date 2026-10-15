@@ -14,6 +14,7 @@ mod inspector;
 pub mod launch;
 pub mod mcp;
 mod menus;
+pub mod player_build;
 mod project;
 pub mod project_files;
 mod scene_view;
@@ -140,6 +141,9 @@ pub enum Action {
     /// New script component in the project's Scripts (name as typed).
     CreateScript(String),
     RecompileScripts,
+    BuildSettingsDialog,
+    /// Build the player with the saved Build Settings (and run it if `true`).
+    BuildPlayer(bool),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -151,6 +155,7 @@ pub enum PlayState {
 enum Modal {
     SaveAs(String),
     Open,
+    BuildSettings(player_build::BuildSettings),
 }
 
 /// Editor state the windows read and write (everything except the dock layout).
@@ -188,6 +193,7 @@ pub struct EditorState {
     pub status: String,
     /// The project has a Scripts crate (Create > Rust Script is available).
     pub scripts_available: bool,
+    pub builder: player_build::PlayerBuilder,
 }
 
 impl EditorState {
@@ -217,6 +223,7 @@ impl EditorState {
             title: String::new(),
             status: String::new(),
             scripts_available: false,
+            builder: Default::default(),
         }
     }
 
@@ -688,6 +695,28 @@ impl Editor {
                 host.recompile();
                 "Compiling scripts...".into()
             }
+            Action::BuildSettingsDialog => {
+                let project = w.resource::<AssetServer>().full_path("");
+                let mut settings = player_build::BuildSettings::load(&project);
+                if settings.scenes.is_empty()
+                    && let Some(p) = &w.scene_path
+                {
+                    settings.scenes.push(p.clone());
+                }
+                st.modal = Some(Modal::BuildSettings(settings));
+                String::new()
+            }
+            Action::BuildPlayer(run) => {
+                let project = w.resource::<AssetServer>().full_path("");
+                let settings = player_build::BuildSettings::load(&project);
+                if st.dirty {
+                    debug_log_warning!(
+                        "The open scene has unsaved changes; the build uses the saved file"
+                    );
+                }
+                st.builder.start(project, settings, run)?;
+                "Building player...".into()
+            }
             Action::InstantiateModel(path) => {
                 let h = w
                     .resource_mut::<AssetServer>()
@@ -779,6 +808,111 @@ impl Editor {
                         }
                         if ui.button("Cancel").clicked() {
                             close = true;
+                        }
+                    });
+                });
+            }
+            Modal::BuildSettings(settings) => {
+                let project = engine.world.resource::<AssetServer>().full_path("");
+                let open_scene = engine.world.scene_path.clone();
+                let building = self.st.builder.is_building();
+                egui::Modal::new(egui::Id::new("build-settings")).show(ctx, |ui| {
+                    ui.set_min_width(460.0);
+                    ui.heading("Build Settings");
+                    ui.label("Scenes In Build (the first one opens at startup):");
+                    egui::Frame::new()
+                        .fill(egui::Color32::from_gray(42))
+                        .inner_margin(6)
+                        .show(ui, |ui| {
+                            ui.set_min_height(80.0);
+                            let mut remove = None;
+                            let mut up = None;
+                            for (i, scene) in settings.scenes.iter().enumerate() {
+                                ui.horizontal(|ui| {
+                                    ui.monospace(format!("{i}"));
+                                    ui.label(scene);
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if ui.small_button("Remove").clicked() {
+                                                remove = Some(i);
+                                            }
+                                            if i > 0 && ui.small_button("Up").clicked() {
+                                                up = Some(i);
+                                            }
+                                        },
+                                    );
+                                });
+                            }
+                            if let Some(i) = remove {
+                                settings.scenes.remove(i);
+                            }
+                            if let Some(i) = up {
+                                settings.scenes.swap(i, i - 1);
+                            }
+                        });
+                    let can_add = open_scene
+                        .as_ref()
+                        .is_some_and(|p| !settings.scenes.contains(p));
+                    if ui
+                        .add_enabled(can_add, egui::Button::new("Add Open Scene"))
+                        .on_disabled_hover_text("Save the scene first, or it is already in the list")
+                        .clicked()
+                        && let Some(p) = open_scene.clone()
+                    {
+                        settings.scenes.push(p);
+                    }
+                    ui.separator();
+                    egui::Grid::new("player-settings").num_columns(2).show(ui, |ui| {
+                        ui.label("Product Name");
+                        ui.text_edit_singleline(&mut settings.product_name);
+                        ui.end_row();
+                        ui.label("Resolution");
+                        ui.horizontal(|ui| {
+                            ui.add(egui::DragValue::new(&mut settings.width).range(320..=7680));
+                            ui.label("×");
+                            ui.add(egui::DragValue::new(&mut settings.height).range(240..=4320));
+                        });
+                        ui.end_row();
+                        ui.label("Fullscreen");
+                        ui.checkbox(&mut settings.fullscreen, "");
+                        ui.end_row();
+                        ui.label("Output Folder");
+                        ui.text_edit_singleline(&mut settings.output);
+                        ui.end_row();
+                    });
+                    ui.weak(format!(
+                        "Platform: {} ({}). Release build of the engine and your Scripts; Assets are copied next to the game.",
+                        std::env::consts::OS,
+                        std::env::consts::ARCH
+                    ));
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        let save = |s: &player_build::BuildSettings| {
+                            if let Err(e) = s.save(&project) {
+                                debug_log_warning!("cannot save build settings: {e}");
+                            }
+                        };
+                        if ui.add_enabled(!building, egui::Button::new("Build")).clicked() {
+                            save(settings);
+                            action = Some(Action::BuildPlayer(false));
+                            close = true;
+                        }
+                        if ui
+                            .add_enabled(!building, egui::Button::new("Build And Run"))
+                            .clicked()
+                        {
+                            save(settings);
+                            action = Some(Action::BuildPlayer(true));
+                            close = true;
+                        }
+                        if ui.button("Close").clicked() {
+                            save(settings);
+                            close = true;
+                        }
+                        if building {
+                            ui.spinner();
+                            ui.label("Building...");
                         }
                     });
                 });
@@ -1010,6 +1144,7 @@ impl Shell for Editor {
         if let Some(host) = self.scripts.as_mut() {
             host.poll(engine);
         }
+        self.st.builder.poll();
         self.st.scripts_available = self
             .scripts
             .as_ref()

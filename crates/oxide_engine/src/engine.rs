@@ -226,8 +226,46 @@ impl Engine {
             }
             self.window.set_cursor_visible(want.1);
         }
-        if self.world.resource::<crate::AppControl>().quit {
+        // Application.Quit ends a player; in the editor (a shell) it is ignored, like Unity.
+        if std::mem::take(&mut self.world.resource_mut::<crate::AppControl>().quit)
+            && self.shell.is_none()
+        {
             self.quit_requested = true;
+        }
+        if let Some(scene) = self
+            .world
+            .resource_mut::<crate::AppControl>()
+            .pending_scene
+            .take()
+        {
+            self.load_requested_scene(&scene);
+        }
+    }
+
+    /// Applies a `SceneManager.LoadScene` request from game code.
+    fn load_requested_scene(&mut self, scene: &str) {
+        let all: Vec<String> = self
+            .world
+            .resource::<AssetServer>()
+            .list_files()
+            .into_iter()
+            .filter(|f| f.ends_with(".scene"))
+            .collect();
+        let Some(path) = self
+            .world
+            .resource::<crate::AppControl>()
+            .resolve_scene(scene, &all)
+        else {
+            debug_log_error!("LoadScene: no scene `{scene}` (add it to the build's scenes)");
+            return;
+        };
+        let run = self.world.run_scripts;
+        match crate::load_scene(&mut self.world, &path, false) {
+            Ok(_) => {
+                self.world.run_scripts = run;
+                self.start_systems();
+            }
+            Err(e) => debug_log_error!("LoadScene: {e}"),
         }
     }
 

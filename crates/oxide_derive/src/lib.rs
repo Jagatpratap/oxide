@@ -26,7 +26,10 @@ fn core_path() -> TokenStream2 {
         }
         // Game code sees the engine through `oxide_engine` or, in a project's Scripts,
         // the `oxide_dylib` library (usually renamed to `oxide`).
-        Err(_) => match crate_name("oxide_engine").or_else(|_| crate_name("oxide_dylib")) {
+        Err(_) => match crate_name("oxide_engine")
+            .or_else(|_| crate_name("oxide_dylib"))
+            .or_else(|_| crate_name("oxide_player"))
+        {
             Ok(FoundCrate::Name(name)) => {
                 let id = Ident::new(&name, Span::call_site());
                 quote!(::#id::core)

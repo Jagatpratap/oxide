@@ -7,6 +7,7 @@
 //! - [`serialize`]: scene/prefab files and `Instantiate`.
 //! - [`builtin`]: Camera, Light, MeshFilter, MeshRenderer, SkinnedMeshRenderer, RenderSettings.
 
+pub mod application;
 pub mod builtin;
 pub mod component;
 pub mod ctx;
@@ -18,6 +19,7 @@ pub mod system;
 pub mod timers;
 pub mod world;
 
+pub use application::Application;
 pub use builtin::*;
 pub use component::{Collision, Component, ComponentRegistry, ContactPoint};
 pub use ctx::{Ctx, TransformRef};

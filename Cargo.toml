@@ -27,6 +27,7 @@ oxide_particles = { path = "crates/oxide_particles" }
 oxide_standard = { path = "crates/oxide_standard" }
 oxide_editor = { path = "crates/oxide_editor" }
 oxide_dylib = { path = "crates/oxide_dylib" }
+oxide_player = { path = "crates/oxide_player" }
 
 glam = { version = "0.33", features = ["bytemuck", "serde"] }
 serde = { version = "1", features = ["derive"] }
