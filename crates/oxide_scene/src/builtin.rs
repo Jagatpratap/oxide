@@ -255,6 +255,9 @@ pub struct RenderSettings {
     /// Vignette strength (0 = off).
     #[reflect(range(0, 1))]
     pub vignette: f32,
+    /// Multiplies LOD transition distances (Unity `QualitySettings.lodBias`): 2 keeps
+    /// detail twice as far.
+    pub lod_bias: f32,
 }
 
 impl Default for RenderSettings {
@@ -280,6 +283,7 @@ impl Default for RenderSettings {
             bloom_threshold: 1.0,
             shadow_distance: 150.0,
             vignette: 0.15,
+            lod_bias: 1.0,
         }
     }
 }
@@ -306,3 +310,62 @@ pub struct MissingScript {
 }
 
 impl Component for MissingScript {}
+
+/// One level of a [`LODGroup`].
+#[derive(Clone, Debug, PartialEq, Reflect)]
+#[reflect(default)]
+pub struct Lod {
+    /// Shown while the group covers at least this fraction of the screen height (Unity
+    /// `LOD.screenRelativeTransitionHeight`).
+    #[reflect(range(0, 1))]
+    pub screen_relative_height: f32,
+    /// Objects whose renderers belong to this level.
+    pub renderers: Vec<GameObjectId>,
+}
+
+impl Default for Lod {
+    fn default() -> Self {
+        Self {
+            screen_relative_height: 0.5,
+            renderers: Vec::new(),
+        }
+    }
+}
+
+/// Unity `LODGroup`: draws simpler meshes as the object gets smaller on screen, and nothing
+/// once it is smaller than the last level. Levels go from most to least detailed.
+/// <https://docs.unity3d.com/Manual/class-LODGroup.html>
+#[derive(Clone, Debug, Reflect)]
+pub struct LODGroup {
+    pub lods: Vec<Lod>,
+    /// Object-space size used for the screen-height test (0 = from the renderers' bounds).
+    pub size: f32,
+}
+
+impl Default for LODGroup {
+    fn default() -> Self {
+        Self {
+            lods: [0.6, 0.3, 0.1]
+                .into_iter()
+                .map(|h| Lod {
+                    screen_relative_height: h,
+                    renderers: Vec::new(),
+                })
+                .collect(),
+            size: 0.0,
+        }
+    }
+}
+
+impl Component for LODGroup {
+    fn allow_multiple(&self) -> bool {
+        false
+    }
+}
+
+/// Which level of a group shows at `relative_height` (fraction of screen height); `None`
+/// when it is culled.
+pub fn lod_level(lods: &[Lod], relative_height: f32) -> Option<usize> {
+    lods.iter()
+        .position(|l| relative_height >= l.screen_relative_height)
+}

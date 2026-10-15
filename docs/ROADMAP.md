@@ -427,7 +427,7 @@ needs, and where the engine is:
 | Vehicle physics (WheelCollider) | ✔ | ✔ (vehicles) | ☑ Rapier ray-cast vehicles, CarController |
 | Character controller + animation | | ✔ | ◐ CharacterController, Animator, 1D blend trees; missing 2D blend trees, root motion, IK, humanoid retargeting |
 | Terrain + foliage | ✔ | ✔ | ◐ chunked LOD terrain, trees; missing grass/details, sculpt tools, streaming |
-| Big worlds (8×8 km) | | ✔ | ☐ LOD groups, occlusion culling, world streaming, floating origin |
+| Big worlds (8×8 km) | | ✔ | ◐ LOD Groups (+ `_LODn` model import, LOD bias); occlusion culling, world streaming ☐ |
 | Weapons, hits, ragdolls | | ✔ | ◐ raycasts and joints exist; ragdoll wizard, hit boxes ☐ |
 | Game scripts in the editor | ✔ | ✔ | ☑ project Scripts crate, hot reload in Edit and Play mode |
 | HUD, menus | ✔ | ✔ | ◐ Canvas UI + immediate GUI; UI Toolkit-style layout ☐ |

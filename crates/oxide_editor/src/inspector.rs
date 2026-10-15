@@ -477,6 +477,10 @@ fn components(
                     "The script `{script}` is not loaded (still compiling, renamed or deleted). Its saved values are kept."
                 ));
             }
+            if type_name == "LODGroup" {
+                lod_group_editor(ui, w, id, cid, &st.selection, edits);
+                return;
+            }
             if values.is_empty() {
                 ui.weak("No editable fields.");
             }
@@ -996,6 +1000,204 @@ fn apply(st: &mut EditorState, w: &mut World, id: GameObjectId, edits: Vec<(Edit
                 }
             }
         }
+    }
+}
+
+const LOD_COLORS: [Color32; 6] = [
+    Color32::from_rgb(60, 140, 60),
+    Color32::from_rgb(50, 110, 160),
+    Color32::from_rgb(140, 120, 50),
+    Color32::from_rgb(120, 70, 150),
+    Color32::from_rgb(60, 130, 130),
+    Color32::from_rgb(150, 90, 60),
+];
+
+/// Unity's LOD Group inspector: the level bar, transition heights, and per-level renderers
+/// (drop objects from the Hierarchy, or add the selection).
+fn lod_group_editor(
+    ui: &mut egui::Ui,
+    w: &World,
+    id: GameObjectId,
+    cid: ComponentId,
+    selection: &[GameObjectId],
+    edits: &mut Vec<(Edit, u64)>,
+) {
+    let Some(g) = w.component::<oxide_scene::LODGroup>(id, cid) else {
+        return;
+    };
+    let mut lods = g.lods.clone();
+    let mut size = g.size;
+    let mut changed = false;
+
+    // Bar: each level's share of screen heights 100% → its transition, then Culled.
+    let (bar, _) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 26.0), egui::Sense::hover());
+    let p = ui.painter();
+    let mut top = 1.0f32;
+    for (i, l) in lods.iter().enumerate() {
+        let h = l.screen_relative_height.clamp(0.0, top);
+        let x0 = bar.left() + (1.0 - top) * bar.width();
+        let x1 = bar.left() + (1.0 - h) * bar.width();
+        let r = egui::Rect::from_min_max(egui::pos2(x0, bar.top()), egui::pos2(x1, bar.bottom()));
+        p.rect_filled(r, 0.0, LOD_COLORS[i % LOD_COLORS.len()]);
+        p.text(
+            r.left_center() + egui::vec2(4.0, 0.0),
+            egui::Align2::LEFT_CENTER,
+            format!("LOD {i}\n{:.0}%", top * 100.0),
+            egui::FontId::proportional(10.0),
+            Color32::WHITE,
+        );
+        top = h;
+    }
+    let culled = egui::Rect::from_min_max(
+        egui::pos2(bar.left() + (1.0 - top) * bar.width(), bar.top()),
+        bar.right_bottom(),
+    );
+    p.rect_filled(culled, 0.0, Color32::from_rgb(130, 45, 45));
+    p.text(
+        culled.center(),
+        egui::Align2::CENTER_CENTER,
+        "Culled",
+        egui::FontId::proportional(10.0),
+        Color32::WHITE,
+    );
+
+    let mut remove_level = None;
+    for (i, l) in lods.iter_mut().enumerate() {
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(format!("LOD {i}"))
+                    .strong()
+                    .color(LOD_COLORS[i % LOD_COLORS.len()]),
+            );
+            ui.label("shown above");
+            let mut pct = l.screen_relative_height * 100.0;
+            if ui
+                .add(
+                    egui::DragValue::new(&mut pct)
+                        .range(0.0..=100.0)
+                        .speed(0.2)
+                        .suffix("%"),
+                )
+                .changed()
+            {
+                l.screen_relative_height = pct / 100.0;
+                changed = true;
+            }
+            ui.label("of screen height");
+            if ui
+                .small_button("x")
+                .on_hover_text("Remove this level")
+                .clicked()
+            {
+                remove_level = Some(i);
+            }
+        });
+        let mut drop_target = egui::Frame::new()
+            .fill(Color32::from_gray(44))
+            .inner_margin(4)
+            .show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                if l.renderers.is_empty() {
+                    ui.weak("Drop objects here");
+                }
+                let mut gone = None;
+                for (n, r) in l.renderers.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.label(w.get(*r).map_or("Missing", |o| o.name.as_str()));
+                        if ui.small_button("x").clicked() {
+                            gone = Some(n);
+                        }
+                    });
+                }
+                if let Some(n) = gone {
+                    l.renderers.remove(n);
+                    changed = true;
+                }
+            })
+            .response;
+        drop_target = drop_target.interact(egui::Sense::hover());
+        if let Some(payload) = drop_target.dnd_release_payload::<HierarchyDrag>() {
+            for o in &payload.0 {
+                if !l.renderers.contains(o) {
+                    l.renderers.push(*o);
+                }
+            }
+            changed = true;
+        }
+        let picks: Vec<GameObjectId> = selection
+            .iter()
+            .copied()
+            .filter(|s| *s != id && !l.renderers.contains(s))
+            .collect();
+        if ui
+            .add_enabled(!picks.is_empty(), egui::Button::new("Add Selected"))
+            .on_hover_text(
+                "Add the objects selected in the Hierarchy (Cmd/Shift-click to select several)",
+            )
+            .clicked()
+        {
+            l.renderers.extend(picks);
+            changed = true;
+        }
+    }
+    if let Some(i) = remove_level {
+        lods.remove(i);
+        changed = true;
+    }
+    ui.separator();
+    ui.horizontal(|ui| {
+        if ui.button("Add Level").clicked() {
+            let h = lods.last().map_or(0.5, |l| l.screen_relative_height * 0.5);
+            lods.push(oxide_scene::Lod {
+                screen_relative_height: h,
+                renderers: Vec::new(),
+            });
+            changed = true;
+        }
+        ui.label("Size");
+        let r = ui
+            .add(
+                egui::DragValue::new(&mut size)
+                    .range(0.0..=10_000.0)
+                    .speed(0.05),
+            )
+            .on_hover_text("Object size for the screen-height test (0 = from LOD 0's bounds)");
+        if r.changed() {
+            edits.push((
+                Edit::Field(cid, "size".into(), Value::Float(size as f64)),
+                key(id, "lod-size"),
+            ));
+        }
+    });
+    if changed {
+        let value = Value::List(
+            lods.iter()
+                .map(|l| {
+                    Value::Object(
+                        [
+                            (
+                                "screen_relative_height".to_owned(),
+                                Value::Float(l.screen_relative_height as f64),
+                            ),
+                            (
+                                "renderers".to_owned(),
+                                Value::List(
+                                    l.renderers
+                                        .iter()
+                                        .map(|r| Value::ObjectRef(r.to_bits()))
+                                        .collect(),
+                                ),
+                            ),
+                        ]
+                        .into_iter()
+                        .collect(),
+                    )
+                })
+                .collect(),
+        );
+        edits.push((Edit::Field(cid, "lods".into(), value), key(id, "lods")));
     }
 }
 

@@ -238,7 +238,12 @@ pub fn json_like(template: &Value, v: &Json, world: &World) -> Result<Value, Str
                     .map(|i| json_like(t, i, world))
                     .collect::<Result<Vec<_>, _>>()
                     .map(Value::List),
-                None => Err("cannot infer the element type of an empty list".into()),
+                // Empty list: infer each element from the JSON itself.
+                None => arr
+                    .iter()
+                    .map(|i| infer(i, world))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map(Value::List),
             }
         }
         Value::Enum(_) => Ok(Value::Enum(
@@ -249,6 +254,27 @@ pub fn json_like(template: &Value, v: &Json, world: &World) -> Result<Value, Str
         ),
         _ => scalar(kind, &[], v, world),
     }
+}
+
+/// A value from JSON alone: numbers, booleans, `[x, y, z]` vectors, and strings that name
+/// a GameObject (references) or anything else (text).
+fn infer(v: &Json, world: &World) -> Result<Value, String> {
+    Ok(match v {
+        Json::Bool(b) => Value::Bool(*b),
+        Json::Number(n) => Value::Float(n.as_f64().unwrap_or(0.0)),
+        Json::Array(a) if a.len() == 3 && a.iter().all(Json::is_number) => {
+            Value::Vector3([0, 1, 2].map(|i| a[i].as_f64().unwrap_or(0.0) as f32))
+        }
+        Json::String(_) | Json::Object(_) => match resolve_object(world, v) {
+            Some(id) => Value::ObjectRef(id.to_bits()),
+            None => match v.as_str() {
+                Some(s) => Value::String(s.to_owned()),
+                None => return Err(format!("cannot infer a value from {v}")),
+            },
+        },
+        Json::Null => Value::Null,
+        other => return Err(format!("cannot infer a value from {other}")),
+    })
 }
 
 pub fn parse_fields(
@@ -269,7 +295,10 @@ pub fn parse_fields(
             errors.push(format!("{}: no field `{k}` (fields: {names:?})", info.name));
             continue;
         };
-        let parsed = if f.kind == ValueKind::Object {
+        // Structs (and lists of structs) are parsed like their current value.
+        let nested = f.kind == ValueKind::Object
+            || (f.kind == ValueKind::List && f.element == Some(ValueKind::Object));
+        let parsed = if nested {
             match current.and_then(|c| c.get_field(f.name)) {
                 Some(t) => json_like(&t, v, world),
                 None => Err("nested value without a template".into()),

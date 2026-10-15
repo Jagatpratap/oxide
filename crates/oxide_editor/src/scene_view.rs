@@ -711,6 +711,28 @@ fn draw_selection(st: &EditorState, world: &World, proj: &Projector, p: &egui::P
             }
         }
         draw_colliders(world, root, proj, p);
+        if let Some(g) = world.get_component::<oxide_scene::LODGroup>(root) {
+            let cam = st.scene_cam.camera_view();
+            let bias = world
+                .try_resource::<oxide_scene::RenderSettings>()
+                .map_or(1.0, |r| r.lod_bias);
+            let (c, r) = oxide_engine::extract::lod_group_sphere(world, root, g);
+            let level = oxide_engine::extract::lod_level_for(world, root, g, &cam, bias);
+            let pct = oxide_engine::extract::screen_relative_height(&cam, c, r) * bias * 100.0;
+            if let Some(at) = proj.project(c) {
+                let text = match level {
+                    Some(l) => format!("LOD {l}  ({pct:.0}%)"),
+                    None => format!("Culled  ({pct:.1}%)"),
+                };
+                p.text(
+                    at + vec2(0.0, -18.0),
+                    egui::Align2::CENTER_BOTTOM,
+                    text,
+                    egui::FontId::proportional(12.0),
+                    Color32::WHITE,
+                );
+            }
+        }
     }
 }
 

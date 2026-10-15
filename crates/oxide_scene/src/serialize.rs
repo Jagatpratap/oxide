@@ -97,12 +97,21 @@ pub(crate) fn remap(v: Value, map: &dyn Fn(u64) -> Option<u64>) -> Value {
             None => Value::Null,
         },
         Value::List(items) => Value::List(items.into_iter().map(|i| remap(i, map)).collect()),
+        Value::Object(fields) => Value::Object(
+            fields
+                .into_iter()
+                .map(|(k, v)| (k, remap(v, map)))
+                .collect(),
+        ),
         other => other,
     }
 }
 
 fn has_refs(kind: ValueKind) -> bool {
-    matches!(kind, ValueKind::ObjectRef | ValueKind::List)
+    matches!(
+        kind,
+        ValueKind::ObjectRef | ValueKind::List | ValueKind::Object
+    )
 }
 
 impl World {
@@ -339,6 +348,18 @@ fn merge_external(serialized: Option<Value>, original: Value) -> Value {
             s.into_iter()
                 .zip(o)
                 .map(|(s, o)| merge_external(Some(s), o))
+                .collect(),
+        ),
+        (Some(Value::Object(s)), Value::Object(mut o)) => Value::Object(
+            s.into_iter()
+                .map(|(k, v)| {
+                    let orig = o.remove(&k);
+                    let merged = match orig {
+                        Some(orig) => merge_external(Some(v), orig),
+                        None => v,
+                    };
+                    (k, merged)
+                })
                 .collect(),
         ),
         (Some(s), _) => s,

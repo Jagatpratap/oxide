@@ -8,8 +8,9 @@ use oxide_render::{
     RenderFrame, ShadowSettings, SunLight,
 };
 use oxide_scene::{
-    Camera, CameraClearFlags, DebugDraw, FogMode, Light, LightShadows, LightType, MeshFilter,
-    MeshRenderer, Projection, RenderSettings, ShadowCastingMode, SkinnedMeshRenderer, World,
+    Camera, CameraClearFlags, DebugDraw, FogMode, LODGroup, Light, LightShadows, LightType,
+    MeshFilter, MeshRenderer, Projection, RenderSettings, ShadowCastingMode, SkinnedMeshRenderer,
+    World,
 };
 
 pub fn camera_view(world: &World, id: oxide_scene::GameObjectId, c: &Camera) -> CameraView {
@@ -146,7 +147,14 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
 
     let default_mat = AssetId::from_path(DEFAULT_MATERIAL);
     let layer_of = |id| world.get(id).map_or(0, |o| o.layer);
+    let hidden = match frame.cameras.first() {
+        Some(cam) => lod_hidden(world, cam, settings.lod_bias),
+        None => std::collections::HashSet::new(),
+    };
     for (id, r) in world.query::<MeshRenderer>() {
+        if hidden.contains(&id) {
+            continue;
+        }
         let Some(mesh) = world
             .get_component::<MeshFilter>(id)
             .and_then(|f| f.mesh.as_ref())
@@ -181,6 +189,9 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
     }
 
     for (id, r) in world.query::<SkinnedMeshRenderer>() {
+        if hidden.contains(&id) {
+            continue;
+        }
         let Some(mesh_h) = &r.mesh else { continue };
         let Some(mesh) = assets.meshes.get(mesh_h) else {
             continue;
@@ -243,4 +254,162 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
         }
     }
     frame
+}
+
+/// World-space bounding sphere of a LOD group: from `size` if set, else from its first
+/// level's renderer bounds.
+pub fn lod_group_sphere(
+    world: &World,
+    id: oxide_scene::GameObjectId,
+    g: &LODGroup,
+) -> (oxide_math::Vector3, f32) {
+    let pos = world.position(id);
+    if g.size > 0.0 {
+        let s = world.lossy_scale(id).abs().max_element();
+        return (pos, g.size * s * 0.5);
+    }
+    let assets = world.resource::<AssetServer>();
+    let mut min = oxide_math::Vector3::splat(f32::MAX);
+    let mut max = oxide_math::Vector3::splat(f32::MIN);
+    for &r in g.lods.first().map_or(&[][..], |l| &l.renderers[..]) {
+        let mesh = world
+            .get_component::<MeshFilter>(r)
+            .and_then(|f| f.mesh.as_ref())
+            .or_else(|| {
+                world
+                    .get_component::<SkinnedMeshRenderer>(r)
+                    .and_then(|s| s.mesh.as_ref())
+            })
+            .and_then(|h| assets.meshes.get(h));
+        let Some(mesh) = mesh else { continue };
+        let m = world.local_to_world(r);
+        let (lo, hi) = (mesh.bounds.min(), mesh.bounds.max());
+        for i in 0..8 {
+            let c = oxide_math::Vector3::new(
+                if i & 1 == 0 { lo.x } else { hi.x },
+                if i & 2 == 0 { lo.y } else { hi.y },
+                if i & 4 == 0 { lo.z } else { hi.z },
+            );
+            let p = m.transform_point3(c);
+            min = min.min(p);
+            max = max.max(p);
+        }
+    }
+    if min.x > max.x {
+        return (pos, 0.5);
+    }
+    ((min + max) * 0.5, ((max - min) * 0.5).length())
+}
+
+/// Fraction of the screen height a sphere covers from a camera.
+pub fn screen_relative_height(cam: &CameraView, center: oxide_math::Vector3, radius: f32) -> f32 {
+    match cam.projection {
+        ProjectionKind::Perspective { fov } => {
+            let d = (center - cam.position).length().max(1e-3);
+            radius * 2.0 / (2.0 * d * (fov * 0.5).to_radians().tan())
+        }
+        ProjectionKind::Orthographic { size } => radius / size.max(1e-3),
+    }
+}
+
+/// The LOD level a group shows from `cam` (`None` = culled).
+pub fn lod_level_for(
+    world: &World,
+    id: oxide_scene::GameObjectId,
+    g: &LODGroup,
+    cam: &CameraView,
+    bias: f32,
+) -> Option<usize> {
+    let (c, r) = lod_group_sphere(world, id, g);
+    oxide_scene::lod_level(&g.lods, screen_relative_height(cam, c, r) * bias.max(0.01))
+}
+
+/// Renderer objects LOD groups hide from `cam` (levels not chosen, or culled groups).
+fn lod_hidden(
+    world: &World,
+    cam: &CameraView,
+    bias: f32,
+) -> std::collections::HashSet<oxide_scene::GameObjectId> {
+    let mut hidden = std::collections::HashSet::new();
+    for (id, g) in world.query::<LODGroup>() {
+        let level = lod_level_for(world, id, g, cam, bias);
+        for (i, lod) in g.lods.iter().enumerate() {
+            if Some(i) != level {
+                hidden.extend(lod.renderers.iter().copied());
+            }
+        }
+        // A renderer in the chosen level shows even if also listed in another level.
+        if let Some(l) = level.and_then(|l| g.lods.get(l)) {
+            for r in &l.renderers {
+                hidden.remove(r);
+            }
+        }
+    }
+    hidden
+}
+
+#[cfg(test)]
+mod lod_tests {
+    use super::*;
+    use oxide_assets::PrimitiveType;
+    use oxide_math::Vector3;
+    use oxide_scene::Lod;
+
+    fn camera_at(z: f32) -> CameraView {
+        CameraView {
+            position: Vector3::new(0.0, 0.0, z),
+            rotation: oxide_math::Quaternion::IDENTITY,
+            projection: ProjectionKind::Perspective { fov: 60.0 },
+            near: 0.1,
+            far: 5000.0,
+            viewport: [0.0, 0.0, 1.0, 1.0],
+            clear: ClearMode::Sky,
+            culling_mask: u32::MAX,
+        }
+    }
+
+    #[test]
+    fn lod_switches_with_distance_and_culls() {
+        let mut w = World::new();
+        crate::init_world(&mut w, std::env::temp_dir());
+        let root = w.create("Tree");
+        let hi = crate::objects::create_primitive(&mut w, PrimitiveType::Sphere);
+        let lo = crate::objects::create_primitive(&mut w, PrimitiveType::Cube);
+        w.set_parent(hi, Some(root), false).unwrap();
+        w.set_parent(lo, Some(root), false).unwrap();
+        w.add_component(
+            root,
+            LODGroup {
+                lods: vec![
+                    Lod {
+                        screen_relative_height: 0.5,
+                        renderers: vec![hi],
+                    },
+                    Lod {
+                        screen_relative_height: 0.05,
+                        renderers: vec![lo],
+                    },
+                ],
+                size: 1.0,
+            },
+        );
+        let drawn = |z: f32| -> Vec<AssetId> {
+            let mut f = extract(&w, Some(vec![camera_at(z)]));
+            f.draws
+                .retain(|d| d.mesh != AssetId::from_path("builtin:Plane"));
+            f.draws.iter().map(|d| d.mesh).collect()
+        };
+        // 1 m object: at 1.5 m it fills ~58% of the screen height -> LOD0.
+        assert_eq!(
+            drawn(-1.5),
+            vec![AssetId::from_path(&PrimitiveType::Sphere.mesh_path())]
+        );
+        // At 5 m: ~17% -> LOD1.
+        assert_eq!(
+            drawn(-5.0),
+            vec![AssetId::from_path(&PrimitiveType::Cube.mesh_path())]
+        );
+        // At 50 m: ~1.7% -> culled.
+        assert!(drawn(-50.0).is_empty());
+    }
 }

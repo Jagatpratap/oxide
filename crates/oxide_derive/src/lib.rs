@@ -103,8 +103,45 @@ pub fn derive_reflect(input: TokenStream) -> TokenStream {
     result.unwrap_or_else(|e| e.to_compile_error()).into()
 }
 
+/// Whether a struct can be built from its `Default` when nested values arrive whole (lists
+/// of structs): it derives `Default`, or says `#[reflect(default)]` (for a manual impl).
+fn has_default(input: &DeriveInput) -> syn::Result<bool> {
+    let mut yes = false;
+    for attr in &input.attrs {
+        if attr.path().is_ident("derive") {
+            attr.parse_nested_meta(|m| {
+                if m.path.is_ident("Default") {
+                    yes = true;
+                }
+                Ok(())
+            })?;
+        } else if attr.path().is_ident("reflect") {
+            attr.parse_nested_meta(|m| {
+                if m.path.is_ident("default") {
+                    yes = true;
+                    Ok(())
+                } else {
+                    Err(m.error("expected `default` on a struct"))
+                }
+            })?;
+        }
+    }
+    Ok(yes)
+}
+
 fn derive_struct(input: &DeriveInput, fields: &Fields) -> syn::Result<TokenStream2> {
     let core = core_path();
+    let from_default = if has_default(input)? {
+        quote! {
+            let mut s = <Self as ::core::default::Default>::default();
+            #core::reflect::FieldValue::set_from(&mut s, v).then_some(s)
+        }
+    } else {
+        quote! {
+            let _ = v;
+            None
+        }
+    };
     let ty = &input.ident;
     let ty_name = ty.to_string();
     let (impl_g, ty_g, where_g) = input.generics.split_for_impl();
@@ -200,8 +237,8 @@ fn derive_struct(input: &DeriveInput, fields: &Fields) -> syn::Result<TokenStrea
                     #core::reflect::Reflect::fields(self).into_iter().map(|(k, v)| (k.to_string(), v)).collect()
                 )
             }
-            fn from_value(_: #core::reflect::Value) -> Option<Self> {
-                None
+            fn from_value(v: #core::reflect::Value) -> Option<Self> {
+                #from_default
             }
             fn set_from(&mut self, v: #core::reflect::Value) -> bool {
                 match v {

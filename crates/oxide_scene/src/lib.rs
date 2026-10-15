@@ -38,6 +38,7 @@ pub fn register_builtin(reg: &mut ComponentRegistry) {
     reg.register::<MeshFilter>("Mesh/Mesh Filter");
     reg.register::<MeshRenderer>("Mesh/Mesh Renderer");
     reg.register::<SkinnedMeshRenderer>("Mesh/Skinned Mesh Renderer");
+    reg.register::<LODGroup>("Rendering/LOD Group");
 }
 
 #[cfg(test)]

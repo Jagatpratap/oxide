@@ -216,5 +216,80 @@ pub fn instantiate_model(world: &mut World, model: &Handle<Model>) -> Option<Gam
             }
         }
     }
+    add_lod_groups(world, root);
     Some(root)
+}
+
+/// `Rock_LOD2` → (`Rock`, 2).
+fn lod_suffix(name: &str) -> Option<(&str, usize)> {
+    let (base, n) = name
+        .rsplit_once("_LOD")
+        .or_else(|| name.rsplit_once("_lod"))?;
+    Some((base, n.parse().ok()?))
+}
+
+/// Unity's model import convention: children named `*_LOD0`, `*_LOD1`, ... become the levels
+/// of a [`LODGroup`] on their parent (each level shows at half the screen height of the
+/// previous one, the last down to 1%).
+pub fn add_lod_groups(world: &mut World, root: GameObjectId) {
+    for parent in world.descendants(root) {
+        if world.has_component::<oxide_scene::LODGroup>(parent) {
+            continue;
+        }
+        let mut levels: Vec<(usize, GameObjectId)> = world
+            .children(parent)
+            .iter()
+            .filter_map(|&c| {
+                let name = world.get(c)?.name.clone();
+                lod_suffix(&name).map(|(_, n)| (n, c))
+            })
+            .collect();
+        if levels.len() < 2 {
+            continue;
+        }
+        levels.sort();
+        let count = levels.len();
+        let lods = levels
+            .into_iter()
+            .enumerate()
+            .map(|(i, (_, obj))| oxide_scene::Lod {
+                screen_relative_height: if i + 1 == count {
+                    0.01
+                } else {
+                    0.6 / (1u32 << i) as f32
+                },
+                // The level's object and everything under it.
+                renderers: world.descendants(obj),
+            })
+            .collect();
+        world.add_component(parent, oxide_scene::LODGroup { lods, size: 0.0 });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lod_children_become_a_lod_group() {
+        let mut w = World::new();
+        crate::init_world(&mut w, std::env::temp_dir());
+        let root = w.create("Rock");
+        for n in ["Rock_LOD1", "Rock_LOD0", "Rock_LOD2"] {
+            let c = create_primitive(&mut w, PrimitiveType::Sphere);
+            w.get_mut(c).unwrap().name = n.into();
+            w.set_parent(c, Some(root), false).unwrap();
+        }
+        add_lod_groups(&mut w, root);
+        let g = w.get_component::<oxide_scene::LODGroup>(root).unwrap();
+        let names: Vec<_> = g
+            .lods
+            .iter()
+            .map(|l| w.get(l.renderers[0]).unwrap().name.as_str())
+            .collect();
+        assert_eq!(names, ["Rock_LOD0", "Rock_LOD1", "Rock_LOD2"]);
+        assert_eq!(g.lods[2].screen_relative_height, 0.01);
+        assert_eq!(lod_suffix("Tree_LOD12"), Some(("Tree", 12)));
+        assert_eq!(lod_suffix("Tree"), None);
+    }
 }
