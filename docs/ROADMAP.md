@@ -129,8 +129,7 @@ Legend: ☐ not started · ◐ in progress · ☑ done
 - ☑ Logging (`Debug.Log` / Warning / Error) feeding a future Console
 - ☑ Math types: Vector2/3/4, Quaternion, Matrix4x4, Mathf, Bounds, Ray, Plane, Rect, Color, Color32
   ([Programming with math](https://docs.unity3d.com/Manual/programming-math.html))
-- ◐ Reflection/type registry: runtime `Reflect` trait, `TypeRegistry`, `reflect_struct!` macro.
-  The `#[derive(Reflect)]` proc-macro comes in P1 with components.
+- ☑ Reflection/type registry: runtime `Reflect` trait, `TypeRegistry`, `#[derive(Reflect)]`.
 - ☑ MCP server with 14 engine tools (info, Console, Time, pause/step, screenshot, inspect/edit
   objects, reflected types, quit). See [`MCP.md`](MCP.md).
 
@@ -139,26 +138,26 @@ Legend: ☐ not started · ◐ in progress · ☑ done
 pause/step advances exactly N frames. Checked live over MCP, including screenshots.
 
 ### P1 — GameObjects, Components, Scenes, Prefabs
-- ☐ GameObject: name, active/inactive, tag, layer, static flags
+- ☑ GameObject: name, active/inactive, tag, layer, static flags
   ([GameObject class](https://docs.unity3d.com/Manual/class-GameObject.html),
   [Deactivate](https://docs.unity3d.com/Manual/DeactivatingGameObjects.html),
   [Static](https://docs.unity3d.com/Manual/StaticObjects.html),
   [Tags](https://docs.unity3d.com/Manual/Tags.html),
   [Layers](https://docs.unity3d.com/Manual/Layers.html))
-- ☐ Transform hierarchy: local/world TRS, parenting, dirty propagation
+- ☑ Transform hierarchy: local/world TRS, parenting, dirty propagation
   ([Transforms](https://docs.unity3d.com/Manual/class-Transform.html))
-- ☐ Component model + MonoBehaviour-style lifecycle (`Awake`, `OnEnable`, `Start`, `Update`, `OnDisable`, `OnDestroy`)
+- ☑ Component model + MonoBehaviour-style lifecycle (`Awake`, `OnEnable`, `Start`, `Update`, `OnDisable`, `OnDestroy`)
   ([Components](https://docs.unity3d.com/Manual/Components.html),
   [Create components with scripts](https://docs.unity3d.com/Manual/CreatingComponents.html))
-- ☐ Primitives: Cube, Sphere, Capsule, Cylinder, Plane, Quad
+- ☑ Primitives: Cube, Sphere, Capsule, Cylinder, Plane, Quad
   ([Primitive objects](https://docs.unity3d.com/Manual/PrimitiveObjects.html))
-- ☐ Scenes: create/load/save, additive multi-scene
+- ◐ Scenes: create/load/save, additive multi-scene
   ([Scenes](https://docs.unity3d.com/Manual/working-with-scenes.html),
   [Multi-scene](https://docs.unity3d.com/Manual/MultiSceneEditing.html))
-- ☐ Text YAML scene format with fileIDs + GUID references
+- ◐ Text YAML scene format with fileIDs + GUID references
   ([Text-based scene files](https://docs.unity3d.com/Manual/TextSceneFormat.html),
   [UnityYAML](https://docs.unity3d.com/Manual/UnityYAML.html))
-- ☐ Prefabs: create, instantiate, nested, variants, overrides, apply/revert, unpack
+- ☑ Prefabs: create, instantiate, nested, variants, overrides, apply/revert, unpack
   ([Prefabs](https://docs.unity3d.com/Manual/Prefabs.html),
   [Nested](https://docs.unity3d.com/Manual/NestedPrefabs.html),
   [Variants](https://docs.unity3d.com/Manual/PrefabVariants.html),
@@ -168,32 +167,38 @@ pause/step advances exactly N frames. Checked live over MCP, including screensho
 
 **Exit:** build a scene in code, save to YAML, reload it identically; prefab variant override round-trips.
 
+**Status:** done except constraints and multi-scene editing. Prefabs: linked instances,
+field-level overrides (bold in the Inspector), Apply/Revert/Unpack, variants, and scenes that
+pick up prefab changes on load. Nested prefabs are stored flattened (an inner prefab's later
+changes don't reach the outer one yet). Asset references are by path, not GUID (GUIDs come
+with `.meta` files in P3).
+
 ### P2 — Editor shell (the Unity layout)
-- ☐ Dockable window system, saveable layouts
+- ☑ Dockable window system, saveable layouts
   ([Customize workspace](https://docs.unity3d.com/Manual/CustomizingYourWorkspace.html))
-- ☐ **Hierarchy** window: tree, drag-reparent, rename, multi-select, search
+- ☑ **Hierarchy** window: tree, drag-reparent, rename, multi-select, search
   ([Hierarchy](https://docs.unity3d.com/Manual/hierarchy-window.html))
-- ☐ **Scene view**: fly camera, orbit/pan/zoom, grid, gizmos, move/rotate/scale/rect handles, snapping, picking, 2D/3D toggle, draw modes, overlays
+- ◐ **Scene view**: fly camera, orbit/pan/zoom, grid, gizmos, move/rotate/scale/rect handles, snapping, picking, 2D/3D toggle, draw modes, overlays
   ([Scene view](https://docs.unity3d.com/Manual/UsingTheSceneView.html),
   [Positioning](https://docs.unity3d.com/Manual/PositioningGameObjects.html),
   [Picking](https://docs.unity3d.com/Manual/ScenePicking.html),
   [Grid snapping](https://docs.unity3d.com/Manual/GridSnapping.html),
   [Overlays](https://docs.unity3d.com/Manual/overlays.html),
   [Gizmos & handles](https://docs.unity3d.com/Manual/gizmos-and-handles.html))
-- ☐ **Inspector**: reflected fields, add/remove component, multi-object edit, lock, debug mode, custom editors
+- ◐ **Inspector**: reflected fields, add/remove component, multi-object edit, lock, debug mode, custom editors
   ([Inspector](https://docs.unity3d.com/Manual/UsingTheInspector.html))
-- ☐ **Project** window: folder tree, thumbnails, search, labels, drag-into-scene
+- ◐ **Project** window: folder tree, thumbnails, search, labels, drag-into-scene
   ([Project window](https://docs.unity3d.com/Manual/ProjectView.html))
-- ☐ **Game** view: play/pause/step, resolution/aspect, stats, maximize on play
+- ◐ **Game** view: play/pause/step, resolution/aspect, stats, maximize on play
   ([Game view](https://docs.unity3d.com/Manual/GameView.html))
-- ☐ **Console**: collapse, filter, stack trace, click-to-source
+- ◐ **Console**: collapse, filter, stack trace, click-to-source
   ([Console](https://docs.unity3d.com/Manual/console-window.html))
-- ☐ Toolbar, status bar, Undo/Redo + Undo History, selection history, shortcuts manager, search
+- ◐ Toolbar, status bar, Undo/Redo + Undo History, selection history, shortcuts manager, search
   ([Toolbar](https://docs.unity3d.com/Manual/toolbar-lp.html),
   [Undo](https://docs.unity3d.com/Manual/UndoWindow.html),
   [Shortcuts](https://docs.unity3d.com/Manual/ShortcutsManager.html),
   [Search](https://docs.unity3d.com/Manual/editor-searching.html))
-- ☐ Play mode: snapshot scene → run → restore on stop
+- ☑ Play mode: snapshot scene → run → restore on stop
 - ☐ Preferences + Project Settings windows (Tags & Layers, Time, Physics, Quality, Graphics, Input, Player)
   ([Preferences](https://docs.unity3d.com/Manual/Preferences.html),
   [Project Settings](https://docs.unity3d.com/Manual/comp-ManagerGroup.html))
@@ -201,11 +206,19 @@ pause/step advances exactly N frames. Checked live over MCP, including screensho
 
 **Exit:** create a project, place/move cubes with gizmos, edit in Inspector, Play/Stop restores state, Undo works for every edit.
 
+**Status:** usable. `oxide` opens the editor (`--player` runs the game alone). Docked
+Hierarchy / Scene / Game / Inspector / Project / Console with a saved layout; Scene view
+fly/orbit/pan, grid, picking, icons, outlines, collider/light/camera gizmos and Move/Rotate/
+Scale handles with snapping; Inspector for every reflected field with Add Component;
+Undo/Redo; Play/Pause/Step with scene restore; File/Edit/GameObject/Component/Window menus.
+MCP: `editor_*` tools drive all of it. Not yet: rect tool, 2D mode, draw modes, multi-object
+editing, Undo History window, Preferences/Project Settings windows, project launcher.
+
 ### P3 — Asset pipeline
 - ☐ AssetDatabase with GUIDs, `.meta` files, Library cache, dependency tracking
   ([Asset Database](https://docs.unity3d.com/Manual/AssetDatabase.html),
   [Caching](https://docs.unity3d.com/Manual/importing-caching-assets.html))
-- ☐ Importers: textures (PNG/JPG/TGA/EXR/HDR/PSD-flat), models (glTF, FBX, OBJ), audio (WAV/OGG/MP3/FLAC), fonts, shaders
+- ◐ Importers: textures (PNG/JPG/TGA/EXR/HDR/PSD-flat), models (glTF, FBX, OBJ), audio (WAV/OGG/MP3/FLAC), fonts, shaders
   ([Asset types](https://docs.unity3d.com/Manual/AssetTypes.html),
   [Importing](https://docs.unity3d.com/Manual/import-assets.html))
 - ☐ Import settings in Inspector; Presets
@@ -227,23 +240,23 @@ pause/step advances exactly N frames. Checked live over MCP, including screensho
 - ☐ Universal pipeline: Forward+ (clustered lights), Deferred later
   ([URP](https://docs.unity3d.com/Manual/universal-render-pipeline.html),
   [Rendering paths](https://docs.unity3d.com/Manual/rendering-paths-introduction.html))
-- ☐ MeshFilter / MeshRenderer / SkinnedMeshRenderer, submeshes, GPU instancing, SRP-batcher-style persistent buffers, frustum culling, LOD groups
-- ☐ Cameras: perspective/ortho, viewport rect, multiple cameras/stacking, render textures, physical camera, clear flags, culling mask
+- ◐ MeshFilter / MeshRenderer / SkinnedMeshRenderer, submeshes, GPU instancing, SRP-batcher-style persistent buffers, frustum culling, LOD groups
+- ◐ Cameras: perspective/ortho, viewport rect, multiple cameras/stacking, render textures, physical camera, clear flags, culling mask
   ([Cameras](https://docs.unity3d.com/Manual/Cameras.html),
   [Multiple cameras](https://docs.unity3d.com/Manual/MultipleCameras-landing.html),
   [Physical cameras](https://docs.unity3d.com/Manual/PhysicalCameras.html))
-- ☐ Render queues & sorting (opaque front-to-back, transparent back-to-front)
+- ◐ Render queues & sorting (opaque front-to-back, transparent back-to-front)
   ([Render queues](https://docs.unity3d.com/Manual/built-in-rendering-order.html))
-- ☐ Materials & shader property system, keywords/variants, shader import + reflection
+- ◐ Materials & shader property system, keywords/variants, shader import + reflection
   ([Materials](https://docs.unity3d.com/Manual/Materials.html),
   [Custom shaders](https://docs.unity3d.com/Manual/Shaders.html))
-- ☐ Built-in shaders: Lit (metallic/specular PBR), Simple Lit, Unlit, Particles, Sprite, Skybox
+- ◐ Built-in shaders: Lit (metallic/specular PBR), Simple Lit, Unlit, Particles, Sprite, Skybox
   ([Prebuilt materials and shaders](https://docs.unity3d.com/Manual/built-in-materials-and-shaders.html))
-- ☐ Textures: mipmaps, compression (BC/ASTC/ETC2 via KTX2), sampler states, cubemaps, arrays, render textures
+- ◐ Textures: mipmaps, compression (BC/ASTC/ETC2 via KTX2), sampler states, cubemaps, arrays, render textures
   ([Textures](https://docs.unity3d.com/Manual/Textures-landing.html))
-- ☐ Linear color space, HDR render targets
+- ☑ Linear color space, HDR render targets
   ([Color and HDR](https://docs.unity3d.com/Manual/graphics-color.html))
-- ☐ Anti-aliasing: MSAA, FXAA, SMAA, TAA
+- ◐ Anti-aliasing: MSAA, FXAA, SMAA, TAA
   ([URP anti-aliasing](https://docs.unity3d.com/Manual/urp/anti-aliasing.html))
 - ☐ Occlusion culling (GPU Hi-Z first, baked PVS later)
   ([Occlusion culling](https://docs.unity3d.com/Manual/OcclusionCulling-landing.html))
@@ -251,11 +264,11 @@ pause/step advances exactly N frames. Checked live over MCP, including screensho
 **Exit:** Sponza-class glTF scene renders with PBR, multiple cameras, transparent sorting, 60 fps on a laptop GPU.
 
 ### P5 — Lighting, shadows, post-processing
-- ☐ Lights: Directional, Point, Spot, Area (baked); intensity units, cookies, layers
+- ◐ Lights: Directional, Point, Spot, Area (baked); intensity units, cookies, layers
   ([Light sources](https://docs.unity3d.com/Manual/lighting-light-sources.html))
-- ☐ Shadows: cascaded shadow maps, soft shadows (PCF), point/spot shadow atlas, shadow distance/bias
+- ◐ Shadows: cascaded shadow maps, soft shadows (PCF), point/spot shadow atlas, shadow distance/bias
   ([Shadows](https://docs.unity3d.com/Manual/Shadows.html))
-- ☐ Environment: skybox (6-sided, cubemap, procedural, panoramic), ambient (SH), fog
+- ◐ Environment: skybox (6-sided, cubemap, procedural, panoramic), ambient (SH), fog
   ([Sky](https://docs.unity3d.com/Manual/sky-landing.html))
 - ☐ Reflection probes (baked/realtime, box projection, blending)
   ([Reflections](https://docs.unity3d.com/Manual/reflections-landing.html))
@@ -264,7 +277,7 @@ pause/step advances exactly N frames. Checked live over MCP, including screensho
 - ☐ Lighting window + Light Explorer
   ([Light Explorer](https://docs.unity3d.com/Manual/LightingExplorer-landing.html))
 - ☐ Volume framework (global/local volumes, blend weights, profiles)
-- ☐ Post FX: Bloom, Tonemapping (ACES/Neutral), Color Adjustments, Color Curves, Lift Gamma Gain, White Balance, Channel Mixer, Vignette, Chromatic Aberration, Film Grain, Lens Distortion, Depth of Field, Motion Blur, Panini, Split Toning, Shadows/Midtones/Highlights, LUT
+- ◐ Post FX: Bloom, Tonemapping (ACES/Neutral), Color Adjustments, Color Curves, Lift Gamma Gain, White Balance, Channel Mixer, Vignette, Chromatic Aberration, Film Grain, Lens Distortion, Depth of Field, Motion Blur, Panini, Split Toning, Shadows/Midtones/Highlights, LUT
   ([Post-processing in URP](https://docs.unity3d.com/Manual/urp/post-processing-and-full-screen-effects-urp.html),
   [Effect availability](https://docs.unity3d.com/Manual/post-processing-effect-availability-reference.html))
 - ☐ Custom full-screen passes / renderer features
@@ -273,9 +286,9 @@ pause/step advances exactly N frames. Checked live over MCP, including screensho
 **Exit:** day/night outdoor scene with CSM, baked GI, reflection probes and a post-FX volume matching a Unity reference screenshot side-by-side.
 
 ### P6 — Scripting & gameplay programming
-- ☐ Script API: `GetComponent`, `AddComponent`, `Instantiate`, `Destroy`, `Find`, `SendMessage`-equivalent, events
+- ◐ Script API: `GetComponent`, `AddComponent`, `Instantiate`, `Destroy`, `Find`, `SendMessage`-equivalent, events
   ([Get started with programming](https://docs.unity3d.com/Manual/scripting-get-started.html))
-- ☐ Serialized fields → Inspector (`#[serialize]`, `#[range]`, `#[header]`, `#[tooltip]` attributes)
+- ◐ Serialized fields → Inspector (`#[serialize]`, `#[range]`, `#[header]`, `#[tooltip]` attributes)
 - ☐ Hot reload of script dylib with state preservation (domain-reload equivalent)
   ([Code reload and serialization](https://docs.unity3d.com/Manual/code-reload-serialization.html))
 - ☐ Coroutines (`yield WaitForSeconds`, `WaitForEndOfFrame`) via async
@@ -294,14 +307,14 @@ pause/step advances exactly N frames. Checked live over MCP, including screensho
 **Exit:** write a player controller script in the editor's script folder, save, it hot-reloads mid-play without losing scene state.
 
 ### P7 — Physics, Input, 2D
-- ☐ 3D: Rigidbody, Box/Sphere/Capsule/Mesh colliders, triggers, layers collision matrix, raycasts/overlaps, physics materials, joints, CharacterController, articulations, ragdoll wizard, cloth (later)
+- ◐ 3D: Rigidbody, Box/Sphere/Capsule/Mesh colliders, triggers, layers collision matrix, raycasts/overlaps, physics materials, joints, CharacterController, articulations, ragdoll wizard, cloth (later)
   ([Built-in 3D physics](https://docs.unity3d.com/Manual/PhysicsOverview.html),
   [Character control](https://docs.unity3d.com/Manual/character-control-section.html),
   [Joints](https://docs.unity3d.com/Manual/joints-section.html),
   [Physics Debug](https://docs.unity3d.com/Manual/PhysicsDebugVisualization.html))
-- ☐ Collision callbacks: `OnCollisionEnter/Stay/Exit`, `OnTriggerEnter/Stay/Exit`
+- ☑ Collision callbacks: `OnCollisionEnter/Stay/Exit`, `OnTriggerEnter/Stay/Exit`
   ([Collision](https://docs.unity3d.com/Manual/collision-section.html))
-- ☐ Input: legacy axes + action-map system, rebinding, gamepad, touch, IME text input
+- ◐ Input: legacy axes + action-map system, rebinding, gamepad, touch, IME text input
   ([Input](https://docs.unity3d.com/Manual/Input.html))
 - ☐ 2D: Sprites, Sprite Renderer, sprite atlas, Sprite Editor (slicing, pivots), 9-slice, sorting layers/groups
   ([Sprites](https://docs.unity3d.com/Manual/sprite/sprite-landing.html))
@@ -315,29 +328,29 @@ pause/step advances exactly N frames. Checked live over MCP, including screensho
 **Exit:** a playable 3D third-person controller demo and a 2D tilemap platformer, both built only in the editor.
 
 ### P8 — Animation, Audio, UI, VFX, Terrain, Video
-- ☐ Animation: AnimationClip, Animation window (dopesheet/curves, keyframe recording), Animator Controller (state machine, transitions, parameters, layers, masks, blend trees 1D/2D), Avatar/humanoid retargeting, root motion, IK, animation events
+- ◐ Animation: AnimationClip, Animation window (dopesheet/curves, keyframe recording), Animator Controller (state machine, transitions, parameters, layers, masks, blend trees 1D/2D), Avatar/humanoid retargeting, root motion, IK, animation events
   ([Mecanim](https://docs.unity3d.com/Manual/animation-mecanim.html))
 - ☐ Timeline-style sequencer for cutscenes
-- ☐ Audio: AudioClip import settings, AudioSource/Listener, 3D rolloff, Doppler, Audio Mixer (groups, snapshots, effects, sends, ducking), reverb zones, filters, random containers
+- ◐ Audio: AudioClip import settings, AudioSource/Listener, 3D rolloff, Doppler, Audio Mixer (groups, snapshots, effects, sends, ducking), reverb zones, filters, random containers
   ([Audio](https://docs.unity3d.com/Manual/Audio.html),
   [Audio Mixer](https://docs.unity3d.com/Manual/audio-mixer-landing.html),
   [Audio reference](https://docs.unity3d.com/Manual/AudioReference.html))
 - ☐ Runtime UI (UI Toolkit equivalent): UXML-like layout files, USS-like styling, flexbox layout (`taffy`), events, data binding, UI Builder
   ([UI Toolkit](https://docs.unity3d.com/Manual/UIElements.html))
-- ☐ Canvas UI (uGUI equivalent): Canvas, RectTransform, anchors, Image, Text, Button, Slider, ScrollRect, layout groups, EventSystem
+- ◐ Canvas UI (uGUI equivalent): Canvas, RectTransform, anchors, Image, Text, Button, Slider, ScrollRect, layout groups, EventSystem
   ([uGUI](https://docs.unity3d.com/Manual/com.unity.ugui.html),
   [UI comparison](https://docs.unity3d.com/Manual/UI-system-compare.html))
 - ☐ Text rendering: SDF fonts (TextMeshPro equivalent), rich text
 - ☐ Accessibility: screen reader hierarchy
   ([Accessibility](https://docs.unity3d.com/Manual/accessibility/_index.html))
-- ☐ Particle System (Shuriken-style modules: emission, shape, velocity/size/color over lifetime, noise, collision, sub-emitters, trails, texture sheet) + editor
+- ◐ Particle System (Shuriken-style modules: emission, shape, velocity/size/color over lifetime, noise, collision, sub-emitters, trails, texture sheet) + editor
   ([Particle effects](https://docs.unity3d.com/Manual/ParticleSystems.html))
 - ☐ GPU VFX graph (node-based, compute) — later
   ([Visual Effect Graph](https://docs.unity3d.com/Manual/VFXGraph.html))
 - ☐ Decals, lens flares, Line/Trail renderers, billboards
   ([Decals](https://docs.unity3d.com/Manual/visual-effects-decals.html),
   [Lines and trails](https://docs.unity3d.com/Manual/visual-effects-lines-trails-billboards.html))
-- ☐ Terrain: heightmap, sculpt/paint tools, layers, trees, details/grass, wind zones, LOD
+- ◐ Terrain: heightmap, sculpt/paint tools, layers, trees, details/grass, wind zones, LOD
   ([Terrain](https://docs.unity3d.com/Manual/script-Terrain.html))
 - ☐ Video Player (decode via `ffmpeg` bindings or platform decoders) to texture/camera
   ([Video Player](https://docs.unity3d.com/Manual/VideoPlayer.html))
@@ -385,6 +398,31 @@ pause/step advances exactly N frames. Checked live over MCP, including screensho
   ([Multiplayer](https://docs.unity3d.com/Manual/multiplayer.html))
 - ☐ HDRP-class high-end features: ray tracing, volumetrics, SSR, SSGI, hair/skin, water
 - ☐ Embedded/consoles
+
+
+## Target: a racing game and a BGMI-style battle royale
+
+The goal is an engine on which those games *could* be built (we don't build them). What each
+needs, and where the engine is:
+
+| Need | Racing | Battle royale | Status |
+|---|---|---|---|
+| Editor to build levels | ✔ | ✔ | ☑ P2 editor, prefabs |
+| Vehicle physics (WheelCollider) | ✔ | ✔ (vehicles) | ☑ Rapier ray-cast vehicles, CarController |
+| Character controller + animation | | ✔ | ◐ CharacterController, Animator, 1D blend trees; missing 2D blend trees, root motion, IK, humanoid retargeting |
+| Terrain + foliage | ✔ | ✔ | ◐ chunked LOD terrain, trees; missing grass/details, sculpt tools, streaming |
+| Big worlds (8×8 km) | | ✔ | ☐ LOD groups, occlusion culling, world streaming, floating origin |
+| Weapons, hits, ragdolls | | ✔ | ◐ raycasts and joints exist; ragdoll wizard, hit boxes ☐ |
+| Game scripts in the editor | ✔ | ✔ | ☐ P6 script project + hot reload (scripts compile into the app today) |
+| HUD, menus | ✔ | ✔ | ◐ Canvas UI + immediate GUI; UI Toolkit-style layout ☐ |
+| Audio (engine, 3D, mixer) | ✔ | ✔ | ◐ 3D sources, car audio; mixer ☐ |
+| AI (opponents, bots) | ✔ | ✔ | ☐ NavMesh, waypoint tools |
+| Multiplayer | ◐ | ✔ | ☐ netcode (server-authoritative, prediction, interpolation), dedicated server |
+| Ship the game | ✔ | ✔ | ☐ P10 player builds (desktop first, then Android/iOS) |
+
+Build order from here: scripting with hot reload → player builds → big-world rendering (LOD,
+occlusion, streaming) → animation (2D blend trees, root motion, IK, ragdolls) → NavMesh →
+netcode and dedicated server → mobile.
 
 ---
 
