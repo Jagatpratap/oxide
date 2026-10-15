@@ -112,7 +112,8 @@ impl GuiLayer {
     }
 
     /// Draws the last egui frame over `target` (`width`×`height` pixels). For captures at a
-    /// different size the UI is scaled uniformly.
+    /// different size the UI is scaled uniformly. `clear` clears the target first (when the UI
+    /// covers the whole window, as in the editor).
     pub fn draw(
         &mut self,
         gpu: &Gpu,
@@ -120,8 +121,9 @@ impl GuiLayer {
         width: u32,
         height: u32,
         window_width: u32,
+        clear: bool,
     ) {
-        if self.paint.is_empty() {
+        if self.paint.is_empty() && !clear {
             return;
         }
         let ppp = self.pixels_per_point * width as f32 / window_width.max(1) as f32;
@@ -149,7 +151,11 @@ impl GuiLayer {
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
+                        load: if clear {
+                            wgpu::LoadOp::Clear(wgpu::Color::BLACK)
+                        } else {
+                            wgpu::LoadOp::Load
+                        },
                         store: wgpu::StoreOp::Store,
                     },
                 })],

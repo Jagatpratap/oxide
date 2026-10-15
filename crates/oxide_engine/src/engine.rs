@@ -19,6 +19,38 @@ pub trait Plugin {
     fn build(&self, world: &mut World, systems: &mut Vec<Box<dyn System>>);
 }
 
+/// Takes over the window: draws its own UI around the game and decides when the game runs.
+/// The editor is a `Shell`; a shipped game runs without one.
+pub trait Shell: std::any::Any {
+    /// Called once on the App's World, before scene setup runs.
+    fn install(&mut self, world: &mut World) {
+        let _ = world;
+    }
+    /// Builds this frame's UI (inside the egui pass, after the game's frame ran).
+    fn ui(&mut self, engine: &mut Engine);
+    /// Renders the 3D views the UI shows, before the UI itself is drawn over the window.
+    fn render(&mut self, engine: &mut Engine);
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+}
+
+/// Where the game's screen is while a [`Shell`] shows it in a panel (physical pixels).
+/// Mouse input is made relative to it and keyboard input only reaches the game when
+/// `focused`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct GameViewport {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub focused: bool,
+}
+
+impl GameViewport {
+    pub fn contains(&self, x: f32, y: f32) -> bool {
+        x >= self.x && y >= self.y && x < self.x + self.width && y < self.y + self.height
+    }
+}
+
 /// Installs everything a World needs before scripts run: resources and built-in components.
 pub fn init_world(world: &mut World, project_root: std::path::PathBuf) {
     oxide_scene::register_builtin(&mut world.registry);
@@ -47,6 +79,12 @@ pub struct Engine {
     pub quit_requested: bool,
     pub stats: RenderStats,
     pub(crate) gamepads: Gamepads,
+    /// The editor (or another shell) around the game, if any.
+    pub shell: Option<Box<dyn Shell>>,
+    /// Whether the player loop runs (false in the editor's Edit mode).
+    pub simulate: bool,
+    /// Set by a shell that shows the game in a panel.
+    pub game_viewport: Option<GameViewport>,
     cursor: (CursorLockMode, bool),
     last_frame: Instant,
 }
@@ -58,6 +96,7 @@ impl Engine {
         mcp_url: Option<String>,
         world: World,
         systems: Vec<Box<dyn System>>,
+        shell: Option<Box<dyn Shell>>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let surface = instance.create_surface(Arc::clone(&window))?;
         let gpu = Gpu::new(instance, &surface)?;
@@ -81,6 +120,9 @@ impl Engine {
             quit_requested: false,
             stats: RenderStats::default(),
             gamepads: Gamepads::new(),
+            simulate: shell.is_none(),
+            shell,
+            game_viewport: None,
             cursor: (CursorLockMode::None, true),
             last_frame: Instant::now(),
         };
@@ -122,7 +164,7 @@ impl Engine {
         }
         self.gui.begin(&self.window, &mut self.world);
         let step = self.paused && self.pending_steps > 0;
-        if !self.paused || step {
+        if self.simulate && (!self.paused || step) {
             if step {
                 self.pending_steps -= 1;
             }
@@ -131,6 +173,10 @@ impl Engine {
         }
         for s in &mut self.systems {
             s.always(&mut self.world);
+        }
+        if let Some(mut shell) = self.shell.take() {
+            shell.ui(self);
+            self.shell = Some(shell);
         }
         self.gui
             .end(&self.window, &self.gpu, &mut self.renderer, &mut self.world);
@@ -208,19 +254,57 @@ impl Engine {
             }
         };
         let (w, h) = self.surface.size();
-        let rf = extract::extract(&self.world, None);
-        let view = frame.texture.create_view(&Default::default());
-        let assets = self.world.resource::<AssetServer>();
-        self.stats =
-            self.renderer
-                .render(&self.gpu, assets, &rf, &view, self.surface.format(), w, h);
         let ui_view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
             format: Some(self.surface.format().remove_srgb_suffix()),
             ..Default::default()
         });
-        self.gui.draw(&self.gpu, &ui_view, w, h, w);
+        if let Some(mut shell) = self.shell.take() {
+            shell.render(self);
+            self.shell = Some(shell);
+            self.gui.draw(&self.gpu, &ui_view, w, h, w, true);
+        } else {
+            let rf = extract::extract(&self.world, None);
+            let view = frame.texture.create_view(&Default::default());
+            let assets = self.world.resource::<AssetServer>();
+            self.stats =
+                self.renderer
+                    .render(&self.gpu, assets, &rf, &view, self.surface.format(), w, h);
+            self.gui.draw(&self.gpu, &ui_view, w, h, w, false);
+        }
         self.window.pre_present_notify();
         self.gpu.queue.present(frame);
+    }
+
+    /// Renders the whole window (a shell's UI and its views) offscreen.
+    pub fn capture_window(&mut self) -> Result<CapturedImage, String> {
+        if let Some(mut shell) = self.shell.take() {
+            shell.render(self);
+            self.shell = Some(shell);
+        }
+        let (w, h) = self.surface.size();
+        let format = self.surface.format();
+        let has_shell = self.shell.is_some();
+        let world = &self.world;
+        let renderer = &mut self.renderer;
+        let gpu = &self.gpu;
+        let gui = &mut self.gui;
+        capture_frame(gpu, format, w, h, |view, texture| {
+            if !has_shell {
+                let rf = extract::extract(world, None);
+                let assets = world.resource::<AssetServer>();
+                renderer.render(gpu, assets, &rf, view, format, w, h);
+            }
+            let ui_view = texture.create_view(&wgpu::TextureViewDescriptor {
+                format: Some(format.remove_srgb_suffix()),
+                ..Default::default()
+            });
+            gui.draw(gpu, &ui_view, w, h, w, has_shell);
+        })
+    }
+
+    /// The installed shell, if it is a `T`.
+    pub fn shell_mut<T: Shell>(&mut self) -> Option<&mut T> {
+        self.shell.as_mut()?.as_any_mut().downcast_mut::<T>()
     }
 
     /// Renders offscreen at `width`×`height` (scene cameras, or `cameras` if given).
@@ -237,16 +321,17 @@ impl Engine {
         let gpu = &self.gpu;
         let gui = &mut self.gui;
         let window_width = self.surface.size().0;
-        let result = capture_frame(gpu, format, width, height, |view, texture| {
+        // With a shell the UI is the editor's, not the game's, so it is left out.
+        let game_ui = self.shell.is_none();
+        capture_frame(gpu, format, width, height, |view, texture| {
             renderer.render(gpu, assets, &rf, view, format, width, height);
-            let ui_view = texture.create_view(&wgpu::TextureViewDescriptor {
-                format: Some(format.remove_srgb_suffix()),
-                ..Default::default()
-            });
-            gui.draw(gpu, &ui_view, width, height, window_width);
-        });
-
-        // Restore window-sized targets for the next on-screen frame.
-        result
+            if game_ui {
+                let ui_view = texture.create_view(&wgpu::TextureViewDescriptor {
+                    format: Some(format.remove_srgb_suffix()),
+                    ..Default::default()
+                });
+                gui.draw(gpu, &ui_view, width, height, window_width, false);
+            }
+        })
     }
 }

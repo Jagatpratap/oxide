@@ -14,8 +14,8 @@ pub mod mcp_terrain;
 pub mod mcp_tools;
 pub mod objects;
 
-pub use app::{App, AppControl, EngineConfig};
-pub use engine::{Engine, Plugin, init_world};
+pub use app::{App, AppControl, EngineConfig, McpToolsFn};
+pub use engine::{Engine, GameViewport, Plugin, Shell, init_world};
 
 pub use oxide_animation as animation;
 pub use oxide_assets as assets;
@@ -209,6 +209,28 @@ pub fn load_scene(
         oxide_core::debug_log_warning!("{w}");
     }
     Ok(warnings)
+}
+
+/// Saves the whole scene as YAML to `path` (relative to the project) and makes it the
+/// open scene's path. Returns the number of objects written.
+pub fn save_scene(world: &mut oxide_scene::World, path: &str) -> Result<usize, String> {
+    let name = std::path::Path::new(path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Scene")
+        .to_owned();
+    let file = world.serialize(&[], &name);
+    let full = world
+        .resource::<oxide_assets::AssetServer>()
+        .full_path(path);
+    if let Some(dir) = full.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let yaml = file.to_yaml()?;
+    std::fs::write(&full, yaml).map_err(|e| format!("cannot write {}: {e}", full.display()))?;
+    world.scene_name = name;
+    world.scene_path = Some(path.to_owned());
+    Ok(file.objects.len())
 }
 
 fn collect_assets(

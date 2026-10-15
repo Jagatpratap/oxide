@@ -1,0 +1,23 @@
+[package]
+name = "oxide_editor"
+description = "Oxide editor: Hierarchy, Scene and Game views, Inspector, Project, Console, Undo, Play mode"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+oxide_engine.workspace = true
+oxide_math.workspace = true
+oxide_core.workspace = true
+oxide_render.workspace = true
+oxide_mcp.workspace = true
+oxide_assets.workspace = true
+oxide_scene.workspace = true
+oxide_input.workspace = true
+oxide_physics.workspace = true
+oxide_ui.workspace = true
+oxide_terrain.workspace = true
+
+egui.workspace = true
+egui_dock.workspace = true
+serde_json.workspace = true

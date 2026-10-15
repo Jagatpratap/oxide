@@ -256,6 +256,9 @@ pub struct Gui {
     /// Whether the UI is using the pointer/keyboard this frame (game input should ignore it).
     pub wants_pointer: bool,
     pub wants_keyboard: bool,
+    /// Screen area the game UI lays out in, in egui points. `None` = the whole window; the
+    /// editor sets it to the Game view.
+    pub viewport: Option<egui::Rect>,
 }
 
 impl Gui {
@@ -267,6 +270,7 @@ impl Gui {
             texture_requests: Vec::new(),
             wants_pointer: false,
             wants_keyboard: false,
+            viewport: None,
         }
     }
 
@@ -333,7 +337,12 @@ impl System for UiSystem {
         }
         let ctx = gui.ctx.clone();
         let textures = gui.textures.clone();
-        let screen = ctx.content_rect().size();
+        let screen_rect = gui.viewport.unwrap_or_else(|| ctx.content_rect());
+        let screen = screen_rect.size();
+        // The editor's Game view is hidden: nothing to lay out.
+        if screen.x < 1.0 || screen.y < 1.0 {
+            return;
+        }
         let mut clicks = Vec::new();
         let mut requests = Vec::new();
         let order = world.hierarchy_order();
@@ -344,7 +353,16 @@ impl System for UiSystem {
             let k = canvas_scale(world, id, screen);
             let area = |n: u64, anchor: Anchor, pos: Vector2| {
                 egui::Area::new(egui::Id::new(("oxide-ui", id.to_bits(), n)))
-                    .anchor(anchor.align(), egui::vec2(pos.x * k, -pos.y * k))
+                    .pivot(anchor.align())
+                    .fixed_pos(
+                        screen_rect.min
+                            + egui::vec2(
+                                screen.x * anchor.align().x().to_factor(),
+                                screen.y * anchor.align().y().to_factor(),
+                            )
+                            + egui::vec2(pos.x * k, -pos.y * k),
+                    )
+                    .constrain_to(screen_rect)
                     .order(egui::Order::Middle)
             };
             if let Some(img) = world.get_component::<UIImage>(id).cloned() {

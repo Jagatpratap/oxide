@@ -1,11 +1,12 @@
-//! `oxide` — runs the engine in a window with the MCP server on.
+//! `oxide` — the Oxide editor, with the MCP server on.
 //!
 //! ```text
 //! oxide [--scene Assets/Scenes/Main.scene] [--sample demo|vehicle|character|open_world] [--project DIR]
-//!       [--mcp-addr 127.0.0.1:47474] [--no-mcp] [--size 1280x720]
+//!       [--player] [--mcp-addr 127.0.0.1:47474] [--no-mcp] [--size 1280x720]
 //! ```
 //! With no scene it opens Unity's default new scene (Main Camera + Directional Light);
-//! `--sample` opens a built-in test scene.
+//! `--sample` opens a built-in test scene. `--player` runs the game alone in the window, as a
+//! built game would, instead of inside the editor.
 
 mod samples;
 
@@ -13,12 +14,13 @@ use oxide_engine::prelude::*;
 use oxide_engine::{App, EngineConfig};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: oxide [--scene PATH] [--sample demo|vehicle|character|open_world] [--project DIR] [--mcp-addr HOST:PORT] [--no-mcp] [--size WxH]";
+const USAGE: &str = "usage: oxide [--scene PATH] [--sample demo|vehicle|character|open_world] [--project DIR] [--player] [--mcp-addr HOST:PORT] [--no-mcp] [--size WxH]";
 
 struct Args {
     config: EngineConfig,
     scene: Option<String>,
     sample: Option<String>,
+    player: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -26,6 +28,7 @@ fn parse_args() -> Result<Args, String> {
         config: EngineConfig::default(),
         scene: None,
         sample: None,
+        player: false,
     };
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -34,6 +37,7 @@ fn parse_args() -> Result<Args, String> {
                 a.config.mcp_addr = Some(args.next().ok_or("--mcp-addr needs a value")?)
             }
             "--no-mcp" => a.config.mcp_addr = None,
+            "--player" => a.player = true,
             "--scene" => a.scene = Some(args.next().ok_or("--scene needs a path")?),
             "--project" => {
                 a.config.project_root = args.next().ok_or("--project needs a folder")?.into()
@@ -66,7 +70,17 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let mut app = App::with_config(args.config).register::<samples::CarHud>("Samples/Car HUD");
+    let mut config = args.config;
+    if !args.player && config.width == EngineConfig::default().width {
+        // The editor needs room for its windows around the views.
+        (config.width, config.height) = (1600, 960);
+    }
+    let mut app = App::with_config(config).register::<samples::CarHud>("Samples/Car HUD");
+    if !args.player {
+        app = app
+            .shell(Box::new(oxide_editor::Editor::new()))
+            .mcp_tools(oxide_editor::mcp::register);
+    }
 
     if let Some(path) = args.scene {
         app = app.setup(move |world| {

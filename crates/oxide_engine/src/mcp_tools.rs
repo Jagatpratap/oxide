@@ -27,7 +27,7 @@ to look at the result (pass camera_position/look_at for any viewpoint) → get_c
 
 type Args = Map<String, Json>;
 
-pub(crate) fn tool<F>(s: &mut McpServer, bus: &Arc<Bus>, def: ToolDef, f: F)
+pub fn tool<F>(s: &mut McpServer, bus: &Arc<Bus>, def: ToolDef, f: F)
 where
     F: Fn(&Args, &mut Engine) -> ToolResult + Send + Sync + 'static,
 {
@@ -40,18 +40,18 @@ where
     });
 }
 
-pub(crate) fn schema(props: Json, required: &[&str]) -> Json {
+pub fn schema(props: Json, required: &[&str]) -> Json {
     json!({ "type": "object", "properties": props, "required": required, "additionalProperties": false })
 }
 
-pub(crate) fn obj_arg(args: &Args, world: &World, key: &str) -> Result<GameObjectId, ToolResult> {
+pub fn obj_arg(args: &Args, world: &World, key: &str) -> Result<GameObjectId, ToolResult> {
     let v = args
         .get(key)
         .ok_or_else(|| ToolResult::error(format!("`{key}` is required")))?;
     resolve_object(world, v).ok_or_else(|| ToolResult::error(format!("no GameObject matches {v}")))
 }
 
-pub(crate) fn vec3_arg(args: &Args, key: &str) -> Result<Option<Vector3>, ToolResult> {
+pub fn vec3_arg(args: &Args, key: &str) -> Result<Option<Vector3>, ToolResult> {
     match args.get(key) {
         None | Some(Json::Null) => Ok(None),
         Some(v) => {
@@ -746,29 +746,11 @@ pub fn build_server(bus: Arc<Bus>) -> McpServer {
             else {
                 return ToolResult::error("`path` is required for a new scene");
             };
-            let name = std::path::Path::new(&path)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("Scene")
-                .to_owned();
-            let file = w.serialize(&[], &name);
-            let full = w.resource::<AssetServer>().full_path(&path);
-            if let Some(dir) = full.parent() {
-                let _ = std::fs::create_dir_all(dir);
-            }
-            match file
-                .to_yaml()
-                .and_then(|y| std::fs::write(&full, y).map_err(|e| e.to_string()))
-            {
-                Ok(()) => {
-                    w.scene_name = name;
-                    w.scene_path = Some(path.clone());
-                    ToolResult::text(format!(
-                        "Saved {} objects to {}",
-                        file.objects.len(),
-                        full.display()
-                    ))
-                }
+            match crate::save_scene(w, &path) {
+                Ok(n) => ToolResult::text(format!(
+                    "Saved {n} objects to {}",
+                    w.resource::<AssetServer>().full_path(&path).display()
+                )),
                 Err(err) => ToolResult::error(err),
             }
         },

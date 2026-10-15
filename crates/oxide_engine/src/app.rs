@@ -8,7 +8,7 @@
 //! ```
 
 use crate::bus::{Bus, Envelope, Wake};
-use crate::engine::{Engine, Plugin, init_world};
+use crate::engine::{Engine, Plugin, Shell, init_world};
 use crate::{input_map, mcp_tools};
 use oxide_core::{debug, debug_log, debug_log_error, debug_log_warning};
 use oxide_input::Input;
@@ -58,12 +58,16 @@ impl Default for EngineConfig {
 }
 
 type SetupFn = Box<dyn FnOnce(&mut World)>;
+/// Adds MCP tools to the server (see [`App::mcp_tools`]).
+pub type McpToolsFn = fn(&mut oxide_mcp::McpServer, &Arc<Bus>);
 
 pub struct App {
     pub config: EngineConfig,
     world: World,
     systems: Vec<Box<dyn System>>,
     setup: Vec<SetupFn>,
+    shell: Option<Box<dyn Shell>>,
+    mcp_tools: Vec<McpToolsFn>,
 }
 
 impl App {
@@ -82,6 +86,8 @@ impl App {
             world,
             systems: Vec::new(),
             setup: Vec::new(),
+            shell: None,
+            mcp_tools: Vec::new(),
         };
         for p in crate::default_plugins() {
             app = app.plugin(p.as_ref());
@@ -111,6 +117,19 @@ impl App {
         self
     }
 
+    /// Runs the game inside a [`Shell`] (the editor).
+    pub fn shell(mut self, mut shell: Box<dyn Shell>) -> Self {
+        shell.install(&mut self.world);
+        self.shell = Some(shell);
+        self
+    }
+
+    /// Registers extra MCP tools (e.g. the editor's).
+    pub fn mcp_tools(mut self, f: McpToolsFn) -> Self {
+        self.mcp_tools.push(f);
+        self
+    }
+
     pub fn size(mut self, width: u32, height: u32) -> Self {
         self.config.width = width;
         self.config.height = height;
@@ -135,9 +154,14 @@ impl App {
     }
 }
 
+/// What the window needs to start the engine: the World, its systems and the shell.
+type Pending = (World, Vec<Box<dyn System>>, Option<Box<dyn Shell>>);
+
 struct Runner {
     config: EngineConfig,
-    pending: Option<(World, Vec<Box<dyn System>>)>,
+    pending: Option<Pending>,
+    /// Last cursor position in window pixels.
+    cursor: (f32, f32),
     engine: Option<Engine>,
     jobs: Receiver<Envelope>,
     mcp_url: Option<String>,
@@ -160,7 +184,7 @@ impl ApplicationHandler<Wake> for Runner {
         if self.engine.is_some() {
             return;
         }
-        let Some((world, systems)) = self.pending.take() else {
+        let Some((world, systems, shell)) = self.pending.take() else {
             return;
         };
         let attrs = Window::default_attributes()
@@ -181,6 +205,7 @@ impl ApplicationHandler<Wake> for Runner {
                     self.mcp_url.clone(),
                     world,
                     systems,
+                    shell,
                 )
             });
         match result {
@@ -205,7 +230,10 @@ impl ApplicationHandler<Wake> for Runner {
         let Some(engine) = self.engine.as_mut() else {
             return;
         };
-        if let DeviceEvent::MouseMotion { delta } = event {
+        let unfocused = engine.game_viewport.is_some_and(|v| !v.focused);
+        if let DeviceEvent::MouseMotion { delta } = event
+            && !unfocused
+        {
             engine
                 .world
                 .resource_mut::<Input>()
@@ -232,7 +260,26 @@ impl ApplicationHandler<Wake> for Runner {
         );
         let locked =
             engine.world.resource::<Input>().cursor_lock != oxide_input::CursorLockMode::None;
-        let to_game = !ui_used || release || locked;
+        if let WindowEvent::CursorMoved { position, .. } = &event {
+            self.cursor = (position.x as f32, position.y as f32);
+        }
+        let to_game = match engine.game_viewport {
+            // Shown in a panel: the game gets the keyboard while its view is focused and the
+            // mouse while the cursor is over it.
+            Some(vp) => {
+                release
+                    || locked
+                    || match &event {
+                        WindowEvent::KeyboardInput { .. } => vp.focused,
+                        WindowEvent::MouseInput { .. } | WindowEvent::MouseWheel { .. } => {
+                            vp.focused && vp.contains(self.cursor.0, self.cursor.1)
+                        }
+                        _ => true,
+                    }
+            }
+            None => !ui_used || release || locked,
+        };
+        let viewport = engine.game_viewport;
         let input = engine.world.resource_mut::<Input>();
         match event {
             WindowEvent::KeyboardInput { .. }
@@ -242,7 +289,9 @@ impl ApplicationHandler<Wake> for Runner {
 
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
-                input.screen_height = size.height as f32;
+                if viewport.is_none() {
+                    input.screen_height = size.height as f32;
+                }
                 engine.surface.resize(&engine.gpu, size.width, size.height);
             }
             WindowEvent::RedrawRequested => engine.frame(),
@@ -264,7 +313,8 @@ impl ApplicationHandler<Wake> for Runner {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
-                input.mouse_move(position.x as f32, position.y as f32)
+                let (ox, oy) = viewport.map_or((0.0, 0.0), |v| (v.x, v.y));
+                input.mouse_move(position.x as f32 - ox, position.y as f32 - oy)
             }
             WindowEvent::MouseWheel { delta, .. } => match delta {
                 MouseScrollDelta::LineDelta(x, y) => input.scroll_event(x, y),
@@ -295,9 +345,14 @@ fn run_app(mut app: App) -> Result<(), Box<dyn Error>> {
     event_loop.set_control_flow(ControlFlow::Poll);
 
     let (bus, jobs) = Bus::new(event_loop.create_proxy());
+    let bus = Arc::new(bus);
     let http = match &app.config.mcp_addr {
         Some(addr) => {
-            match HttpServer::start(Arc::new(mcp_tools::build_server(Arc::new(bus))), addr) {
+            let mut server = mcp_tools::build_server(bus.clone());
+            for f in &app.mcp_tools {
+                f(&mut server, &bus);
+            }
+            match HttpServer::start(Arc::new(server), addr) {
                 Ok(http) => {
                     debug_log!("MCP server listening on {}", http.url());
                     Some(http)
@@ -321,7 +376,8 @@ fn run_app(mut app: App) -> Result<(), Box<dyn Error>> {
     }
     let mut runner = Runner {
         config: app.config,
-        pending: Some((app.world, app.systems)),
+        pending: Some((app.world, app.systems, app.shell)),
+        cursor: (0.0, 0.0),
         engine: None,
         jobs,
         mcp_url: http.as_ref().map(HttpServer::url),
