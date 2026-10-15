@@ -260,6 +260,7 @@ fn blend_weights(children: &[(f32, Handle<AnimationClip>)], v: f32) -> Vec<(usiz
 
 /// Samples one state into `pose` with weight `w`; time is normalized for blend trees so
 /// differently sized clips stay in sync (Unity behaviour).
+#[allow(clippy::too_many_arguments)]
 fn sample_state(
     world: &World,
     assets: &AssetServer,

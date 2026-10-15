@@ -34,6 +34,7 @@ impl Default for Locomotion {
 }
 
 /// Moves with `CharacterController::move_character`; returns new (horizontal velocity, vertical velocity).
+#[allow(clippy::too_many_arguments)]
 fn locomote(
     ctx: &mut Ctx,
     loco: &Locomotion,

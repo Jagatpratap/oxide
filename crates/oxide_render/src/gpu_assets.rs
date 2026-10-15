@@ -261,7 +261,6 @@ impl GpuAssets {
     }
 
     /// Uploads a material (and its textures). Falls back to the default material.
-
     pub fn ensure_material(
         &mut self,
         device: &wgpu::Device,

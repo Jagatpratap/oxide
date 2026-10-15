@@ -553,9 +553,9 @@ impl World {
             };
             f(comp.as_mut(), &mut ctx);
         }
-        match self.entry_mut(id, cid) {
-            Some(e) => e.comp = Some(comp),
-            None => {} // object or component removed during the call
+        // The object or component may have been removed during the call.
+        if let Some(e) = self.entry_mut(id, cid) {
+            e.comp = Some(comp);
         }
         true
     }

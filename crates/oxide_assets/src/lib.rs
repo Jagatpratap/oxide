@@ -7,6 +7,9 @@
 //! - [`model`] / [`gltf_import`]: imported model hierarchies (glTF 2.0).
 //! - [`server`]: the [`AssetServer`] that owns every store and loads files.
 
+// Submesh lists are `Vec<Range<u32>>`; a single-entry list is the normal case.
+#![allow(clippy::single_range_in_vec_init)]
+
 pub mod animation;
 pub mod gltf_import;
 pub mod handle;

@@ -147,7 +147,7 @@ impl Texture2D {
         let cell = (size / cells).max(1);
         for y in 0..size {
             for x in 0..size {
-                let c = if ((x / cell) + (y / cell)) % 2 == 0 {
+                let c = if ((x / cell) + (y / cell)).is_multiple_of(2) {
                     a
                 } else {
                     b

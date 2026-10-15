@@ -27,7 +27,6 @@ pub struct PostProcessor {
     composite: HashMap<wgpu::TextureFormat, wgpu::RenderPipeline>,
     uniforms: wgpu::Buffer,
     sampler: wgpu::Sampler,
-    bloom: Vec<(wgpu::TextureView, u32, u32)>,
     dummy: wgpu::TextureView,
 }
 
@@ -151,15 +150,19 @@ impl PostProcessor {
             composite: HashMap::new(),
             uniforms,
             sampler,
-            bloom: Vec::new(),
             dummy,
         }
     }
 
-    pub fn resize(&mut self, device: &wgpu::Device, w: u32, h: u32) {
-        self.bloom.clear();
+    /// Bloom mip chain for a `w`×`h` target (half resolution down to 6 levels).
+    pub fn bloom_chain(
+        device: &wgpu::Device,
+        w: u32,
+        h: u32,
+    ) -> Vec<(wgpu::TextureView, u32, u32)> {
+        let mut chain = Vec::new();
         let (mut bw, mut bh) = ((w / 2).max(1), (h / 2).max(1));
-        while self.bloom.len() < 6 && bw >= 4 && bh >= 4 {
+        while chain.len() < 6 && bw >= 4 && bh >= 4 {
             let view = device
                 .create_texture(&wgpu::TextureDescriptor {
                     label: Some("bloom"),
@@ -177,10 +180,11 @@ impl PostProcessor {
                     view_formats: &[],
                 })
                 .create_view(&Default::default());
-            self.bloom.push((view, bw, bh));
+            chain.push((view, bw, bh));
             bw /= 2;
             bh /= 2;
         }
+        chain
     }
 
     fn group(
@@ -254,6 +258,7 @@ impl PostProcessor {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         hdr: &wgpu::TextureView,
+        chain: &[(wgpu::TextureView, u32, u32)],
         target: &wgpu::TextureView,
         format: wgpu::TextureFormat,
         exposure: f32,
@@ -289,7 +294,7 @@ impl PostProcessor {
             self.composite.insert(format, p);
         }
         let (intensity, threshold) = bloom.unwrap_or((0.0, 1.0));
-        let bloom_on = bloom.is_some() && !self.bloom.is_empty() && intensity > 0.0;
+        let bloom_on = bloom.is_some() && !chain.is_empty() && intensity > 0.0;
         let mut slots: Vec<PostUniform> = Vec::new();
         let mut u = |texel: (u32, u32)| {
             slots.push(PostUniform {
@@ -309,16 +314,16 @@ impl PostProcessor {
         let composite_slot = u((1, 1));
         let mut plan: Vec<(u32, usize, Option<usize>, bool)> = Vec::new(); // slot, dst, src(None=hdr), up
         if bloom_on {
-            let first = self.bloom[0].clone();
+            let first = chain[0].clone();
             let s = u((first.1 * 2, first.2 * 2));
             plan.push((s, 0, None, false));
-            for i in 1..self.bloom.len() {
-                let (_, sw, sh) = &self.bloom[i - 1];
+            for i in 1..chain.len() {
+                let (_, sw, sh) = &chain[i - 1];
                 let s = u((*sw, *sh));
                 plan.push((s, i, Some(i - 1), false));
             }
-            for i in (0..self.bloom.len() - 1).rev() {
-                let (_, sw, sh) = &self.bloom[i + 1];
+            for i in (0..chain.len() - 1).rev() {
+                let (_, sw, sh) = &chain[i + 1];
                 let s = u((*sw, *sh));
                 plan.push((s, i, Some(i + 1), true));
             }
@@ -327,7 +332,7 @@ impl PostProcessor {
         for (slot, dst, src, up) in plan {
             let src_view = match src {
                 None => hdr,
-                Some(i) => &self.bloom[i].0,
+                Some(i) => &chain[i].0,
             };
             let g = self.group(device, src_view, &self.dummy);
             let pipeline = match (src, up) {
@@ -335,13 +340,9 @@ impl PostProcessor {
                 (Some(_), false) => &self.down,
                 (Some(_), true) => &self.up,
             };
-            Self::pass(encoder, &self.bloom[dst].0, up, pipeline, &g, slot);
+            Self::pass(encoder, &chain[dst].0, up, pipeline, &g, slot);
         }
-        let bloom_view = if bloom_on {
-            &self.bloom[0].0
-        } else {
-            &self.dummy
-        };
+        let bloom_view = if bloom_on { &chain[0].0 } else { &self.dummy };
         let g = self.group(device, hdr, bloom_view);
         Self::pass(
             encoder,

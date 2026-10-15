@@ -905,10 +905,10 @@ pub fn build_server(bus: Arc<Bus>) -> McpServer {
                 .unwrap_or(&empty)
                 .clone();
             for v in fields.values() {
-                if let Some(p) = v.as_str().filter(|p| p.starts_with("Assets/")) {
-                    if let Err(err) = e.world.resource_mut::<AssetServer>().ensure_loaded(p) {
-                        return ToolResult::error(err);
-                    }
+                if let Some(p) = v.as_str().filter(|p| p.starts_with("Assets/"))
+                    && let Err(err) = e.world.resource_mut::<AssetServer>().ensure_loaded(p)
+                {
+                    return ToolResult::error(err);
                 }
             }
             let mut mat = e

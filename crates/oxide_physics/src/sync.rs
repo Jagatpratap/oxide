@@ -354,7 +354,8 @@ fn describe(world: &World, obj: GameObjectId, cid: ComponentId) -> Option<Desc> 
             bounciness: 0.0,
             sig: 0,
         }
-    } else if let Some(c) = world.component::<CharacterController>(obj, cid) {
+    } else {
+        let c = world.component::<CharacterController>(obj, cid)?;
         let r = (c.radius * s.x.max(s.z)).max(1e-3);
         let half = (c.height * s.y * 0.5 - r).max(0.0);
         hash_f(&mut h, &[r, half, c.center.x, c.center.y, c.center.z, 5.0]);
@@ -366,8 +367,6 @@ fn describe(world: &World, obj: GameObjectId, cid: ComponentId) -> Option<Desc> 
             bounciness: 0.0,
             sig: 0,
         }
-    } else {
-        return None;
     };
     Some(Desc {
         sig: h.finish(),
@@ -518,7 +517,7 @@ fn update_mass(phys: &mut Physics, id: GameObjectId) {
                 && !col.is_sensor()
                 && let Some(rel) = col.position_wrt_parent()
             {
-                props = props + col.shape().mass_properties(density).transform_by(rel);
+                props += col.shape().mass_properties(density).transform_by(rel);
             }
         }
     } else {

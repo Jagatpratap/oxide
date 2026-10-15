@@ -92,7 +92,8 @@ struct ShadowBatch {
 }
 
 struct Targets {
-    size: (u32, u32),
+    last_used: u64,
+    bloom: Vec<(wgpu::TextureView, u32, u32)>,
     msaa: Option<wgpu::TextureView>,
     resolve: wgpu::TextureView,
     depth: wgpu::TextureView,
@@ -148,7 +149,9 @@ pub struct SceneRenderer {
     shadow_buffers: Vec<wgpu::Buffer>,
     shadow_groups: Vec<wgpu::BindGroup>,
     groups_dirty: bool,
-    targets: Option<Targets>,
+    /// Render targets per output size (Scene and Game views render at different sizes).
+    targets: HashMap<(u32, u32), Targets>,
+    frame_index: u64,
     post: PostProcessor,
     pub last_stats: RenderStats,
 }
@@ -526,7 +529,8 @@ impl SceneRenderer {
             shadow_buffers,
             shadow_groups: Vec::new(),
             groups_dirty: true,
-            targets: None,
+            targets: HashMap::new(),
+            frame_index: 0,
             post,
             last_stats: RenderStats::default(),
         }
@@ -633,8 +637,21 @@ impl SceneRenderer {
     }
 
     fn ensure_targets(&mut self, device: &wgpu::Device, w: u32, h: u32) {
-        if self.targets.as_ref().is_some_and(|t| t.size == (w, h)) {
+        self.frame_index += 1;
+        let now = self.frame_index;
+        if let Some(t) = self.targets.get_mut(&(w, h)) {
+            t.last_used = now;
             return;
+        }
+        // Keep a few sizes alive; drop the least recently used beyond that.
+        while self.targets.len() >= 4 {
+            let oldest = *self
+                .targets
+                .iter()
+                .min_by_key(|(_, t)| t.last_used)
+                .expect("non-empty")
+                .0;
+            self.targets.remove(&oldest);
         }
         let tex = |label: &str, format, samples, usage| {
             device
@@ -664,13 +681,17 @@ impl SceneRenderer {
             ra | wgpu::TextureUsages::TEXTURE_BINDING,
         );
         let depth = tex("depth", DEPTH_FORMAT, self.sample_count, ra);
-        self.post.resize(device, w, h);
-        self.targets = Some(Targets {
-            size: (w, h),
-            msaa,
-            resolve,
-            depth,
-        });
+        let bloom = PostProcessor::bloom_chain(device, w, h);
+        self.targets.insert(
+            (w, h),
+            Targets {
+                last_used: now,
+                bloom,
+                msaa,
+                resolve,
+                depth,
+            },
+        );
     }
 
     fn rebuild_groups(&mut self, device: &wgpu::Device, cameras: usize) {
@@ -743,6 +764,7 @@ impl SceneRenderer {
     }
 
     /// Renders `frame` into `target` (`width`×`height`, `format`) and submits the work.
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
         gpu: &Gpu,
@@ -1229,7 +1251,7 @@ impl SceneRenderer {
         }
 
         // ---- camera passes -------------------------------------------------------------
-        let targets = self.targets.as_ref().expect("targets");
+        let targets = self.targets.get(&(w, h)).expect("targets");
         let (color_view, resolve) = match &targets.msaa {
             Some(m) => (m, Some(&targets.resolve)),
             None => (&targets.resolve, None),
@@ -1326,12 +1348,13 @@ impl SceneRenderer {
         }
 
         // ---- post-processing into the target ------------------------------------------
-        let bloom = env.bloom.filter(|_| frame.cameras.first().is_some());
+        let bloom = env.bloom.filter(|_| !frame.cameras.is_empty());
         self.post.run(
             device,
             queue,
             &mut encoder,
             &targets.resolve,
+            &targets.bloom,
             target,
             format,
             env.exposure,

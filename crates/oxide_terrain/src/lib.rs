@@ -3,6 +3,9 @@
 //! with distance culling, and a heightfield collider kept in sync.
 //! Reference: <https://docs.unity3d.com/Manual/script-Terrain.html>
 
+// Submesh lists are `Vec<Range<u32>>`; a single-entry list is the normal case.
+#![allow(clippy::single_range_in_vec_init)]
+
 use oxide_assets::{
     AssetId, AssetServer, Handle, Mesh, TerrainData, TerrainLayer, Texture2D,
     terrain::ground_texture,
