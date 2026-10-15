@@ -1,0 +1,15 @@
+[package]
+name = "oxide_engine"
+description = "Oxide runtime: window, main loop in Unity execution order, MCP tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+oxide_math.workspace = true
+oxide_core.workspace = true
+oxide_render.workspace = true
+oxide_mcp.workspace = true
+winit.workspace = true
+log.workspace = true
+serde_json.workspace = true

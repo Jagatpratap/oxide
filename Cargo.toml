@@ -1,0 +1,31 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.88"
+
+[workspace.dependencies]
+oxide_math = { path = "crates/oxide_math" }
+oxide_core = { path = "crates/oxide_core" }
+oxide_render = { path = "crates/oxide_render" }
+oxide_mcp = { path = "crates/oxide_mcp" }
+oxide_engine = { path = "crates/oxide_engine" }
+
+glam = { version = "0.30", features = ["bytemuck", "serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = { version = "0.4", features = ["std"] }
+wgpu = "30"
+winit = "0.30"
+pollster = "1"
+bytemuck = { version = "1", features = ["derive"] }
+png = "0.18"
+base64 = "0.22"
+tiny_http = "0.12"
+
+[profile.dev.package."*"]
+opt-level = 2

@@ -1,0 +1,11 @@
+[package]
+name = "oxide_math"
+description = "Unity-style math types (Vector3, Quaternion, Mathf, Bounds, ...) backed by glam"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+glam.workspace = true
+serde.workspace = true
+bytemuck.workspace = true
