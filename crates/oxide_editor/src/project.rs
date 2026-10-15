@@ -18,6 +18,7 @@ pub struct ProjectState {
     pub selected: Option<String>,
     search: String,
     new_folder: Option<String>,
+    new_script: Option<String>,
     /// Cached listing and when it was read (seconds).
     pub cache: Option<(String, f64, Vec<Entry>)>,
 }
@@ -29,6 +30,7 @@ impl Default for ProjectState {
             selected: None,
             search: String::new(),
             new_folder: None,
+            new_script: None,
             cache: None,
         }
     }
@@ -163,6 +165,14 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
                 ps.new_folder = Some("New Folder".into());
                 ui.close();
             }
+            if ui
+                .add_enabled(st.scripts_available, egui::Button::new("Rust Script"))
+                .on_disabled_hover_text("Open a project created with `oxide new` to write scripts")
+                .clicked()
+            {
+                ps.new_script = Some("NewScript".into());
+                ui.close();
+            }
         });
         // Breadcrumbs.
         let parts: Vec<String> = ps.folder.split('/').map(str::to_owned).collect();
@@ -182,6 +192,27 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
             );
         });
     });
+    let mut script_action = None;
+    if let Some(name) = ps.new_script.as_mut() {
+        let mut done = false;
+        ui.horizontal(|ui| {
+            ui.label("New script:");
+            let r = ui.text_edit_singleline(name);
+            r.request_focus();
+            if ui.button("Create").clicked()
+                || (r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+            {
+                script_action = Some(Action::CreateScript(name.trim().to_owned()));
+                done = true;
+            }
+            if ui.button("Cancel").clicked() {
+                done = true;
+            }
+        });
+        if done {
+            ps.new_script = None;
+        }
+    }
     if let Some(name) = ps.new_folder.as_mut() {
         let mut done = false;
         ui.horizontal(|ui| {
@@ -342,6 +373,9 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
         st.actions.push(Action::CreatePrefab(path));
     }
     if let Some(a) = action {
+        st.actions.push(a);
+    }
+    if let Some(a) = script_action {
         st.actions.push(a);
     }
 }

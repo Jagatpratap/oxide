@@ -11,10 +11,13 @@
 mod console;
 mod hierarchy;
 mod inspector;
+pub mod launch;
 pub mod mcp;
 mod menus;
 mod project;
+pub mod project_files;
 mod scene_view;
+pub mod scripting;
 mod theme;
 mod undo;
 mod view;
@@ -134,6 +137,9 @@ pub enum Action {
     ApplyPrefab,
     RevertPrefab,
     UnpackPrefab,
+    /// New script component in the project's Scripts (name as typed).
+    CreateScript(String),
+    RecompileScripts,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -180,6 +186,8 @@ pub struct EditorState {
     title: String,
     /// Status messages from actions (shown in the status bar).
     pub status: String,
+    /// The project has a Scripts crate (Create > Rust Script is available).
+    pub scripts_available: bool,
 }
 
 impl EditorState {
@@ -208,6 +216,7 @@ impl EditorState {
             modal: None,
             title: String::new(),
             status: String::new(),
+            scripts_available: false,
         }
     }
 
@@ -276,6 +285,9 @@ pub struct Editor {
     /// Last saved layout (JSON) and when it was last checked.
     saved_layout: Option<String>,
     layout_checked: f64,
+    /// Compiles and hot-reloads the project's Scripts (only in a project editor that links
+    /// the engine dynamically).
+    pub scripts: Option<scripting::ScriptHost>,
 }
 
 impl Default for Editor {
@@ -338,7 +350,14 @@ impl Editor {
             styled: false,
             saved_layout: None,
             layout_checked: 0.0,
+            scripts: None,
         }
+    }
+
+    /// Enables script compilation and hot reload.
+    pub fn with_scripts(mut self, host: scripting::ScriptHost) -> Self {
+        self.scripts = Some(host);
+        self
     }
 
     fn layout_path(engine: &Engine) -> std::path::PathBuf {
@@ -427,6 +446,7 @@ impl Editor {
                     return Err("stop Play mode first".into());
                 }
                 let warnings = oxide_engine::load_scene(w, &path, false)?;
+                launch::remember_scene(&w.resource::<AssetServer>().full_path(""), &path);
                 st.selection.clear();
                 st.undo.clear();
                 st.dirty = false;
@@ -436,6 +456,7 @@ impl Editor {
             Action::SaveScene => match w.scene_path.clone() {
                 Some(path) => {
                     let n = oxide_engine::save_scene(w, &path)?;
+                    launch::remember_scene(&w.resource::<AssetServer>().full_path(""), &path);
                     st.dirty = false;
                     format!("Saved {n} objects to {path}")
                 }
@@ -449,6 +470,7 @@ impl Editor {
             },
             Action::SaveSceneAs(path) => {
                 let n = oxide_engine::save_scene(w, &path)?;
+                launch::remember_scene(&w.resource::<AssetServer>().full_path(""), &path);
                 st.dirty = false;
                 format!("Saved {n} objects to {path}")
             }
@@ -653,6 +675,18 @@ impl Editor {
                 w.unpack_prefab(root);
                 st.inspector.invalidate_overrides();
                 "Unpacked prefab".into()
+            }
+            Action::CreateScript(name) => {
+                let host = self.scripts.as_ref().ok_or("this project has no Scripts")?;
+                let ty = project_files::type_name(&name)
+                    .ok_or_else(|| format!("`{name}` is not a valid script name"))?;
+                let file = host.create_script(&ty)?;
+                format!("Created script {ty} ({}); compiling...", file.display())
+            }
+            Action::RecompileScripts => {
+                let host = self.scripts.as_mut().ok_or("this project has no Scripts")?;
+                host.recompile();
+                "Compiling scripts...".into()
             }
             Action::InstantiateModel(path) => {
                 let h = w
@@ -973,6 +1007,13 @@ impl Shell for Editor {
             self.load_layout(engine);
             self.styled = true;
         }
+        if let Some(host) = self.scripts.as_mut() {
+            host.poll(engine);
+        }
+        self.st.scripts_available = self
+            .scripts
+            .as_ref()
+            .is_some_and(|h| h.state != scripting::ScriptState::None);
         {
             let w = &engine.world;
             self.st.selection.retain(|&id| w.is_alive(id));
@@ -995,7 +1036,9 @@ impl Shell for Editor {
             .show(&mut root, |ui| menus::toolbar(&mut self.st, engine, ui));
         egui::Panel::bottom(egui::Id::new("editor-status"))
             .frame(theme::bar_frame(false))
-            .show(&mut root, |ui| menus::status_bar(&mut self.st, engine, ui));
+            .show(&mut root, |ui| {
+                menus::status_bar(&mut self.st, engine, self.scripts.as_ref(), ui)
+            });
 
         self.st.scene_view.rect = None;
         self.st.game_view.rect = None;

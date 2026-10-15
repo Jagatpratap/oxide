@@ -166,3 +166,81 @@ fn instantiate_remaps_internal_refs_and_keeps_external() {
     assert_eq!(w.get_component::<Probe>(clone).unwrap().target, Some(gun2));
     assert_eq!(w.get_component::<Probe>(gun2).unwrap().target, Some(target));
 }
+
+#[test]
+fn script_reload_keeps_fields_order_and_lifecycle() {
+    let mut w = world();
+    let a = w.create("A");
+    w.add_component(a, Light::default());
+    let pid = w.add_component(a, probe("reload-p")).unwrap();
+    w.add_component(a, Camera::default());
+    w.component_mut::<Probe>(a, pid).unwrap().speed = 7.0;
+    w.run_start();
+    let mine = || {
+        LOG.lock()
+            .unwrap()
+            .iter()
+            .filter(|l| l.starts_with("reload-p "))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let before = mine().len();
+
+    // Unload: the script gets OnDisable only.
+    let taken = w.take_components_for_reload(|t| t == "Probe");
+    assert_eq!(taken.len(), 1);
+    assert_eq!(taken[0].index, 1);
+    assert!(w.get_component::<Probe>(a).is_none());
+    w.registry.unregister_where(|r| r.info.name == "Probe");
+
+    // Script type gone: data is kept in a MissingScript, which saves as the script.
+    let missing = w.restore_components_after_reload(taken);
+    assert_eq!(missing, vec!["Probe".to_string()]);
+    let saved = w.serialize(&[a], "x");
+    assert_eq!(saved.objects[0].components[1].type_name, "Probe");
+    assert_eq!(
+        saved.objects[0].components[1].fields.get("speed"),
+        Some(&oxide_core::reflect::Value::Float(7.0))
+    );
+
+    // Script back: it returns in the same slot with its value, enabled again, not re-Awoken.
+    w.registry.register::<Probe>("");
+    let taken = w.take_components_for_reload(|t| t == "Probe");
+    assert!(w.restore_components_after_reload(taken).is_empty());
+    let list = w.get(a).unwrap().component_list();
+    assert_eq!(
+        list.iter().map(|c| c.1).collect::<Vec<_>>(),
+        ["Light", "Probe", "Camera"]
+    );
+    assert_eq!(w.get_component::<Probe>(a).unwrap().speed, 7.0);
+    // Each reload: OnDisable going out; OnEnable coming back only once it is a real script
+    // again (the MissingScript in between has no callbacks). Never Awake/Start/OnDestroy.
+    assert_eq!(
+        mine()[before..],
+        ["reload-p disable", "reload-p enable"],
+        "only OnDisable/OnEnable across reloads"
+    );
+}
+
+#[derive(Clone, Default, Reflect)]
+struct Panicker;
+
+impl Component for Panicker {
+    fn update(&mut self, _: &mut Ctx) {
+        panic!("boom");
+    }
+}
+
+#[test]
+fn panicking_script_does_not_take_the_engine_down() {
+    let mut w = world();
+    let a = w.create("A");
+    w.add_component(a, Panicker);
+    let b = w.create("B");
+    w.add_component(b, probe("b"));
+    w.run_start();
+    w.run_phase(Phase::Update);
+    // The other script still ran, and the panicking one is still attached.
+    assert!(LOG.lock().unwrap().iter().any(|l| l == "b update"));
+    assert!(w.get_component::<Panicker>(a).is_some());
+}

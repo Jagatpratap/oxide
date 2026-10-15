@@ -129,6 +129,11 @@ impl ComponentRegistry {
         );
     }
 
+    /// Removes types (e.g. a script library's, before it is reloaded).
+    pub fn unregister_where(&mut self, mut remove: impl FnMut(&ComponentRegistration) -> bool) {
+        self.types.retain(|_, r| !remove(r));
+    }
+
     pub fn create(&self, name: &str) -> Option<Box<dyn Component>> {
         self.get(name).map(|r| (r.create)())
     }

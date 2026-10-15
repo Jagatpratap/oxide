@@ -1,9 +1,15 @@
 //! `oxide` — the Oxide editor, with the MCP server on.
 //!
 //! ```text
+//! oxide new  <DIR> [editor args]   create a game project and open it
+//! oxide open <DIR> [editor args]   open a game project (its Scripts hot-reload)
 //! oxide [--scene Assets/Scenes/Main.scene] [--sample demo|vehicle|character|open_world] [--project DIR]
 //!       [--player] [--mcp-addr 127.0.0.1:47474] [--no-mcp] [--size 1280x720]
 //! ```
+//! `new`/`open` are the project launcher (Unity Hub): they build the project's own editor,
+//! which links the engine as a shared library so the project's Rust scripts can be compiled
+//! and reloaded while it runs. Without them, `oxide` is the engine's sandbox editor (no
+//! project scripts).
 //! With no scene it opens Unity's default new scene (Main Camera + Directional Light);
 //! `--sample` opens a built-in test scene. `--player` runs the game alone in the window, as a
 //! built game would, instead of inside the editor.
@@ -62,7 +68,68 @@ fn parse_args() -> Result<Args, String> {
     Ok(a)
 }
 
+/// The engine source tree this launcher was built from.
+fn engine_root() -> std::path::PathBuf {
+    let here = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let root = here.join("../..");
+    std::fs::canonicalize(&root).unwrap_or(root)
+}
+
+/// `oxide new|open DIR [args]`: prepares the project and runs its editor through cargo.
+fn launch_project(create: bool, dir: &str, rest: Vec<String>) -> ExitCode {
+    let dir = std::path::PathBuf::from(dir);
+    let engine = engine_root();
+    let prepared = if create {
+        oxide_editor::project_files::create_project(&dir, &engine)
+    } else if !dir.join("Scripts/Cargo.toml").is_file() && !dir.join("Assets").is_dir() {
+        Err(format!(
+            "{} is not an Oxide project (create one with `oxide new {}`)",
+            dir.display(),
+            dir.display()
+        ))
+    } else {
+        oxide_editor::project_files::write_build_files(&dir, &engine)
+    };
+    if let Err(e) = prepared {
+        eprintln!("oxide: {e}");
+        return ExitCode::FAILURE;
+    }
+    let dir = std::fs::canonicalize(&dir).unwrap_or(dir);
+    if create {
+        println!("Created project {}", dir.display());
+    }
+    if !dir.join("Library/Build/target").exists() {
+        println!(
+            "Building the project's editor (the first build compiles the engine and takes a few minutes)..."
+        );
+    }
+    let status = std::process::Command::new(oxide_editor::project_files::cargo_command())
+        .args(["run", "-q", "-p", "oxide-project-editor", "--"])
+        .arg("--project")
+        .arg(&dir)
+        .args(rest)
+        .current_dir(&dir)
+        .env_remove("CARGO_TARGET_DIR")
+        .status();
+    match status {
+        Ok(s) if s.success() => ExitCode::SUCCESS,
+        Ok(s) => ExitCode::from(s.code().unwrap_or(1).clamp(1, 255) as u8),
+        Err(e) => {
+            eprintln!("oxide: could not run cargo: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn main() -> ExitCode {
+    let mut raw = std::env::args().skip(1);
+    if let Some(cmd @ ("new" | "open")) = raw.next().as_deref() {
+        let Some(dir) = raw.next() else {
+            eprintln!("usage: oxide {cmd} <DIR> [editor args]");
+            return ExitCode::from(2);
+        };
+        return launch_project(cmd == "new", &dir, raw.collect());
+    }
     let args = match parse_args() {
         Ok(a) => a,
         Err(msg) => {

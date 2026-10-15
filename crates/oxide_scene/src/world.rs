@@ -108,6 +108,18 @@ impl GameObject {
     }
 }
 
+/// A component taken out for a script reload (see [`World::take_components_for_reload`]).
+#[derive(Clone, Debug)]
+pub struct ReloadedComponent {
+    pub object: GameObjectId,
+    pub index: usize,
+    pub type_name: String,
+    pub enabled: bool,
+    pub awoken: bool,
+    pub started: bool,
+    pub fields: std::collections::BTreeMap<String, oxide_core::reflect::Value>,
+}
+
 /// Unity's Tags & Layers settings.
 pub struct LayerNames(pub [String; 32]);
 
@@ -548,13 +560,23 @@ impl World {
         let Some(mut comp) = self.entry_mut(id, cid).and_then(|e| e.comp.take()) else {
             return false;
         };
-        {
+        let result = {
             let mut ctx = Ctx {
                 world: self,
                 this: id,
                 component: cid,
             };
-            f(comp.as_mut(), &mut ctx);
+            // A panicking script is reported like a Unity exception; the game keeps running.
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(comp.as_mut(), &mut ctx)))
+        };
+        if let Err(p) = result {
+            let msg = p
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| p.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "panic".into());
+            let name = self.get(id).map_or("?", |o| o.name.as_str());
+            oxide_core::debug_log_error!("{} on \"{name}\": {msg}", comp.type_info().name);
         }
         // The object or component may have been removed during the call.
         if let Some(e) = self.entry_mut(id, cid) {
@@ -821,6 +843,139 @@ impl World {
         if let Some(o) = self.get_mut(id) {
             o.components.retain(|c| c.id != cid);
         }
+    }
+
+    /// Takes out every component whose type `is_script` (before a script reload), keeping
+    /// what is needed to put it back: position, fields and lifecycle state. Scripts get
+    /// `OnDisable`, not `OnDestroy`, like Unity's domain reload.
+    pub fn take_components_for_reload(
+        &mut self,
+        is_script: impl Fn(&str) -> bool,
+    ) -> Vec<ReloadedComponent> {
+        let mut out = Vec::new();
+        for id in self.hierarchy_order() {
+            let list: Vec<(usize, ComponentId, &'static str)> = self
+                .get(id)
+                .map(|o| {
+                    o.components
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, c)| !c.destroy_pending)
+                        .map(|(i, c)| (i, c.id, c.type_name))
+                        .collect()
+                })
+                .unwrap_or_default();
+            for (index, cid, ty) in list {
+                let missing = self
+                    .component::<crate::MissingScript>(id, cid)
+                    .map(|m| (m.script.clone(), m.data.clone(), m.awoken, m.started));
+                if missing.is_none() && !is_script(ty) {
+                    continue;
+                }
+                self.deactivate_component(id, cid);
+                let Some(e) = self.entry(id, cid) else {
+                    continue;
+                };
+                let (enabled, mut awoken, mut started) = (e.enabled, e.awoken, e.started);
+                let (type_name, fields) = match missing {
+                    Some((script, data, a, s)) => {
+                        (awoken, started) = (a, s);
+                        (script, data)
+                    }
+                    None => (
+                        ty.to_owned(),
+                        e.comp
+                            .as_deref()
+                            .map(|c| {
+                                c.fields()
+                                    .into_iter()
+                                    .map(|(k, v)| (k.to_owned(), v))
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                    ),
+                };
+                out.push(ReloadedComponent {
+                    object: id,
+                    index,
+                    type_name,
+                    enabled,
+                    awoken,
+                    started,
+                    fields,
+                });
+                if let Some(o) = self.get_mut(id) {
+                    o.components.retain(|c| c.id != cid);
+                }
+            }
+        }
+        out
+    }
+
+    /// Puts components taken by [`World::take_components_for_reload`] back, created from the
+    /// (new) registry. Scripts that no longer exist become [`MissingScript`]s, so their data
+    /// survives. Live scripts get `OnEnable` (not `Awake`/`Start` again). Returns the type
+    /// names that are missing.
+    pub fn restore_components_after_reload(
+        &mut self,
+        taken: Vec<ReloadedComponent>,
+    ) -> Vec<String> {
+        let mut missing = Vec::new();
+        // Lower indices first so each insert lands where it was.
+        let mut taken = taken;
+        taken.sort_by_key(|t| (t.object.to_bits(), t.index));
+        for t in taken {
+            if !self.is_alive(t.object) {
+                continue;
+            }
+            let (comp, ty): (Box<dyn Component>, &'static str) =
+                match self.registry.get(&t.type_name) {
+                    Some(reg) => {
+                        let mut c = (reg.create)();
+                        for (k, v) in &t.fields {
+                            let _ = c.set_field(k, v.clone());
+                        }
+                        (c, reg.info.name)
+                    }
+                    None => {
+                        missing.push(t.type_name.clone());
+                        (
+                            Box::new(crate::MissingScript {
+                                script: t.type_name.clone(),
+                                data: t.fields.clone(),
+                                awoken: t.awoken,
+                                started: t.started,
+                            }),
+                            "MissingScript",
+                        )
+                    }
+                };
+            let real = ty != "MissingScript";
+            let cid = ComponentId(self.next_component);
+            self.next_component += 1;
+            let entry = ComponentEntry {
+                id: cid,
+                type_id: crate::component::component_type_id(comp.as_ref()),
+                type_name: ty,
+                enabled: t.enabled,
+                awoken: t.awoken && real,
+                started: t.started && real,
+                live: false,
+                destroy_pending: false,
+                comp: Some(comp),
+            };
+            let Some(o) = self.get_mut(t.object) else {
+                continue;
+            };
+            let at = t.index.min(o.components.len());
+            o.components.insert(at, entry);
+            if real && t.awoken {
+                self.activate_component(t.object, cid);
+            }
+        }
+        missing.sort();
+        missing.dedup();
+        missing
     }
 
     /// Moves a component up/down in the Inspector order.

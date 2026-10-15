@@ -288,3 +288,21 @@ impl Default for RenderSettings {
 pub fn default_sun_rotation() -> Vector3 {
     Vector3::new(50.0, -30.0, 0.0)
 }
+
+/// Stand-in for a script component whose type isn't loaded (not compiled yet, renamed or
+/// deleted). Keeps the saved fields so nothing is lost; it turns back into the real component
+/// when the script loads (Unity's "The associated script can not be loaded").
+#[derive(Clone, Default, Reflect)]
+pub struct MissingScript {
+    /// Type name of the script.
+    pub script: String,
+    #[reflect(skip)]
+    pub data: std::collections::BTreeMap<String, oxide_core::reflect::Value>,
+    /// Lifecycle of the real script when it was replaced (so it isn't Awoken twice).
+    #[reflect(skip)]
+    pub awoken: bool,
+    #[reflect(skip)]
+    pub started: bool,
+}
+
+impl Component for MissingScript {}

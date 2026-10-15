@@ -454,14 +454,29 @@ fn components(
             egui::Id::new(("component", id.to_bits(), cid.0)),
             true,
         );
+        let missing = w
+            .component::<oxide_scene::MissingScript>(id, cid)
+            .map(|m| m.script.clone());
         let header = state.show_header(ui, |ui| {
             let mut en = enabled;
             if ui.checkbox(&mut en, "").changed() {
                 edits.push((Edit::Enabled(cid, en), key(id, &format!("en{}", cid.0))));
             }
-            ui.label(RichText::new(nicify(type_name)).strong());
+            match &missing {
+                Some(script) => ui.label(
+                    RichText::new(format!("{} (Missing Script)", nicify(script)))
+                        .strong()
+                        .color(Color32::from_rgb(255, 170, 60)),
+                ),
+                None => ui.label(RichText::new(nicify(type_name)).strong()),
+            };
         });
         let (_, header_resp, _) = header.body(|ui| {
+            if let Some(script) = &missing {
+                ui.weak(format!(
+                    "The script `{script}` is not loaded (still compiling, renamed or deleted). Its saved values are kept."
+                ));
+            }
             if values.is_empty() {
                 ui.weak("No editable fields.");
             }

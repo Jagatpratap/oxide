@@ -1,0 +1,13 @@
+[package]
+name = "oxide_dylib"
+description = "The Oxide engine and editor as one Rust dylib, shared by a project's editor and its hot-reloaded Scripts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["dylib"]
+
+[dependencies]
+oxide_engine.workspace = true
+oxide_editor.workspace = true

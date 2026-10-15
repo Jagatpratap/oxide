@@ -184,6 +184,11 @@ pub fn menu_items(world: &World) -> Vec<MenuItem> {
             Action::OpenTab(t),
         ));
     }
+    v.push(item(
+        "Assets/Recompile Scripts",
+        "",
+        Action::RecompileScripts,
+    ));
     v.push(sep("Window"));
     v.push(item("Window/Layouts/Default", "", Action::ResetLayout));
     v
@@ -243,7 +248,14 @@ pub fn create_menu(st: &mut EditorState, ui: &mut egui::Ui) {
 pub fn menu_bar(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
     let items = menu_items(&engine.world);
     egui::MenuBar::new().ui(ui, |ui| {
-        for top in ["File", "Edit", "GameObject", "Component", "Window"] {
+        for top in [
+            "File",
+            "Edit",
+            "Assets",
+            "GameObject",
+            "Component",
+            "Window",
+        ] {
             let prefix = format!("{top}/");
             let level: Vec<_> = split(
                 items
@@ -329,7 +341,12 @@ pub fn toolbar(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
     });
 }
 
-pub fn status_bar(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
+pub fn status_bar(
+    st: &mut EditorState,
+    engine: &mut Engine,
+    scripts: Option<&crate::scripting::ScriptHost>,
+    ui: &mut egui::Ui,
+) {
     ui.horizontal(|ui| {
         if let Some(e) = st.console.last() {
             let col = match e.log_type {
@@ -348,6 +365,27 @@ pub fn status_bar(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) 
             };
             ui.weak(mode);
             ui.separator();
+            if let Some(h) = scripts {
+                use crate::scripting::ScriptState;
+                match h.state {
+                    ScriptState::Compiling => {
+                        ui.spinner();
+                        ui.label(egui::RichText::new("Compiling scripts").size(11.5));
+                    }
+                    ScriptState::Failed => {
+                        ui.label(
+                            egui::RichText::new(format!("Script errors ({})", h.errors.len()))
+                                .color(egui::Color32::from_rgb(255, 90, 80))
+                                .size(11.5),
+                        );
+                    }
+                    ScriptState::Ready => {
+                        ui.weak(format!("{} scripts", h.script_types.len()));
+                    }
+                    ScriptState::None => {}
+                }
+                ui.separator();
+            }
             ui.weak(format!("{} objects", engine.world.len()));
         });
     });

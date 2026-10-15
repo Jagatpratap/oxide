@@ -289,7 +289,7 @@ editing, Undo History window, Preferences/Project Settings windows, project laun
 - ◐ Script API: `GetComponent`, `AddComponent`, `Instantiate`, `Destroy`, `Find`, `SendMessage`-equivalent, events
   ([Get started with programming](https://docs.unity3d.com/Manual/scripting-get-started.html))
 - ◐ Serialized fields → Inspector (`#[serialize]`, `#[range]`, `#[header]`, `#[tooltip]` attributes)
-- ☐ Hot reload of script dylib with state preservation (domain-reload equivalent)
+- ☑ Hot reload of script dylib with state preservation (domain-reload equivalent)
   ([Code reload and serialization](https://docs.unity3d.com/Manual/code-reload-serialization.html))
 - ☐ Coroutines (`yield WaitForSeconds`, `WaitForEndOfFrame`) via async
   ([Coroutines](https://docs.unity3d.com/Manual/coroutines-section.html))
@@ -305,6 +305,14 @@ editing, Undo History window, Preferences/Project Settings windows, project laun
   ([Plug-ins](https://docs.unity3d.com/Manual/plug-ins.html))
 
 **Exit:** write a player controller script in the editor's script folder, save, it hot-reloads mid-play without losing scene state.
+
+**Status:** the exit test passes. `oxide new/open` creates and opens a project whose `Scripts`
+crate is compiled in the background and hot-reloaded in Edit and Play mode; component values,
+objects and physics state survive, scripts get OnDisable/OnEnable across the reload, compile
+errors go to the Console, panics are caught and logged, and scripts that fail to load keep
+their data as Missing Script. The engine is one shared library (`oxide_dylib`) that the
+project's editor and its Scripts both link. Not yet: coroutines, execution order, jobs, test
+runner, native plugins.
 
 ### P7 — Physics, Input, 2D
 - ◐ 3D: Rigidbody, Box/Sphere/Capsule/Mesh colliders, triggers, layers collision matrix, raycasts/overlaps, physics materials, joints, CharacterController, articulations, ragdoll wizard, cloth (later)
@@ -413,14 +421,14 @@ needs, and where the engine is:
 | Terrain + foliage | ✔ | ✔ | ◐ chunked LOD terrain, trees; missing grass/details, sculpt tools, streaming |
 | Big worlds (8×8 km) | | ✔ | ☐ LOD groups, occlusion culling, world streaming, floating origin |
 | Weapons, hits, ragdolls | | ✔ | ◐ raycasts and joints exist; ragdoll wizard, hit boxes ☐ |
-| Game scripts in the editor | ✔ | ✔ | ☐ P6 script project + hot reload (scripts compile into the app today) |
+| Game scripts in the editor | ✔ | ✔ | ☑ project Scripts crate, hot reload in Edit and Play mode |
 | HUD, menus | ✔ | ✔ | ◐ Canvas UI + immediate GUI; UI Toolkit-style layout ☐ |
 | Audio (engine, 3D, mixer) | ✔ | ✔ | ◐ 3D sources, car audio; mixer ☐ |
 | AI (opponents, bots) | ✔ | ✔ | ☐ NavMesh, waypoint tools |
 | Multiplayer | ◐ | ✔ | ☐ netcode (server-authoritative, prediction, interpolation), dedicated server |
 | Ship the game | ✔ | ✔ | ☐ P10 player builds (desktop first, then Android/iOS) |
 
-Build order from here: scripting with hot reload → player builds → big-world rendering (LOD,
+Build order from here: player builds → big-world rendering (LOD,
 occlusion, streaming) → animation (2D blend trees, root motion, IK, ragdolls) → NavMesh →
 netcode and dedicated server → mobile.
 

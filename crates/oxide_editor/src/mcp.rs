@@ -324,6 +324,57 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
         },
     );
 
+    tool(
+        s,
+        bus,
+        ToolDef::new(
+            "editor_scripts",
+            "Game scripts",
+            "The project's Rust scripts: `status` (compile state, errors, script component types), `recompile`, or \
+         `create` a new script component named `name` (Unity Create > Script). Scripts hot-reload when saved.",
+            schema(
+                json!({ "action": { "type": "string", "enum": ["status", "recompile", "create"] },
+                       "name": { "type": "string" } }),
+                &[],
+            ),
+        ),
+        |args, e| {
+            with_editor(e, |ed, e| {
+                match args
+                    .get("action")
+                    .and_then(Json::as_str)
+                    .unwrap_or("status")
+                {
+                    "recompile" => {
+                        let _ = ed.apply(e, Action::RecompileScripts);
+                    }
+                    "create" => {
+                        let Some(name) = args.get("name").and_then(Json::as_str) else {
+                            return ToolResult::error("`name` is required");
+                        };
+                        if let Err(err) = ed.apply(e, Action::CreateScript(name.to_owned())) {
+                            return ToolResult::error(err);
+                        }
+                    }
+                    _ => {}
+                }
+                let Some(h) = ed.scripts.as_ref() else {
+                    return ToolResult::json(json!({ "available": false,
+                    "note": "this editor was not opened on a project (use `oxide open <dir>`)" }));
+                };
+                ToolResult::json(json!({
+                    "available": h.state != crate::scripting::ScriptState::None,
+                    "state": format!("{:?}", h.state),
+                    "compiling": h.is_compiling(),
+                    "types": h.script_types,
+                    "errors": h.errors,
+                    "last_build_seconds": h.last_build_seconds,
+                    "scripts_dir": h.scripts_dir(),
+                }))
+            })
+        },
+    );
+
     tool(s, bus, ToolDef::new("editor_capture", "Screenshot the editor",
         "PNG of the whole editor window (menus, Hierarchy, Scene/Game views, Inspector, ...), as the user sees it. \
          Long side capped by `max_size` (default 1600).",

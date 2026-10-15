@@ -26,6 +26,7 @@ oxide_terrain = { path = "crates/oxide_terrain" }
 oxide_particles = { path = "crates/oxide_particles" }
 oxide_standard = { path = "crates/oxide_standard" }
 oxide_editor = { path = "crates/oxide_editor" }
+oxide_dylib = { path = "crates/oxide_dylib" }
 
 glam = { version = "0.33", features = ["bytemuck", "serde"] }
 serde = { version = "1", features = ["derive"] }
@@ -48,6 +49,9 @@ egui = "0.36"
 egui-wgpu = "0.36"
 egui-winit = { version = "0.36", default-features = false, features = ["clipboard", "links"] }
 egui_dock = { version = "0.21", features = ["serde"] }
+libloading = "0.9"
 
 [profile.dev.package."*"]
 opt-level = 2
+# Third-party code keeps line tables only (readable backtraces, far smaller builds).
+debug = "line-tables-only"

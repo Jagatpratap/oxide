@@ -130,6 +130,18 @@ impl World {
                     .filter(|e| !e.destroy_pending)
                     .filter_map(|e| {
                         let c = e.comp.as_deref()?;
+                        // A missing script saves as the script it stands for.
+                        if let Some(m) = crate::component::downcast_ref::<crate::MissingScript>(c) {
+                            return Some(ComponentData {
+                                type_name: m.script.clone(),
+                                enabled: e.enabled,
+                                fields: m
+                                    .data
+                                    .iter()
+                                    .map(|(k, v)| (k.clone(), remap(v.clone(), &to_file)))
+                                    .collect(),
+                            });
+                        }
                         let fields = c
                             .type_info()
                             .fields
@@ -233,9 +245,24 @@ impl World {
             for cd in &od.components {
                 let Some(mut comp) = self.registry.create(&cd.type_name) else {
                     warnings.push(format!(
-                        "{}: unknown component type `{}` (missing script?)",
+                        "{}: script `{}` is not loaded; its data is kept",
                         od.name, cd.type_name
                     ));
+                    let missing = crate::MissingScript {
+                        script: cd.type_name.clone(),
+                        data: cd
+                            .fields
+                            .iter()
+                            .map(|(k, v)| (k.clone(), remap(v.clone(), &to_runtime)))
+                            .collect(),
+                        awoken: false,
+                        started: false,
+                    };
+                    if let Some(cid) = self.add_component_boxed(id, Box::new(missing))
+                        && !cd.enabled
+                    {
+                        self.set_component_enabled(id, cid, false);
+                    }
                     continue;
                 };
                 for (k, v) in &cd.fields {
