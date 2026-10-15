@@ -66,7 +66,8 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let mut app = App::with_config(args.config);
+    let mut app = App::with_config(args.config).register::<samples::CarHud>("Samples/Car HUD");
+
     if let Some(path) = args.scene {
         app = app.setup(move |world| {
             if let Err(e) = oxide_engine::load_scene(world, &path, false) {

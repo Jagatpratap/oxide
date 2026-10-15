@@ -21,6 +21,7 @@ oxide_input = { path = "crates/oxide_input" }
 oxide_physics = { path = "crates/oxide_physics" }
 oxide_audio = { path = "crates/oxide_audio" }
 oxide_animation = { path = "crates/oxide_animation" }
+oxide_ui = { path = "crates/oxide_ui" }
 oxide_standard = { path = "crates/oxide_standard" }
 
 glam = { version = "0.33", features = ["bytemuck", "serde"] }

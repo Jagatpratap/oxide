@@ -246,7 +246,22 @@ impl GpuAssets {
         true
     }
 
+    /// GPU view of a texture asset (uploading it if needed), e.g. for UI images.
+    pub fn texture_view(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        assets: &AssetServer,
+        id: AssetId,
+    ) -> Option<&wgpu::TextureView> {
+        if !self.ensure_texture(device, queue, assets, id) {
+            return None;
+        }
+        self.textures.get(&id).map(|t| &t.view)
+    }
+
     /// Uploads a material (and its textures). Falls back to the default material.
+
     pub fn ensure_material(
         &mut self,
         device: &wgpu::Device,

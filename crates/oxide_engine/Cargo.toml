@@ -16,6 +16,11 @@ oxide_input.workspace = true
 oxide_physics.workspace = true
 oxide_audio.workspace = true
 oxide_animation.workspace = true
+oxide_ui.workspace = true
+egui.workspace = true
+egui-wgpu.workspace = true
+egui-winit.workspace = true
+
 oxide_standard.workspace = true
 winit.workspace = true
 log.workspace = true

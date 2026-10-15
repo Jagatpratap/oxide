@@ -5,6 +5,7 @@ pub mod app;
 pub mod bus;
 pub mod engine;
 pub mod extract;
+pub mod gui;
 pub mod input_map;
 pub mod mcp_animation;
 pub mod mcp_audio;
@@ -25,6 +26,7 @@ pub use oxide_physics as physics;
 pub use oxide_render as render;
 pub use oxide_scene as scene;
 pub use oxide_standard as standard;
+pub use oxide_ui as ui;
 
 /// Physics (Rapier) with Unity's components and `Physics` API.
 pub struct PhysicsPlugin;
@@ -65,6 +67,19 @@ impl Plugin for AnimationPlugin {
     }
 }
 
+/// Game UI: Canvas components and immediate-mode GUI (egui).
+pub struct UiPlugin;
+
+impl Plugin for UiPlugin {
+    fn build(
+        &self,
+        world: &mut oxide_scene::World,
+        systems: &mut Vec<Box<dyn oxide_scene::System>>,
+    ) {
+        systems.push(oxide_ui::install(world));
+    }
+}
+
 /// Standard assets: car controller, cameras, character controllers.
 pub struct StandardAssetsPlugin;
 
@@ -80,6 +95,7 @@ pub fn default_plugins() -> Vec<Box<dyn Plugin>> {
         Box::new(PhysicsPlugin),
         Box::new(AnimationPlugin),
         Box::new(AudioPlugin),
+        Box::new(UiPlugin),
         Box::new(StandardAssetsPlugin),
     ]
 }
@@ -99,6 +115,10 @@ pub mod prelude {
         AssetServer, Handle, Material, Mesh, PrimitiveType, ShaderKind, SurfaceType, Texture2D,
     };
     pub use oxide_audio::{Audio, AudioExt, AudioListener, AudioSource};
+    pub use oxide_ui::{
+        Anchor, Canvas, Gui, GuiExt, TextAlign, UIButton, UIImage, UISlider, UIText, UIToggle, egui,
+    };
+
     pub use oxide_core::{Reflect, Time, debug_log, debug_log_error, debug_log_warning};
     pub use oxide_input::{
         CursorLockMode, GamepadAxis, GamepadButton, Input, KeyCode, MouseButton,

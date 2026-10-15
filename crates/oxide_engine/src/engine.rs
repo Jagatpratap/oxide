@@ -32,6 +32,7 @@ pub fn init_world(world: &mut World, project_root: std::path::PathBuf) {
 }
 
 pub struct Engine {
+    pub gui: crate::gui::GuiLayer,
     pub window: Arc<Window>,
     pub gpu: Gpu,
     pub surface: WindowSurface,
@@ -63,7 +64,10 @@ impl Engine {
         let size = window.inner_size();
         let surface = WindowSurface::new(&gpu, surface, size.width, size.height)?;
         let renderer = SceneRenderer::new(&gpu);
+        let mut world = world;
+        let gui = crate::gui::GuiLayer::new(&window, &gpu, surface.format(), &mut world);
         let mut e = Self {
+            gui,
             window,
             gpu,
             surface,
@@ -116,6 +120,7 @@ impl Engine {
         if let Some(d) = self.world.try_resource_mut::<DebugDraw>() {
             d.lines.retain(|l| l.until > now);
         }
+        self.gui.begin(&self.window, &mut self.world);
         let step = self.paused && self.pending_steps > 0;
         if !self.paused || step {
             if step {
@@ -127,6 +132,8 @@ impl Engine {
         for s in &mut self.systems {
             s.always(&mut self.world);
         }
+        self.gui
+            .end(&self.window, &self.gpu, &mut self.renderer, &mut self.world);
         self.render();
         self.end_frame();
     }
@@ -207,6 +214,11 @@ impl Engine {
         self.stats =
             self.renderer
                 .render(&self.gpu, assets, &rf, &view, self.surface.format(), w, h);
+        let ui_view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(self.surface.format().remove_srgb_suffix()),
+            ..Default::default()
+        });
+        self.gui.draw(&self.gpu, &ui_view, w, h, w);
         self.window.pre_present_notify();
         self.gpu.queue.present(frame);
     }
@@ -223,9 +235,17 @@ impl Engine {
         let assets = self.world.resource::<AssetServer>();
         let renderer = &mut self.renderer;
         let gpu = &self.gpu;
-        let result = capture_frame(gpu, format, width, height, |view| {
+        let gui = &mut self.gui;
+        let window_width = self.surface.size().0;
+        let result = capture_frame(gpu, format, width, height, |view, texture| {
             renderer.render(gpu, assets, &rf, view, format, width, height);
+            let ui_view = texture.create_view(&wgpu::TextureViewDescriptor {
+                format: Some(format.remove_srgb_suffix()),
+                ..Default::default()
+            });
+            gui.draw(gpu, &ui_view, width, height, window_width);
         });
+
         // Restore window-sized targets for the next on-screen frame.
         result
     }

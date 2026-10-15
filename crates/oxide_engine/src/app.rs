@@ -217,8 +217,29 @@ impl ApplicationHandler<Wake> for Runner {
         let Some(engine) = self.engine.as_mut() else {
             return;
         };
+        // UI gets events first; ones it uses (clicks on buttons, typing in fields) don't
+        // reach the game. Releases always do, so keys can't get stuck.
+        let ui_used = engine.gui.on_window_event(&engine.window, &event);
+        let release = matches!(
+            &event,
+            WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Released
+        ) || matches!(
+            &event,
+            WindowEvent::MouseInput {
+                state: ElementState::Released,
+                ..
+            }
+        );
+        let locked =
+            engine.world.resource::<Input>().cursor_lock != oxide_input::CursorLockMode::None;
+        let to_game = !ui_used || release || locked;
         let input = engine.world.resource_mut::<Input>();
         match event {
+            WindowEvent::KeyboardInput { .. }
+            | WindowEvent::MouseInput { .. }
+            | WindowEvent::MouseWheel { .. }
+                if !to_game => {}
+
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
                 input.screen_height = size.height as f32;

@@ -44,7 +44,7 @@ pub fn capture_frame(
     format: wgpu::TextureFormat,
     width: u32,
     height: u32,
-    draw: impl FnOnce(&wgpu::TextureView),
+    draw: impl FnOnce(&wgpu::TextureView, &wgpu::Texture),
 ) -> Result<CapturedImage, String> {
     use wgpu::TextureFormat as F;
     let bgra = match format {
@@ -70,7 +70,7 @@ pub fn capture_frame(
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT
             | wgpu::TextureUsages::COPY_SRC
             | wgpu::TextureUsages::TEXTURE_BINDING,
-        view_formats: &[],
+        view_formats: &[format.remove_srgb_suffix()],
     });
     let view = texture.create_view(&Default::default());
     let unpadded = width * 4;
@@ -83,7 +83,8 @@ pub fn capture_frame(
         mapped_at_creation: false,
     });
 
-    draw(&view);
+    draw(&view, &texture);
+
     let mut encoder = gpu.device.create_command_encoder(&Default::default());
     encoder.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {

@@ -216,6 +216,8 @@ pub fn vehicle(world: &mut World) {
         Vector3::new(0.0, 0.5, 0.0),
         Color::rgb(0.85, 0.08, 0.06),
     );
+    vehicle_hud(world, car);
+
     world.add_component(
         cam,
         FollowCamera {
@@ -349,4 +351,100 @@ pub fn character(world: &mut World) {
         set_material(world, c, crate_mat.clone());
         world.add_component(c, Rigidbody::with_mass(10.0));
     }
+}
+
+/// Sample HUD script: shows the target car's speed on Canvas components and a small
+/// immediate-mode (OnGUI-style) help panel.
+#[derive(Clone, Debug, Default, Reflect)]
+pub struct CarHud {
+    pub car: Option<GameObjectId>,
+    pub speed_text: Option<GameObjectId>,
+    pub rpm_bar: Option<GameObjectId>,
+}
+
+impl Component for CarHud {
+    fn update(&mut self, ctx: &mut Ctx) {
+        let Some(car) = self.car else { return };
+        let speed = ctx
+            .world
+            .get_component::<CarController>(car)
+            .map_or(0.0, |c| c.speed_kmh());
+        if let Some(t) = self
+            .speed_text
+            .and_then(|id| ctx.world.get_component_mut::<UIText>(id))
+        {
+            t.text = format!("{:>3.0} km/h", speed.abs());
+        }
+        let pitch = ctx
+            .world
+            .get_component::<AudioSource>(car)
+            .map_or(0.0, |a| a.pitch);
+        if let Some(img) = self
+            .rpm_bar
+            .and_then(|id| ctx.world.get_component_mut::<UIImage>(id))
+        {
+            img.fill_amount = ((pitch - 0.7) / 1.9).clamp(0.0, 1.0);
+            img.color = Color::lerp(
+                Color::rgb(0.2, 0.9, 0.3),
+                Color::rgb(1.0, 0.25, 0.1),
+                img.fill_amount,
+            );
+        }
+        if let Some(gui) = ctx.gui() {
+            egui::Window::new("Controls")
+                .anchor(egui::Align2::LEFT_TOP, [16.0, 16.0])
+                .resizable(false)
+                .collapsible(true)
+                .show(&gui, |ui| {
+                    ui.label("W/S: throttle / brake & reverse");
+                    ui.label("A/D: steer    Space: handbrake");
+                    ui.label(format!(
+                        "FPS: {:.0}",
+                        1.0 / ctx.time().smooth_delta_time().max(1e-4)
+                    ));
+                });
+        }
+    }
+}
+
+fn vehicle_hud(world: &mut World, car: GameObjectId) {
+    let canvas = world.create("Canvas");
+    world.add_component(canvas, Canvas::default());
+    let speed = world.create("Speed");
+    world.set_parent(speed, Some(canvas), false).unwrap();
+    world.add_component(
+        speed,
+        UIText {
+            text: "0 km/h".into(),
+            font_size: 64.0,
+            bold: true,
+            anchor: Anchor::BottomRight,
+            position: Vector2::new(-60.0, 90.0),
+            alignment: TextAlign::Right,
+            ..Default::default()
+        },
+    );
+    let bar = world.create("RPM Bar");
+    world.set_parent(bar, Some(canvas), false).unwrap();
+    world.add_component(
+        bar,
+        UIImage {
+            anchor: Anchor::BottomRight,
+            position: Vector2::new(-60.0, 50.0),
+            size: Vector2::new(320.0, 18.0),
+            background: Color::new(0.0, 0.0, 0.0, 0.5),
+            corner_radius: 6.0,
+            fill_amount: 0.0,
+            ..Default::default()
+        },
+    );
+    let hud = world.create("HUD");
+    world.add_component(
+        hud,
+        CarHud {
+            car: Some(car),
+            speed_text: Some(speed),
+            rpm_bar: Some(bar),
+        },
+    );
 }

@@ -100,6 +100,9 @@ impl WindowSurface {
             .ok_or(GpuError::UnsupportedSurface)?;
         config.format = format;
         config.present_mode = wgpu::PresentMode::AutoVsync;
+        // A linear view of the same texture for UI drawn in gamma space (egui).
+        config.view_formats = vec![format.remove_srgb_suffix()];
+
         surface.configure(&gpu.device, &config);
         Ok(Self { surface, config })
     }
