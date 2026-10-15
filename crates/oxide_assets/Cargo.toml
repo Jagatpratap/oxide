@@ -9,5 +9,6 @@ license.workspace = true
 oxide_math.workspace = true
 oxide_core.workspace = true
 serde.workspace = true
+serde_yaml_ng.workspace = true
 image.workspace = true
 gltf.workspace = true

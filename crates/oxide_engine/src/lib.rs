@@ -10,6 +10,7 @@ pub mod input_map;
 pub mod mcp_animation;
 pub mod mcp_audio;
 pub mod mcp_physics;
+pub mod mcp_prefabs;
 pub mod mcp_terrain;
 pub mod mcp_tools;
 pub mod objects;
@@ -202,9 +203,23 @@ pub fn load_scene(
         world.clear(true);
         world.scene_name = file.name.clone();
         world.scene_path = Some(path.to_owned());
+        // Lighting settings belong to the scene (Unity's Lighting window).
+        use oxide_core::reflect::Reflect;
+        let mut rs = oxide_scene::RenderSettings::default();
+        for (k, v) in &file.render_settings {
+            if let Err(e) = rs.set_field(k, v.clone()) {
+                warnings.push(format!("render settings {k}: {e}"));
+            }
+        }
+        world.resources.insert(rs);
     }
     let (_, w) = world.spawn(&file, None);
     warnings.extend(w);
+    // Bring in changes made to prefabs since the scene was saved.
+    let updated = world.update_prefab_instances(&file.prefabs);
+    if updated > 0 {
+        oxide_core::debug_log!("Updated {updated} prefab instance(s) from their prefabs");
+    }
     for w in &warnings {
         oxide_core::debug_log_warning!("{w}");
     }
@@ -219,7 +234,19 @@ pub fn save_scene(world: &mut oxide_scene::World, path: &str) -> Result<usize, S
         .and_then(|s| s.to_str())
         .unwrap_or("Scene")
         .to_owned();
-    let file = world.serialize(&[], &name);
+    let mut file = world.serialize(&[], &name);
+    use oxide_core::reflect::Reflect;
+    for w in world.persist_runtime_assets(&mut file, &oxide_scene::prefab::asset_folder(path)) {
+        oxide_core::debug_log_warning!("{w}");
+    }
+    file.prefabs = world.prefab_snapshots();
+    file.render_settings = world
+        .resource::<oxide_scene::RenderSettings>()
+        .fields()
+        .into_iter()
+        .filter(|(k, _)| *k != "sun")
+        .map(|(k, v)| (k.to_owned(), v))
+        .collect();
     let full = world
         .resource::<oxide_assets::AssetServer>()
         .full_path(path);

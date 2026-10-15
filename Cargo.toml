@@ -47,7 +47,7 @@ serde_yaml_ng = "0.10"
 egui = "0.36"
 egui-wgpu = "0.36"
 egui-winit = { version = "0.36", default-features = false, features = ["clipboard", "links"] }
-egui_dock = "0.21"
+egui_dock = { version = "0.21", features = ["serde"] }
 
 [profile.dev.package."*"]
 opt-level = 2

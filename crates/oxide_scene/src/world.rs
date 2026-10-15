@@ -75,6 +75,8 @@ pub struct GameObject {
     destroy_pending: bool,
     /// Prefab asset this object was instantiated from (root of the instance only).
     pub prefab_source: Option<String>,
+    /// For objects in a prefab instance: the id of the matching object in the prefab asset.
+    pub prefab_link: Option<u64>,
 }
 
 impl GameObject {
@@ -311,6 +313,7 @@ impl World {
             components: Vec::new(),
             destroy_pending: false,
             prefab_source: None,
+            prefab_link: None,
         };
         let id = match self.free.pop() {
             Some(i) => {

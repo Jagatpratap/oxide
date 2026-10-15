@@ -2,3 +2,5 @@
 *.png
 !docs/**/*.png
 .DS_Store
+/Assets/
+/Library/

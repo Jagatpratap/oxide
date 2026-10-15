@@ -31,7 +31,7 @@ use oxide_scene::{GameObjectId, Light, LightType, World};
 use oxide_ui::Gui;
 
 /// A dockable editor window.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Tab {
     Scene,
     Game,
@@ -127,6 +127,13 @@ pub enum Action {
     OpenTab(Tab),
     ResetLayout,
     InstantiateModel(String),
+    InstantiatePrefab(String),
+    /// Saves the active object as a prefab at this path.
+    CreatePrefab(String),
+    CreatePrefabVariant(String),
+    ApplyPrefab,
+    RevertPrefab,
+    UnpackPrefab,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -266,6 +273,9 @@ pub struct Editor {
     dock: DockState<Tab>,
     pub st: EditorState,
     styled: bool,
+    /// Last saved layout (JSON) and when it was last checked.
+    saved_layout: Option<String>,
+    layout_checked: f64,
 }
 
 impl Default for Editor {
@@ -279,7 +289,8 @@ fn default_layout() -> DockState<Tab> {
     let tree = dock.main_surface_mut();
     let [center, _] = tree.split_right(NodeIndex::root(), 0.77, vec![Tab::Inspector]);
     let [center, _] = tree.split_below(center, 0.68, vec![Tab::Project, Tab::Console]);
-    let [_, _] = tree.split_left(center, 0.76, vec![Tab::Hierarchy]);
+    // For left/above splits egui_dock's `fraction` is the new (left/top) node's share.
+    let [_, _] = tree.split_left(center, 0.24, vec![Tab::Hierarchy]);
     dock
 }
 
@@ -325,6 +336,52 @@ impl Editor {
             dock: default_layout(),
             st: EditorState::new(),
             styled: false,
+            saved_layout: None,
+            layout_checked: 0.0,
+        }
+    }
+
+    fn layout_path(engine: &Engine) -> std::path::PathBuf {
+        engine
+            .world
+            .resource::<AssetServer>()
+            .full_path("Library/Oxide/EditorLayout.json")
+    }
+
+    /// Restores the window layout saved by a previous session (Unity keeps it in Library/).
+    fn load_layout(&mut self, engine: &Engine) {
+        let Ok(text) = std::fs::read_to_string(Self::layout_path(engine)) else {
+            return;
+        };
+        match serde_json::from_str::<DockState<Tab>>(&text) {
+            Ok(dock) if dock.iter_all_tabs().next().is_some() => {
+                self.dock = dock;
+                self.saved_layout = Some(text);
+            }
+            Ok(_) => {}
+            Err(e) => debug_log_warning!("ignoring saved editor layout: {e}"),
+        }
+    }
+
+    /// Saves the layout when it changed (checked every couple of seconds).
+    fn save_layout(&mut self, engine: &Engine) {
+        let now = oxide_core::time::realtime_since_startup();
+        if now - self.layout_checked < 2.0 {
+            return;
+        }
+        self.layout_checked = now;
+        let Ok(text) = serde_json::to_string(&self.dock) else {
+            return;
+        };
+        if self.saved_layout.as_deref() == Some(text.as_str()) {
+            return;
+        }
+        let path = Self::layout_path(engine);
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if std::fs::write(&path, &text).is_ok() {
+            self.saved_layout = Some(text);
         }
     }
 
@@ -548,6 +605,54 @@ impl Editor {
             Action::ResetLayout => {
                 self.dock = default_layout();
                 return Ok("Layout reset".into());
+            }
+            Action::InstantiatePrefab(path) => {
+                st.record(w, "Instantiate Prefab", None, now);
+                let id = w.instantiate_prefab(&path, None)?;
+                w.set_position(id, st.scene_cam.pivot);
+                st.select(id);
+                format!("Instantiated {path}")
+            }
+            Action::CreatePrefab(path) => {
+                let id = st.active().ok_or("select an object first")?;
+                st.record(w, "Create Prefab", None, now);
+                w.create_prefab(id, &path)?;
+                st.project.cache = None;
+                format!("Created prefab {path}")
+            }
+            Action::CreatePrefabVariant(path) => {
+                let id = st.active().ok_or("select an object first")?;
+                let root = w
+                    .prefab_instance_root(id)
+                    .ok_or("the selection is not a prefab instance")?;
+                st.record(w, "Create Prefab Variant", None, now);
+                w.create_prefab_variant(root, &path)?;
+                st.project.cache = None;
+                format!("Created prefab variant {path}")
+            }
+            Action::ApplyPrefab => {
+                let id = st.active().ok_or("select a prefab instance first")?;
+                st.record(w, "Apply Prefab", None, now);
+                let n = w.apply_prefab_instance(id)?;
+                st.inspector.invalidate_overrides();
+                format!("Applied prefab; {n} other instance(s) updated")
+            }
+            Action::RevertPrefab => {
+                let id = st.active().ok_or("select a prefab instance first")?;
+                st.record(w, "Revert Prefab", None, now);
+                w.revert_prefab_instance(id)?;
+                st.inspector.invalidate_overrides();
+                "Reverted prefab overrides".into()
+            }
+            Action::UnpackPrefab => {
+                let id = st.active().ok_or("select a prefab instance first")?;
+                let root = w
+                    .prefab_instance_root(id)
+                    .ok_or("the selection is not a prefab instance")?;
+                st.record(w, "Unpack Prefab", None, now);
+                w.unpack_prefab(root);
+                st.inspector.invalidate_overrides();
+                "Unpacked prefab".into()
             }
             Action::InstantiateModel(path) => {
                 let h = w
@@ -865,6 +970,7 @@ impl Shell for Editor {
         let ctx = engine.world.resource::<Gui>().ctx().clone();
         if !self.styled {
             theme::apply(&ctx);
+            self.load_layout(engine);
             self.styled = true;
         }
         {
@@ -916,6 +1022,7 @@ impl Shell for Editor {
             }
         }
         self.update_game_viewport(engine, &ctx);
+        self.save_layout(engine);
 
         let title = format!(
             "{}{} - Oxide Editor{}",

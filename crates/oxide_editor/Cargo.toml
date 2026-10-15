@@ -21,3 +21,4 @@ oxide_terrain.workspace = true
 egui.workspace = true
 egui_dock.workspace = true
 serde_json.workspace = true
+serde.workspace = true

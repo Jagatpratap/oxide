@@ -51,6 +51,10 @@ pub struct ObjectData {
     pub scale: [f32; 3],
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefab: Option<String>,
+    /// Id of the corresponding object inside its prefab asset (Unity's
+    /// `m_CorrespondingSourceObject`), for objects that belong to a prefab instance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefab_id: Option<u64>,
     #[serde(default)]
     pub components: Vec<ComponentData>,
 }
@@ -60,7 +64,17 @@ pub struct SceneFile {
     #[serde(default)]
     pub format: u32,
     pub name: String,
+    /// Prefab variants: the base prefab this one is built on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
     pub objects: Vec<ObjectData>,
+    /// Contents of the prefabs used here, as they were when this file was saved. On load,
+    /// instances are updated with whatever changed in the prefab since then.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub prefabs: BTreeMap<String, SceneFile>,
+    /// Scene lighting and environment (`RenderSettings` fields).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub render_settings: BTreeMap<String, Value>,
 }
 
 pub const SCENE_FORMAT: u32 = 1;
@@ -76,7 +90,7 @@ impl SceneFile {
 }
 
 /// Rewrites object references inside a value using `map`; unmapped references become null.
-fn remap(v: Value, map: &dyn Fn(u64) -> Option<u64>) -> Value {
+pub(crate) fn remap(v: Value, map: &dyn Fn(u64) -> Option<u64>) -> Value {
     match v {
         Value::ObjectRef(b) => match map(b) {
             Some(n) => Value::ObjectRef(n),
@@ -149,6 +163,7 @@ impl World {
                     rotation: t.local_rotation.to_array(),
                     scale: t.local_scale.to_array(),
                     prefab: o.prefab_source.clone(),
+                    prefab_id: o.prefab_link,
                     components,
                 })
             })
@@ -156,7 +171,10 @@ impl World {
         SceneFile {
             format: SCENE_FORMAT,
             name: name.into(),
+            base: None,
             objects,
+            prefabs: BTreeMap::new(),
+            render_settings: BTreeMap::new(),
         }
     }
 
@@ -180,6 +198,7 @@ impl World {
             o.layer = od.layer;
             o.is_static = od.is_static;
             o.prefab_source = od.prefab.clone();
+            o.prefab_link = od.prefab_id;
             o.transform.local_position = Vector3::from_array(od.position);
             o.transform.local_rotation = Quaternion::from_array(od.rotation).normalize();
             o.transform.local_scale = Vector3::from_array(od.scale);
@@ -248,11 +267,23 @@ impl World {
         if !self.is_alive(original) {
             return None;
         }
-        let subtree = self.descendants(original);
-        let mut file = self.serialize(&[original], "");
-        // `serialize` nulls references to objects outside the subtree; restore those.
+        let mut file = self.serialize_keep_external(original);
+        if let Some(root) = file.objects.first_mut() {
+            root.name.push_str("(Clone)");
+            root.parent = None;
+        }
+        let parent = self.parent(original);
+        let (roots, _) = self.spawn(&file, parent);
+        roots.first().copied()
+    }
+
+    /// Serializes `root`'s subtree, keeping references to objects outside it (tagged with
+    /// `EXTERNAL_BIT`) instead of nulling them.
+    pub(crate) fn serialize_keep_external(&self, root: GameObjectId) -> SceneFile {
+        let subtree = self.descendants(root);
+        let mut file = self.serialize(&[root], "");
         for (od, &src) in file.objects.iter_mut().zip(&subtree) {
-            let o = self.get(src)?;
+            let Some(o) = self.get(src) else { continue };
             for (cd, e) in od.components.iter_mut().zip(
                 o.components
                     .iter()
@@ -268,13 +299,7 @@ impl World {
                 }
             }
         }
-        if let Some(root) = file.objects.first_mut() {
-            root.name.push_str("(Clone)");
-            root.parent = None;
-        }
-        let parent = self.parent(original);
-        let (roots, _) = self.spawn(&file, parent);
-        roots.first().copied()
+        file
     }
 }
 
@@ -296,3 +321,116 @@ fn merge_external(serialized: Option<Value>, original: Value) -> Value {
 
 /// Marks an object reference that points outside a copied hierarchy (kept verbatim).
 pub(crate) const EXTERNAL_BIT: u64 = 1 << 63;
+
+impl World {
+    /// Writes materials created in code (`runtime:Material/...`) that `file` uses to `.mat`
+    /// files in `folder`, and points `file` and the scene's components at them (Unity keeps
+    /// materials as assets, so a saved scene or prefab must not depend on code having run).
+    /// Returns warnings for other code-created assets, which aren't saved yet.
+    pub fn persist_runtime_assets(&mut self, file: &mut SceneFile, folder: &str) -> Vec<String> {
+        fn collect(v: &Value, out: &mut Vec<String>) {
+            match v {
+                Value::Asset(p) if p.starts_with("runtime:") => out.push(p.clone()),
+                Value::List(items) => items.iter().for_each(|i| collect(i, out)),
+                Value::Object(m) => m.values().for_each(|i| collect(i, out)),
+                _ => {}
+            }
+        }
+        fn rewrite(v: Value, map: &HashMap<String, String>) -> Value {
+            match v {
+                Value::Asset(p) => Value::Asset(map.get(&p).cloned().unwrap_or(p)),
+                Value::List(items) => {
+                    Value::List(items.into_iter().map(|i| rewrite(i, map)).collect())
+                }
+                Value::Object(m) => {
+                    Value::Object(m.into_iter().map(|(k, i)| (k, rewrite(i, map))).collect())
+                }
+                other => other,
+            }
+        }
+        let mut used = Vec::new();
+        for o in &file.objects {
+            for c in &o.components {
+                c.fields.values().for_each(|v| collect(v, &mut used));
+            }
+        }
+        used.sort();
+        used.dedup();
+        let mut map = HashMap::new();
+        let mut warnings = Vec::new();
+        let mut taken = std::collections::HashSet::new();
+        for p in used {
+            let assets = self.resource_mut::<oxide_assets::AssetServer>();
+            let Some(m) = assets
+                .materials
+                .handle_of(&p)
+                .and_then(|h| assets.materials.get(&h).cloned())
+            else {
+                warnings.push(format!(
+                    "{p} was created in code and is not saved with the scene; it will be missing when the scene is reloaded"
+                ));
+                continue;
+            };
+            let base: String = m
+                .name
+                .chars()
+                .map(|c| {
+                    if c.is_alphanumeric() || " -_".contains(c) {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            let base = if base.trim().is_empty() {
+                "Material".to_owned()
+            } else {
+                base.trim().to_owned()
+            };
+            let mut path = format!("{folder}/{base}.mat");
+            let mut n = 1;
+            while taken.contains(&path) || assets.full_path(&path).exists() {
+                path = format!("{folder}/{base} {n}.mat");
+                n += 1;
+            }
+            match assets.save_material(&path, &m) {
+                Ok(_) => {
+                    taken.insert(path.clone());
+                    map.insert(p, path);
+                }
+                Err(e) => warnings.push(e),
+            }
+        }
+        if map.is_empty() {
+            return warnings;
+        }
+        for o in &mut file.objects {
+            for c in &mut o.components {
+                for v in c.fields.values_mut() {
+                    *v = rewrite(std::mem::replace(v, Value::Null), &map);
+                }
+            }
+        }
+        // The open scene now uses the saved files too.
+        for id in self.hierarchy_order() {
+            let cids: Vec<_> = self
+                .get(id)
+                .map(|o| o.components.iter().map(|c| c.id).collect())
+                .unwrap_or_default();
+            for cid in cids {
+                let Some(c) = self.component_dyn_mut(id, cid) else {
+                    continue;
+                };
+                let fields: Vec<(&'static str, Value)> = c.fields().into_iter().collect();
+                for (k, v) in fields {
+                    let mut found = Vec::new();
+                    collect(&v, &mut found);
+                    if found.iter().any(|f| map.contains_key(f)) {
+                        let _ = c.set_field(k, rewrite(v, &map));
+                    }
+                }
+            }
+        }
+        warnings
+    }
+}

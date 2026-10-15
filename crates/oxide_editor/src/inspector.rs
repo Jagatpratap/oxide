@@ -10,7 +10,7 @@ use oxide_assets::AssetServer;
 use oxide_core::reflect::{FieldInfo, Value, ValueKind};
 use oxide_engine::Engine;
 use oxide_math::{Quaternion, QuaternionExt, Vector3};
-use oxide_scene::{ComponentId, GameObjectId, World};
+use oxide_scene::{ComponentId, GameObjectId, ObjectProperty, PrefabOverride, World};
 use std::collections::{BTreeMap, HashMap};
 
 const TAGS: &[&str] = &[
@@ -31,6 +31,18 @@ pub struct InspectorState {
     add_search: String,
     /// Copied component values (Copy/Paste Component Values).
     clipboard: Option<(String, BTreeMap<String, Value>)>,
+    /// Overrides of the selected object's prefab instance: (instance root, when computed).
+    overrides: Option<(GameObjectId, f64, Vec<PrefabOverride>)>,
+}
+
+impl InspectorState {
+    pub fn invalidate_overrides(&mut self) {
+        self.overrides = None;
+    }
+
+    fn overrides(&self) -> &[PrefabOverride] {
+        self.overrides.as_ref().map_or(&[], |o| &o.2)
+    }
 }
 
 /// `field_of_view` / `fieldOfView` → `Field Of View` (Unity `ObjectNames.NicifyVariableName`).
@@ -83,6 +95,7 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
         ui.weak("Select a GameObject to inspect it.");
         return;
     };
+    refresh_overrides(st, &mut engine.world, id);
     let mut edits: Vec<(Edit, u64)> = Vec::new();
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -95,6 +108,7 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
                 ));
             }
             header(ui, w, id, &mut edits);
+            prefab_header(ui, st, w, id);
             ui.separator();
             transform(ui, st, w, id, &mut edits);
             components(ui, st, w, id, &mut edits);
@@ -163,18 +177,156 @@ fn header(ui: &mut egui::Ui, w: &World, id: GameObjectId, edits: &mut Vec<(Edit,
             edits.push((Edit::Layer(layer), key(id, "layer")));
         }
     });
-    if let Some(p) = &o.prefab_source {
-        ui.horizontal(|ui| {
-            ui.label("Prefab");
-            ui.label(RichText::new(p).color(Color32::from_rgb(140, 180, 255)));
-        });
+}
+
+/// Recomputes the prefab overrides shown for the selection (twice a second at most).
+fn refresh_overrides(st: &mut EditorState, w: &mut World, id: GameObjectId) {
+    let Some(root) = w.prefab_instance_root(id) else {
+        st.inspector.overrides = None;
+        return;
+    };
+    let now = oxide_core::time::realtime_since_startup();
+    let fresh = st
+        .inspector
+        .overrides
+        .as_ref()
+        .is_some_and(|(r, t, _)| *r == root && now - t < 0.5);
+    if !fresh {
+        let ovs = w.prefab_overrides(root).unwrap_or_default();
+        st.inspector.overrides = Some((root, now, ovs));
     }
 }
 
-fn vec3_row(ui: &mut egui::Ui, label: &str, v: &mut Vector3, speed: f64) -> bool {
+const PREFAB_BLUE: Color32 = Color32::from_rgb(140, 180, 255);
+
+fn describe(o: &PrefabOverride) -> String {
+    match o {
+        PrefabOverride::Property { property, .. } => format!("{property:?}")
+            .split('(')
+            .next()
+            .unwrap_or("Property")
+            .to_owned(),
+        PrefabOverride::Field {
+            component, field, ..
+        } => {
+            format!("{} › {}", nicify(component), nicify(field))
+        }
+        PrefabOverride::Enabled { component, .. } => format!("{} › Enabled", nicify(component)),
+        PrefabOverride::AddedComponent { component, .. } => {
+            format!("+ {}", nicify(&component.type_name))
+        }
+        PrefabOverride::RemovedComponent { component, .. } => format!("− {}", nicify(component)),
+        PrefabOverride::AddedObject { data } => format!("+ {}", data.name),
+        PrefabOverride::RemovedObject { .. } => "− (object)".into(),
+    }
+}
+
+/// Unity's prefab bar: asset, Overrides menu (Apply All / Revert All), Unpack, variants.
+fn prefab_header(ui: &mut egui::Ui, st: &mut EditorState, w: &World, id: GameObjectId) {
+    let Some(root) = w.prefab_instance_root(id) else {
+        if let Some(src) = w.get(id).and_then(|o| o.prefab_source.clone()) {
+            ui.horizontal(|ui| {
+                ui.label("Model");
+                ui.label(RichText::new(src).color(PREFAB_BLUE));
+            });
+        }
+        return;
+    };
+    let path = w
+        .get(root)
+        .and_then(|o| o.prefab_source.clone())
+        .unwrap_or_default();
+    ui.horizontal(|ui| {
+        ui.label("Prefab");
+        if ui
+            .link(RichText::new(&path).color(PREFAB_BLUE))
+            .on_hover_text("Show in Project window")
+            .clicked()
+        {
+            st.project.selected = Some(path.clone());
+            if let Some((dir, _)) = path.rsplit_once('/') {
+                st.project.folder = dir.to_owned();
+            }
+            st.actions.push(Action::OpenTab(crate::Tab::Project));
+        }
+    });
+    if root != id {
+        ui.horizontal(|ui| {
+            ui.weak(format!(
+                "Part of prefab instance {}",
+                w.get(root).map_or("", |o| o.name.as_str())
+            ));
+            if ui.small_button("Select Root").clicked() {
+                st.select(root);
+            }
+        });
+    }
+    let count = st.inspector.overrides().len();
+    ui.horizontal(|ui| {
+        let label = if count == 0 {
+            "No Overrides".to_owned()
+        } else {
+            format!("Overrides ({count})")
+        };
+        ui.menu_button(label, |ui| {
+            ui.set_min_width(240.0);
+            if count == 0 {
+                ui.weak("This instance matches its prefab.");
+            }
+            egui::ScrollArea::vertical()
+                .max_height(240.0)
+                .show(ui, |ui| {
+                    for o in st.inspector.overrides() {
+                        ui.label(describe(o));
+                    }
+                });
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(count > 0, egui::Button::new("Revert All"))
+                    .clicked()
+                {
+                    st.actions.push(Action::RevertPrefab);
+                    ui.close();
+                }
+                if ui
+                    .add_enabled(count > 0, egui::Button::new("Apply All"))
+                    .clicked()
+                {
+                    st.actions.push(Action::ApplyPrefab);
+                    ui.close();
+                }
+            });
+        });
+        if ui
+            .button("Unpack")
+            .on_hover_text("Unpack Completely")
+            .clicked()
+        {
+            st.actions.push(Action::UnpackPrefab);
+        }
+        if ui
+            .button("Create Variant")
+            .on_hover_text("Save this instance as a variant of its prefab")
+            .clicked()
+        {
+            let base = path.trim_end_matches(".prefab");
+            st.actions.push(Action::CreatePrefabVariant(format!(
+                "{base} Variant.prefab"
+            )));
+        }
+    });
+}
+
+fn vec3_row(ui: &mut egui::Ui, label: &str, v: &mut Vector3, speed: f64, bold: bool) -> bool {
     let mut changed = false;
     ui.horizontal(|ui| {
-        ui.add_sized([62.0, 18.0], egui::Label::new(label));
+        let text = if bold {
+            RichText::new(label).strong().color(Color32::WHITE)
+        } else {
+            RichText::new(label)
+        };
+        ui.add_sized([62.0, 18.0], egui::Label::new(text));
         // Each axis: letter + spacing + field + spacing.
         let gap = ui.spacing().item_spacing.x;
         let wdt = ((ui.available_width() - 3.0 * (10.0 + 2.0 * gap)) / 3.0).max(30.0);
@@ -198,12 +350,23 @@ fn transform(
     edits: &mut Vec<(Edit, u64)>,
 ) {
     let t = *w.transform(id).expect("alive");
+    let link = w.get(id).and_then(|o| o.prefab_link);
+    let has = |want: fn(&ObjectProperty) -> bool| {
+        st.inspector.overrides().iter().any(|o| {
+            matches!(o, PrefabOverride::Property { object, property } if Some(*object) == link && want(property))
+        })
+    };
+    let bold = [
+        has(|p| matches!(p, ObjectProperty::Position(_))),
+        has(|p| matches!(p, ObjectProperty::Rotation(_))),
+        has(|p| matches!(p, ObjectProperty::Scale(_))),
+    ];
     let resp = egui::CollapsingHeader::new(RichText::new("Transform").strong())
         .id_salt("transform")
         .default_open(true)
         .show(ui, |ui| {
             let mut p = t.local_position;
-            if vec3_row(ui, "Position", &mut p, 0.05) {
+            if vec3_row(ui, "Position", &mut p, 0.05, bold[0]) {
                 edits.push((Edit::Position(p), key(id, "position")));
             }
             let euler = match st.inspector.euler.get(&id) {
@@ -217,13 +380,13 @@ fn transform(
                 }
             };
             let mut e = euler;
-            if vec3_row(ui, "Rotation", &mut e, 0.5) {
+            if vec3_row(ui, "Rotation", &mut e, 0.5, bold[1]) {
                 let q = Quaternion::euler_v(e);
                 st.inspector.euler.insert(id, (q, e));
                 edits.push((Edit::Rotation(q), key(id, "rotation")));
             }
             let mut s = t.local_scale;
-            if vec3_row(ui, "Scale", &mut s, 0.02) {
+            if vec3_row(ui, "Scale", &mut s, 0.02, bold[2]) {
                 edits.push((Edit::Scale(s), key(id, "scale")));
             }
         });
@@ -249,9 +412,33 @@ fn components(
     edits: &mut Vec<(Edit, u64)>,
 ) {
     let o = w.get(id).expect("alive");
+    let link = o.prefab_link;
     let list = o.component_list();
     let count = list.len();
+    let mut per_type: HashMap<&str, usize> = HashMap::new();
     for (index, (cid, type_name, enabled)) in list.into_iter().enumerate() {
+        let nth = {
+            let n = per_type.entry(type_name).or_default();
+            *n += 1;
+            *n - 1
+        };
+        let overridden: Vec<String> = st
+            .inspector
+            .overrides()
+            .iter()
+            .filter_map(|ov| match ov {
+                PrefabOverride::Field {
+                    object,
+                    component,
+                    index,
+                    field,
+                    ..
+                } if Some(*object) == link && component == type_name && *index == nth => {
+                    Some(field.clone())
+                }
+                _ => None,
+            })
+            .collect();
         let Some(comp) = w.component_dyn(id, cid) else {
             continue;
         };
@@ -281,9 +468,27 @@ fn components(
             for (f, v) in values {
                 let mut v2 = v.clone();
                 let label = nicify(f.name);
+                let is_override = overridden.iter().any(|x| x == f.name);
                 let changed = ui
                     .horizontal(|ui| {
-                        let lr = ui.add_sized([130.0, 18.0], egui::Label::new(&label).truncate());
+                        let text = if is_override {
+                            RichText::new(&label).strong().color(Color32::WHITE)
+                        } else {
+                            RichText::new(&label)
+                        };
+                        let lr = ui.add_sized([130.0, 18.0], egui::Label::new(text).truncate());
+                        if is_override {
+                            // Unity marks overridden properties with a blue bar.
+                            let r = lr.rect;
+                            ui.painter().rect_filled(
+                                egui::Rect::from_min_size(
+                                    egui::pos2(ui.max_rect().left() - 4.0, r.top()),
+                                    egui::vec2(2.0, r.height()),
+                                ),
+                                0.0,
+                                Color32::from_rgb(60, 140, 230),
+                            );
+                        }
                         if let Some(t) = f.tooltip {
                             lr.on_hover_text(t);
                         }

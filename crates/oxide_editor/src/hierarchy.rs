@@ -153,7 +153,7 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
                     ));
                 }
                 let active = o.active_in_hierarchy();
-                let prefab = o.prefab_source.is_some();
+                let prefab = o.prefab_source.is_some() || o.prefab_link.is_some();
                 let text_col = match (active, prefab) {
                     (true, true) => Color32::from_rgb(140, 180, 255),
                     (true, false) => Color32::from_gray(215),
@@ -289,6 +289,14 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
             let resp = ui.allocate_rect(rest, Sense::click());
             if let Some(payload) = resp.dnd_release_payload::<HierarchyDrag>() {
                 drop = Some((payload.0.clone(), None, DropAt::Into));
+            }
+            if let Some(payload) = resp.dnd_release_payload::<crate::project::AssetPayload>() {
+                let p = payload.0.to_ascii_lowercase();
+                if p.ends_with(".prefab") {
+                    actions.push(Action::InstantiatePrefab(payload.0.clone()));
+                } else if p.ends_with(".glb") || p.ends_with(".gltf") {
+                    actions.push(Action::InstantiateModel(payload.0.clone()));
+                }
             }
             if resp.clicked() {
                 st.selection.clear();

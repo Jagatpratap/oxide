@@ -19,7 +19,7 @@ pub struct ProjectState {
     search: String,
     new_folder: Option<String>,
     /// Cached listing and when it was read (seconds).
-    cache: Option<(String, f64, Vec<Entry>)>,
+    pub cache: Option<(String, f64, Vec<Entry>)>,
 }
 
 impl Default for ProjectState {
@@ -35,7 +35,7 @@ impl Default for ProjectState {
 }
 
 #[derive(Clone)]
-struct Entry {
+pub struct Entry {
     name: String,
     /// Project-relative path with `/` separators.
     path: String,
@@ -81,6 +81,25 @@ fn list_dir(root: &Path, rel: &str) -> Vec<Entry> {
             .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
     v
+}
+
+/// A file name made from an object name (no path separators).
+fn sanitize(name: &str) -> String {
+    let s: String = name
+        .chars()
+        .map(|c| {
+            if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    if s.trim().is_empty() {
+        "Prefab".into()
+    } else {
+        s.trim().to_owned()
+    }
 }
 
 /// Project-relative paths of files with `ext` under `Assets/`.
@@ -223,7 +242,9 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
                 .auto_shrink([false, false])
                 .show(ui, |ui| folder_tree(ui, &root, "Assets", &mut ps.folder, 0));
         });
-    egui::CentralPanel::default().show(ui, |ui| {
+    let folder = ps.folder.clone();
+    let mut new_prefab = None;
+    let central = egui::CentralPanel::default().show(ui, |ui| {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -284,6 +305,9 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
                             match kind(&e.name).0 {
                                 "Scene" => action = Some(Action::OpenScene(e.path.clone())),
                                 "Model" => action = Some(Action::InstantiateModel(e.path.clone())),
+                                "Prefab" => {
+                                    action = Some(Action::InstantiatePrefab(e.path.clone()))
+                                }
                                 _ => {}
                             }
                         }
@@ -297,6 +321,26 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
                 }
             });
     });
+    // Drop a Hierarchy object here to make it a prefab (Unity's way of creating prefabs).
+    if let Some(payload) = central
+        .response
+        .dnd_release_payload::<crate::hierarchy::HierarchyDrag>()
+        && let Some(&id) = payload.0.first()
+        && let Some(o) = engine.world.get(id)
+    {
+        let base = format!("{folder}/{}", sanitize(&o.name));
+        let mut path = format!("{base}.prefab");
+        let mut n = 1;
+        while root.join(&path).exists() {
+            path = format!("{base} {n}.prefab");
+            n += 1;
+        }
+        new_prefab = Some((id, path));
+    }
+    if let Some((id, path)) = new_prefab {
+        st.select(id);
+        st.actions.push(Action::CreatePrefab(path));
+    }
     if let Some(a) = action {
         st.actions.push(a);
     }

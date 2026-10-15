@@ -8,7 +8,9 @@ use crate::mesh::Mesh;
 use crate::model::Model;
 use crate::primitives::PrimitiveType;
 use crate::texture::Texture2D;
+use oxide_core::reflect::{Reflect, Value};
 use oxide_math::Color;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -121,6 +123,56 @@ impl AssetServer {
         crate::gltf_import::import_gltf(self, path, &bytes, base.as_deref())
     }
 
+    /// Loads (or reloads) a `.mat` material file (Unity's material asset).
+    pub fn load_material(&mut self, path: &str) -> Result<Handle<Material>, String> {
+        let bytes = self.read(path)?;
+        let text = String::from_utf8(bytes).map_err(|e| format!("{path}: {e}"))?;
+        let file: MaterialFile =
+            serde_yaml_ng::from_str(&text).map_err(|e| format!("{path}: {e}"))?;
+        let mut m = Material::default();
+        for (k, v) in file.fields {
+            if let Value::Asset(p) = &v
+                && let Err(e) = self.ensure_loaded(p)
+            {
+                oxide_core::debug_log_warning!("{path}: {e}");
+            }
+            if let Err(e) = m.set_field(&k, v) {
+                oxide_core::debug_log_warning!("{path}: {k}: {e}");
+            }
+        }
+        if m.name.is_empty() {
+            m.name = Path::new(path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("Material")
+                .to_owned();
+        }
+        Ok(self.materials.insert(path.to_owned(), m))
+    }
+
+    /// Writes `material` to a `.mat` file at `path` and stores it under that path.
+    pub fn save_material(
+        &mut self,
+        path: &str,
+        material: &Material,
+    ) -> Result<Handle<Material>, String> {
+        let file = MaterialFile {
+            shader: "Oxide/Lit".into(),
+            fields: material
+                .fields()
+                .into_iter()
+                .map(|(k, v)| (k.to_owned(), v))
+                .collect(),
+        };
+        let text = serde_yaml_ng::to_string(&file).map_err(|e| e.to_string())?;
+        let full = self.full_path(path);
+        if let Some(dir) = full.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        std::fs::write(&full, text).map_err(|e| format!("cannot write {}: {e}", full.display()))?;
+        Ok(self.materials.insert(path.to_owned(), material.clone()))
+    }
+
     pub fn load_audio(&mut self, path: &str) -> Result<Handle<AudioClip>, String> {
         let bytes = self.read(path)?;
         let name = Path::new(path)
@@ -160,6 +212,11 @@ impl AssetServer {
                     self.load_model(file)?;
                 }
             }
+            "mat" => {
+                if self.materials.handle_of(file).is_none() {
+                    self.load_material(file)?;
+                }
+            }
             "wav" | "ogg" | "mp3" | "flac" => {
                 if self.audio.handle_of(file).is_none() {
                     self.load_audio(file)?;
@@ -190,5 +247,40 @@ impl AssetServer {
         }
         out.sort();
         out
+    }
+}
+
+/// On-disk form of a `.mat` file: reflected fields by name.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct MaterialFile {
+    #[serde(default)]
+    shader: String,
+    fields: BTreeMap<String, Value>,
+}
+
+#[cfg(test)]
+mod material_file_tests {
+    use super::*;
+
+    #[test]
+    fn material_round_trips_through_a_file() {
+        let dir = std::env::temp_dir().join(format!("oxide-mat-{}", std::process::id()));
+        let mut a = AssetServer::new(&dir);
+        let mut m = Material::lit("Red Paint", Color::RED);
+        m.metallic = 0.7;
+        m.base_map = Some(Handle::from_path("builtin:grid"));
+        a.save_material("Assets/Red Paint.mat", &m).unwrap();
+
+        let mut b = AssetServer::new(&dir);
+        let h = b.load_material("Assets/Red Paint.mat").unwrap();
+        let back = b.materials.get(&h).unwrap();
+        assert_eq!(back.name, "Red Paint");
+        assert_eq!(back.base_color, Color::RED);
+        assert_eq!(back.metallic, 0.7);
+        assert_eq!(
+            back.base_map.as_ref().map(|h| h.path()),
+            Some("builtin:grid")
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

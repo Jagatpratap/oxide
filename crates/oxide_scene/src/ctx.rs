@@ -116,6 +116,31 @@ impl<'w> Ctx<'w> {
         Some(id)
     }
 
+    /// Unity `Instantiate(prefab)` for a prefab file (`Assets/Bullet.prefab`). Errors are
+    /// logged and give `None`.
+    pub fn instantiate_prefab(&mut self, path: &str) -> Option<GameObjectId> {
+        match self.world.instantiate_prefab(path, None) {
+            Ok(id) => Some(id),
+            Err(e) => {
+                oxide_core::debug_log_error!("{e}");
+                None
+            }
+        }
+    }
+
+    /// Unity `Instantiate(prefab, position, rotation)`.
+    pub fn instantiate_prefab_at(
+        &mut self,
+        path: &str,
+        position: Vector3,
+        rotation: Quaternion,
+    ) -> Option<GameObjectId> {
+        let id = self.instantiate_prefab(path)?;
+        self.world.set_position(id, position);
+        self.world.set_rotation(id, rotation);
+        Some(id)
+    }
+
     /// Unity `Destroy(obj)`.
     pub fn destroy(&mut self, id: GameObjectId) {
         self.world.destroy(id);

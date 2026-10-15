@@ -147,6 +147,22 @@ pub fn menu_items(world: &World) -> Vec<MenuItem> {
         item("Edit/Tools/Scale", "R", Action::SetTool(Tool::Scale)),
     ];
     v.extend(create_items("GameObject/"));
+    v.push(sep("GameObject"));
+    v.push(item(
+        "GameObject/Prefab/Apply All Overrides",
+        "",
+        Action::ApplyPrefab,
+    ));
+    v.push(item(
+        "GameObject/Prefab/Revert All Overrides",
+        "",
+        Action::RevertPrefab,
+    ));
+    v.push(item(
+        "GameObject/Prefab/Unpack Completely",
+        "",
+        Action::UnpackPrefab,
+    ));
     let mut comps: Vec<(String, String)> = world
         .registry
         .iter()

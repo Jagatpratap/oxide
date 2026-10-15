@@ -25,7 +25,7 @@ Typical flow: get_hierarchy → create_object / add_component / set_component �
 to look at the result (pass camera_position/look_at for any viewpoint) → get_console_logs \
 (min_type=Warning) to check for problems. Objects are referenced by id, name or \"Parent/Child\" path.";
 
-type Args = Map<String, Json>;
+pub type Args = Map<String, Json>;
 
 pub fn tool<F>(s: &mut McpServer, bus: &Arc<Bus>, def: ToolDef, f: F)
 where
@@ -1044,6 +1044,7 @@ pub fn build_server(bus: Arc<Bus>) -> McpServer {
     );
 
     crate::mcp_physics::register(&mut s, bus);
+    crate::mcp_prefabs::register(&mut s, bus);
     crate::mcp_audio::register(&mut s, bus);
     crate::mcp_animation::register(&mut s, bus);
     crate::mcp_terrain::register(&mut s, bus);

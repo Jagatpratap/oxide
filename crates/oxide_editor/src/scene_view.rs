@@ -415,8 +415,9 @@ pub fn pick(world: &World, ray: &Ray) -> Option<(GameObjectId, f32)> {
 
 fn drop_model(st: &mut EditorState, engine: &mut Engine, path: &str, ray: &Ray) {
     let lower = path.to_ascii_lowercase();
-    if !(lower.ends_with(".glb") || lower.ends_with(".gltf")) {
-        st.status = format!("{path}: only models (.glb/.gltf) can be dropped into the scene");
+    let prefab = lower.ends_with(".prefab");
+    if !(prefab || lower.ends_with(".glb") || lower.ends_with(".gltf")) {
+        st.status = format!("{path}: only prefabs and models can be dropped into the scene");
         return;
     }
     let now = oxide_core::time::realtime_since_startup();
@@ -429,6 +430,18 @@ fn drop_model(st: &mut EditorState, engine: &mut Engine, path: &str, ray: &Ray) 
                 .map(|t| ray.get_point(t))
         })
         .unwrap_or(st.scene_cam.pivot);
+    if prefab {
+        st.record(w, "Instantiate Prefab", None, now);
+        match w.instantiate_prefab(path, None) {
+            Ok(id) => {
+                w.set_position(id, point);
+                st.select(id);
+                st.status = format!("Instantiated {path}");
+            }
+            Err(e) => st.status = e,
+        }
+        return;
+    }
     let h = match w.resource_mut::<AssetServer>().load_model(path) {
         Ok(h) => h,
         Err(e) => {
