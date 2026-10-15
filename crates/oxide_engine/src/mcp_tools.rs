@@ -44,7 +44,7 @@ pub(crate) fn schema(props: Json, required: &[&str]) -> Json {
     json!({ "type": "object", "properties": props, "required": required, "additionalProperties": false })
 }
 
-fn obj_arg(args: &Args, world: &World, key: &str) -> Result<GameObjectId, ToolResult> {
+pub(crate) fn obj_arg(args: &Args, world: &World, key: &str) -> Result<GameObjectId, ToolResult> {
     let v = args
         .get(key)
         .ok_or_else(|| ToolResult::error(format!("`{key}` is required")))?;
@@ -1063,6 +1063,7 @@ pub fn build_server(bus: Arc<Bus>) -> McpServer {
 
     crate::mcp_physics::register(&mut s, bus);
     crate::mcp_audio::register(&mut s, bus);
+    crate::mcp_animation::register(&mut s, bus);
 
     tool(
         &mut s,

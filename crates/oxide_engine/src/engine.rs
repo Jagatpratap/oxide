@@ -185,7 +185,12 @@ impl Engine {
                 self.surface.reconfigure(&self.gpu);
                 f
             }
-            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => return,
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                // Hidden/minimized windows don't present, so nothing paces the loop.
+                std::thread::sleep(std::time::Duration::from_millis(16));
+                return;
+            }
+
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 self.surface.reconfigure(&self.gpu);
                 return;

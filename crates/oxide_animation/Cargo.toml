@@ -1,0 +1,12 @@
+[package]
+name = "oxide_animation"
+description = "Oxide animation: Animator state machines, blend trees, crossfades, legacy Animation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+oxide_math.workspace = true
+oxide_core.workspace = true
+oxide_assets.workspace = true
+oxide_scene.workspace = true

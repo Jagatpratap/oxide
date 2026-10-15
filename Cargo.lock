@@ -1870,6 +1870,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxide_animation"
+version = "0.1.0"
+dependencies = [
+ "oxide_assets",
+ "oxide_core",
+ "oxide_math",
+ "oxide_scene",
+]
+
+[[package]]
 name = "oxide_assets"
 version = "0.1.0"
 dependencies = [
@@ -1918,6 +1928,7 @@ version = "0.1.0"
 dependencies = [
  "gilrs",
  "log",
+ "oxide_animation",
  "oxide_assets",
  "oxide_audio",
  "oxide_core",

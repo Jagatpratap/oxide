@@ -6,6 +6,7 @@ pub mod bus;
 pub mod engine;
 pub mod extract;
 pub mod input_map;
+pub mod mcp_animation;
 pub mod mcp_audio;
 pub mod mcp_physics;
 pub mod mcp_tools;
@@ -14,6 +15,7 @@ pub mod objects;
 pub use app::{App, AppControl, EngineConfig};
 pub use engine::{Engine, Plugin, init_world};
 
+pub use oxide_animation as animation;
 pub use oxide_assets as assets;
 pub use oxide_audio as audio;
 pub use oxide_core as core;
@@ -50,6 +52,19 @@ impl Plugin for AudioPlugin {
     }
 }
 
+/// Animation: Animator state machines and legacy Animation.
+pub struct AnimationPlugin;
+
+impl Plugin for AnimationPlugin {
+    fn build(
+        &self,
+        world: &mut oxide_scene::World,
+        systems: &mut Vec<Box<dyn oxide_scene::System>>,
+    ) {
+        systems.push(oxide_animation::install(world));
+    }
+}
+
 /// Standard assets: car controller, cameras, character controllers.
 pub struct StandardAssetsPlugin;
 
@@ -63,6 +78,7 @@ impl Plugin for StandardAssetsPlugin {
 pub fn default_plugins() -> Vec<Box<dyn Plugin>> {
     vec![
         Box::new(PhysicsPlugin),
+        Box::new(AnimationPlugin),
         Box::new(AudioPlugin),
         Box::new(StandardAssetsPlugin),
     ]
@@ -75,6 +91,10 @@ pub mod prelude {
         create_primitive, instantiate_model, set_material,
     };
     pub use crate::{App, AppControl};
+    pub use oxide_animation::{Animation, Animator};
+    pub use oxide_assets::{
+        AnimationClip, AnimatorController, Condition, ConditionMode, Motion, ParameterType,
+    };
     pub use oxide_assets::{
         AssetServer, Handle, Material, Mesh, PrimitiveType, ShaderKind, SurfaceType, Texture2D,
     };

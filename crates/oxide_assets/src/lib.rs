@@ -17,7 +17,10 @@ pub mod primitives;
 pub mod server;
 pub mod texture;
 
-pub use animation::{AnimationClip, Interpolation, Track, TransformCurves};
+pub use animation::{
+    AnimationClip, AnimatorController, AnimatorState, Condition, ConditionMode, Interpolation,
+    Motion, Parameter, ParameterType, Track, TransformCurves, Transition,
+};
 pub use handle::{Asset, AssetId, Assets, Handle};
 pub use material::{Material, ShaderKind, SurfaceType};
 pub use mesh::Mesh;

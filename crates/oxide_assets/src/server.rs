@@ -1,7 +1,7 @@
 //! The asset database: typed stores plus loading from the project's `Assets/` folder.
 //! Reference: <https://docs.unity3d.com/Manual/AssetWorkflow.html>
 
-use crate::animation::AnimationClip;
+use crate::animation::{AnimationClip, AnimatorController};
 use crate::handle::{Asset, Assets, Handle};
 use crate::material::Material;
 use crate::mesh::Mesh;
@@ -31,6 +31,7 @@ pub struct AssetServer {
     pub textures: Assets<Texture2D>,
     pub models: Assets<Model>,
     pub animations: Assets<AnimationClip>,
+    pub controllers: Assets<AnimatorController>,
     pub audio: Assets<AudioClip>,
 }
 
@@ -47,6 +48,7 @@ impl AssetServer {
             textures: Assets::default(),
             models: Assets::default(),
             animations: Assets::default(),
+            controllers: Assets::default(),
             audio: Assets::default(),
         };
         for p in PrimitiveType::ALL {

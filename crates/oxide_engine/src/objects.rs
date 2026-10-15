@@ -158,6 +158,28 @@ pub fn instantiate_model(world: &mut World, model: &Handle<Model>) -> Option<Gam
             stack.push((c, id));
         }
     }
+    // Animated models get an Animator with one state per clip (like Unity's import).
+    if !m.animations.is_empty() {
+        let assets = world.resource_mut::<AssetServer>();
+        let clips: Vec<(String, Handle<oxide_assets::AnimationClip>)> = m
+            .animations
+            .iter()
+            .map(|h| {
+                (
+                    assets
+                        .animations
+                        .get(h)
+                        .map_or_else(|| h.path().to_owned(), |c| c.name.clone()),
+                    h.clone(),
+                )
+            })
+            .collect();
+        let ctrl = oxide_assets::AnimatorController::from_clips(&m.name, &clips);
+        let h = assets
+            .controllers
+            .insert(format!("{}#controller", model.path()), ctrl);
+        world.add_component(root, oxide_animation::Animator::new(h));
+    }
     for (i, n) in m.nodes.iter().enumerate() {
         let (Some(id), Some(mesh)) = (ids[i], &n.mesh) else {
             continue;
