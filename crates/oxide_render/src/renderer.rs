@@ -121,6 +121,7 @@ fn grow_buffer(
 pub struct SceneRenderer {
     pub gpu_assets: GpuAssets,
     terrain: crate::terrain::TerrainGpu,
+    particles: crate::particles::ParticleGpu,
     sample_count: u32,
     frame_layout: wgpu::BindGroupLayout,
     shadow_layout: wgpu::BindGroupLayout,
@@ -479,8 +480,21 @@ impl SceneRenderer {
                 },
             ));
         }
+        let particle_module = shader(
+            device,
+            "particles.wgsl",
+            include_str!("shaders/particles.wgsl"),
+        );
+        let particles = crate::particles::ParticleGpu::new(
+            device,
+            &gpu.queue,
+            &frame_layout,
+            &particle_module,
+            sample_count,
+        );
         Self {
             terrain,
+            particles,
             gpu_assets,
             sample_count,
             frame_layout,
@@ -1162,6 +1176,15 @@ impl SceneRenderer {
             }
         }
 
+        let cam0 = frame.cameras.first().map_or(Vector3::ZERO, |c| c.position);
+        let particle_ranges = self.particles.prepare(
+            device,
+            queue,
+            &mut self.gpu_assets,
+            assets,
+            &frame.particles,
+            cam0,
+        );
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("scene"),
         });
@@ -1290,6 +1313,9 @@ impl SceneRenderer {
                     stats.instances += n;
                     stats.draw_calls += 1;
                     pass.draw_indexed(range, 0, b.instances.clone());
+                }
+                if !particle_ranges.is_empty() {
+                    stats.draw_calls += self.particles.draw(&mut pass, &particle_ranges);
                 }
                 if !frame.lines.is_empty() {
                     pass.set_pipeline(&self.line_pipeline);

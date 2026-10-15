@@ -10,6 +10,7 @@ pub mod capture;
 pub mod frame;
 pub mod gpu;
 pub mod gpu_assets;
+pub mod particles;
 pub mod post;
 pub mod renderer;
 pub mod terrain;

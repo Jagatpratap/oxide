@@ -126,6 +126,31 @@ pub struct TerrainDraw {
     pub receive_shadows: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ParticleBlend {
+    Alpha,
+    Additive,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ParticleInstance {
+    pub position: [f32; 3],
+    pub size: f32,
+    /// Linear RGB (may exceed 1 for HDR glow) and alpha.
+    pub color: [f32; 4],
+    pub rotation: f32,
+    pub _pad: [f32; 3],
+}
+
+/// Particles of one system (one texture and blend mode).
+#[derive(Clone, Debug)]
+pub struct ParticleBatch {
+    pub texture: Option<AssetId>,
+    pub blend: ParticleBlend,
+    pub particles: Vec<ParticleInstance>,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum FogKind {
     Linear { start: f32, end: f32 },
@@ -184,6 +209,7 @@ pub struct RenderFrame {
     pub lights: Vec<PunctualLight>,
     pub draws: Vec<DrawItem>,
     pub terrain_draws: Vec<TerrainDraw>,
+    pub particles: Vec<ParticleBatch>,
 
     /// World-space skinning matrices (bone local-to-world × bind pose).
     pub joints: Vec<Matrix4x4>,

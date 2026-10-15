@@ -68,3 +68,56 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
             ToolResult::json(json!({ "height": oxide_terrain::sample_height(&e.world, Vector3::new(x, 0.0, z)) }))
         });
 }
+
+/// Particle effect presets.
+pub fn register_effects(s: &mut McpServer, bus: &Arc<Bus>) {
+    tool(
+        s,
+        bus,
+        ToolDef::new(
+            "spawn_effect",
+            "Spawn particle effect",
+            "Creates a ParticleSystem from a preset (smoke, fire, explosion, muzzle_flash, dust, rain) at `position`. \
+         One-shot presets (explosion, muzzle_flash) remove themselves when done unless `keep` is true.",
+            schema(
+                json!({ "preset": { "type": "string", "enum": ["smoke", "fire", "explosion", "muzzle_flash", "dust", "rain"] },
+                       "position": { "type": "array" }, "parent": {}, "keep": { "type": "boolean" } }),
+                &["preset"],
+            ),
+        ),
+        |args, e| {
+            use oxide_particles::ParticleSystem as P;
+            let preset = args.get("preset").and_then(Json::as_str).unwrap_or("smoke");
+            let mut ps = match preset {
+                "smoke" => P::smoke(),
+                "fire" => P::fire(),
+                "explosion" => P::explosion(),
+                "muzzle_flash" => P::muzzle_flash(),
+                "dust" => P::dust(),
+                "rain" => P::rain(),
+                other => return ToolResult::error(format!("unknown preset `{other}`")),
+            };
+            ps.play();
+            let pos = tri!(vec3_arg(args, "position")).unwrap_or(Vector3::ZERO);
+            let id = e.world.create_at(
+                &format!("Effect ({preset})"),
+                pos,
+                oxide_math::Quaternion::IDENTITY,
+            );
+            if args.contains_key("parent") {
+                let p = tri!(crate::mcp_tools::obj_arg(args, &e.world, "parent"));
+                let _ = e.world.set_parent(id, Some(p), false);
+            }
+            let one_shot = !ps.looping;
+            let life = ps.duration + ps.start_lifetime.y + 0.2;
+            e.world.add_component(id, ps);
+            if one_shot && !args.get("keep").and_then(Json::as_bool).unwrap_or(false) {
+                let t = e.time().time() + life;
+                e.world
+                    .resource_mut::<oxide_scene::Timers>()
+                    .destroy_at(id, t);
+            }
+            ToolResult::json(object_json(&e.world, id))
+        },
+    );
+}

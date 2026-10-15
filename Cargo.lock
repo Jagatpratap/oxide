@@ -2380,6 +2380,7 @@ dependencies = [
  "oxide_input",
  "oxide_math",
  "oxide_mcp",
+ "oxide_particles",
  "oxide_physics",
  "oxide_render",
  "oxide_scene",
@@ -2423,6 +2424,17 @@ version = "0.1.0"
 dependencies = [
  "oxide_mcp",
  "serde_json",
+]
+
+[[package]]
+name = "oxide_particles"
+version = "0.1.0"
+dependencies = [
+ "oxide_assets",
+ "oxide_core",
+ "oxide_math",
+ "oxide_render",
+ "oxide_scene",
 ]
 
 [[package]]

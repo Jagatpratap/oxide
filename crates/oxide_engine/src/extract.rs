@@ -142,6 +142,7 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
         .first()
         .map_or(oxide_math::Vector3::ZERO, |c| c.position);
     oxide_terrain::extract(world, cam_pos, &mut frame.terrain_draws, &mut frame.draws);
+    oxide_particles::extract(world, &mut frame.particles);
 
     let default_mat = AssetId::from_path(DEFAULT_MATERIAL);
     let layer_of = |id| world.get(id).map_or(0, |o| o.layer);

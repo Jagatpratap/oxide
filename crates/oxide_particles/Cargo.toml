@@ -1,0 +1,13 @@
+[package]
+name = "oxide_particles"
+description = "Oxide particles: Unity ParticleSystem subset (emission, bursts, shapes, over-lifetime curves), billboard rendering"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+oxide_math.workspace = true
+oxide_core.workspace = true
+oxide_assets.workspace = true
+oxide_scene.workspace = true
+oxide_render.workspace = true

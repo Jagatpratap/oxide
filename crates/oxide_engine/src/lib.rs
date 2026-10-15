@@ -23,6 +23,7 @@ pub use oxide_audio as audio;
 pub use oxide_core as core;
 pub use oxide_input as input;
 pub use oxide_math as math;
+pub use oxide_particles as particles;
 pub use oxide_physics as physics;
 pub use oxide_render as render;
 pub use oxide_scene as scene;
@@ -95,6 +96,19 @@ impl Plugin for TerrainPlugin {
     }
 }
 
+/// Particle systems.
+pub struct ParticlesPlugin;
+
+impl Plugin for ParticlesPlugin {
+    fn build(
+        &self,
+        world: &mut oxide_scene::World,
+        systems: &mut Vec<Box<dyn oxide_scene::System>>,
+    ) {
+        systems.push(oxide_particles::install(world));
+    }
+}
+
 /// Standard assets: car controller, cameras, character controllers.
 pub struct StandardAssetsPlugin;
 
@@ -112,6 +126,7 @@ pub fn default_plugins() -> Vec<Box<dyn Plugin>> {
         Box::new(AudioPlugin),
         Box::new(UiPlugin),
         Box::new(TerrainPlugin),
+        Box::new(ParticlesPlugin),
         Box::new(StandardAssetsPlugin),
     ]
 }
@@ -132,6 +147,9 @@ pub mod prelude {
     };
     pub use oxide_assets::{TerrainData, TerrainLayer, TreeInstance, TreePrototype};
     pub use oxide_audio::{Audio, AudioExt, AudioListener, AudioSource};
+    pub use oxide_particles::{
+        BlendMode, ParticleShape, ParticleSystem, ParticlesExt, SimulationSpace,
+    };
     pub use oxide_terrain::{Terrain, create_terrain, sample_height, simple_tree_mesh};
     pub use oxide_ui::{
         Anchor, Canvas, Gui, GuiExt, TextAlign, UIButton, UIImage, UISlider, UIText, UIToggle, egui,

@@ -516,4 +516,25 @@ pub fn open_world(world: &mut World) {
         .get_component_mut::<Camera>(cam)
         .unwrap()
         .far_clip_plane = 3000.0;
+    // A campfire near the spawn point.
+    let fire = world.create_at(
+        "Campfire",
+        Vector3::new(6.0, ground_y, 8.0),
+        Quaternion::IDENTITY,
+    );
+    world.add_component(fire, ParticleSystem::fire());
+    let smoke = world.create_at(
+        "Campfire Smoke",
+        Vector3::new(6.0, ground_y + 1.0, 8.0),
+        Quaternion::IDENTITY,
+    );
+    world.add_component(smoke, ParticleSystem::smoke());
+    let glow = create_point_light(
+        world,
+        Vector3::new(6.0, ground_y + 0.8, 8.0),
+        Color::rgb(1.0, 0.55, 0.2),
+        10.0,
+        6.0,
+    );
+    world.get_mut(glow).unwrap().name = "Campfire Light".into();
 }

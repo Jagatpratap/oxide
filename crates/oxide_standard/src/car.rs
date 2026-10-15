@@ -154,10 +154,14 @@ impl Component for CarController {
                 self.reversing = true;
                 motor = t * self.max_motor_torque * 0.6;
             }
+        } else if v_fwd.abs() < 1.5 {
+            // Parked: hold the car on slopes.
+            brake = self.max_brake_torque;
         } else {
             // Engine braking / rolling resistance.
-            brake = self.max_brake_torque * 0.02;
+            brake = self.max_brake_torque * 0.05;
         }
+
         let speed = v_fwd.abs() * 3.6;
         if (motor > 0.0 && speed > self.top_speed_kmh)
             || (motor < 0.0 && speed > self.reverse_speed_kmh)

@@ -191,6 +191,11 @@ impl System for TerrainSystem {
         "Terrain"
     }
 
+    /// Builds meshes and colliders before the first physics step.
+    fn start(&mut self, world: &mut World) {
+        self.always(world);
+    }
+
     fn always(&mut self, world: &mut World) {
         let terrains: Vec<(GameObjectId, Handle<TerrainData>)> = world
             .query::<Terrain>()
