@@ -1,21 +1,36 @@
-//! Window, main loop and engine state.
+//! [`App`]: build a game (register scripts, set up the scene) and run it in a window.
+//!
+//! ```ignore
+//! oxide_engine::App::new("My Racer")
+//!     .register::<CarController>("Vehicles/Car Controller")
+//!     .setup(|world| { /* build or load the scene */ })
+//!     .run();
+//! ```
 
 use crate::bus::{Bus, Envelope, Wake};
-use crate::mcp_tools;
-use crate::scene::{CameraSettings, TriangleSettings};
-use oxide_core::reflect::TypeRegistry;
-use oxide_core::{Time, debug, debug_log, debug_log_error, debug_log_warning};
+use crate::engine::{Engine, Plugin, init_world};
+use crate::{input_map, mcp_tools};
+use oxide_core::{debug, debug_log, debug_log_error, debug_log_warning};
+use oxide_input::Input;
 use oxide_mcp::http::HttpServer;
-use oxide_render::{CapturedImage, Gpu, TriangleRenderer, WindowSurface, capture_frame, wgpu};
+use oxide_render::wgpu;
+use oxide_scene::{Component, System, World};
 use std::error::Error;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
-use std::time::Instant;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::WindowEvent;
+use winit::event::{DeviceEvent, DeviceId, ElementState, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::keyboard::PhysicalKey;
 use winit::window::{Window, WindowId};
+
+/// Requests from game code to the application (Unity `Application.Quit`, scene loading).
+#[derive(Default)]
+pub struct AppControl {
+    pub quit: bool,
+}
 
 #[derive(Clone, Debug)]
 pub struct EngineConfig {
@@ -24,6 +39,8 @@ pub struct EngineConfig {
     pub height: u32,
     /// Loopback address for the MCP endpoint; `None` disables MCP.
     pub mcp_addr: Option<String>,
+    /// Project folder containing `Assets/`.
+    pub project_root: PathBuf,
 }
 
 impl Default for EngineConfig {
@@ -35,184 +52,99 @@ impl Default for EngineConfig {
             mcp_addr: Some(
                 std::env::var("OXIDE_MCP_ADDR").unwrap_or_else(|_| oxide_mcp::DEFAULT_ADDR.into()),
             ),
+            project_root: std::env::current_dir().unwrap_or_default(),
         }
     }
 }
 
-/// Everything that lives on the main thread. MCP tools get `&mut Engine` via the bus.
-pub struct Engine {
-    pub window: Arc<Window>,
-    pub gpu: Gpu,
-    pub surface: WindowSurface,
-    pub triangle_renderer: TriangleRenderer,
-    pub time: Time,
-    pub types: TypeRegistry,
-    pub camera: CameraSettings,
-    pub triangle: TriangleSettings,
-    pub paused: bool,
-    /// Frames still to run while paused (Unity's "Step" button).
-    pub pending_steps: u32,
-    pub update_count: u64,
-    pub late_update_count: u64,
-    /// Smoothed frames per second (wall clock).
-    pub fps: f32,
-    pub mcp_url: Option<String>,
-    pub quit_requested: bool,
-    last_frame: Instant,
+type SetupFn = Box<dyn FnOnce(&mut World)>;
+
+pub struct App {
+    pub config: EngineConfig,
+    world: World,
+    systems: Vec<Box<dyn System>>,
+    setup: Vec<SetupFn>,
 }
 
-impl Engine {
-    fn new(
-        window: Arc<Window>,
-        instance: wgpu::Instance,
-        mcp_url: Option<String>,
-    ) -> Result<Self, Box<dyn Error>> {
-        let surface = instance.create_surface(Arc::clone(&window))?;
-        let gpu = Gpu::new(instance, &surface)?;
-        let size = window.inner_size();
-        let surface = WindowSurface::new(&gpu, surface, size.width, size.height)?;
-        let triangle_renderer = TriangleRenderer::new(&gpu.device, surface.format());
-        let mut types = TypeRegistry::new();
-        types.register::<CameraSettings>();
-        types.register::<TriangleSettings>();
-        Ok(Self {
-            window,
-            triangle_renderer,
-            surface,
-            gpu,
-            time: Time::new(),
-            types,
-            camera: CameraSettings::default(),
-            triangle: TriangleSettings::default(),
-            paused: false,
-            pending_steps: 0,
-            update_count: 0,
-            late_update_count: 0,
-            fps: 0.0,
-            mcp_url,
-            quit_requested: false,
-            last_frame: Instant::now(),
+impl App {
+    pub fn new(title: &str) -> Self {
+        Self::with_config(EngineConfig {
+            title: title.into(),
+            ..Default::default()
         })
     }
 
-    /// One iteration of the player loop.
-    fn frame(&mut self) {
-        let now = Instant::now();
-        let real_dt = now.duration_since(self.last_frame).as_secs_f64();
-        self.last_frame = now;
-        if real_dt > 0.0 {
-            let instant_fps = (1.0 / real_dt) as f32;
-            self.fps = if self.fps == 0.0 {
-                instant_fps
-            } else {
-                self.fps * 0.95 + instant_fps * 0.05
-            };
-        }
-
-        let step = self.paused && self.pending_steps > 0;
-        if !self.paused || step {
-            if step {
-                self.pending_steps -= 1;
-            }
-            // A paused step advances by one fixed-length frame, independent of wall time.
-            let dt = if step { 1.0 / 60.0 } else { real_dt };
-            self.time.begin_frame(dt);
-            while self.time.next_fixed_step() {
-                self.fixed_update();
-            }
-            self.update();
-            self.late_update();
-        }
-        self.render();
-    }
-
-    fn fixed_update(&mut self) {
-        // Physics and fixed-rate scripts run here from P6/P7 on.
-    }
-
-    fn update(&mut self) {
-        self.update_count += 1;
-        if self.triangle.active {
-            let z = self.triangle.rotation.z + self.triangle.spin_speed * self.time.delta_time();
-            self.triangle.rotation.z = z.rem_euclid(360.0);
-        }
-    }
-
-    fn late_update(&mut self) {
-        self.late_update_count += 1;
-    }
-
-    fn mvp(&self, width: u32, height: u32) -> oxide_math::Matrix4x4 {
-        let aspect = width.max(1) as f32 / height.max(1) as f32;
-        let model = if self.triangle.active {
-            self.triangle.local_to_world()
-        } else {
-            // Inactive objects aren't drawn; collapse the triangle to nothing.
-            oxide_math::Matrix4x4::ZERO
+    pub fn with_config(config: EngineConfig) -> Self {
+        let mut world = World::new();
+        init_world(&mut world, config.project_root.clone());
+        let mut app = Self {
+            config,
+            world,
+            systems: Vec::new(),
+            setup: Vec::new(),
         };
-        self.camera.view_projection(aspect) * model
+        for p in crate::default_plugins() {
+            app = app.plugin(p.as_ref());
+        }
+        app
     }
 
-    fn render(&mut self) {
-        let frame = match self.surface.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(frame) => frame,
-            wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
-                self.surface.reconfigure(&self.gpu);
-                frame
-            }
-            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => return,
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                self.surface.reconfigure(&self.gpu);
-                return;
-            }
-            wgpu::CurrentSurfaceTexture::Validation => {
-                debug_log_error!("surface validation error; skipping frame");
-                return;
-            }
-        };
-        let (w, h) = self.surface.size();
-        self.triangle_renderer
-            .set_mvp(&self.gpu.queue, self.mvp(w, h));
-        let view = frame.texture.create_view(&Default::default());
-        let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
-        self.triangle_renderer
-            .draw(&mut encoder, &view, self.camera.background_color.linear());
-        self.gpu.queue.submit([encoder.finish()]);
-        self.window.pre_present_notify();
-        self.gpu.queue.present(frame);
+    /// Makes a component available to Add Component, scene files and MCP.
+    pub fn register<T: Component + Default>(mut self, menu: &str) -> Self {
+        self.world.registry.register::<T>(menu);
+        self
     }
 
-    /// Renders the current scene offscreen at `width`×`height` and reads it back.
-    pub fn capture(&self, width: u32, height: u32) -> Result<CapturedImage, String> {
-        self.triangle_renderer
-            .set_mvp(&self.gpu.queue, self.mvp(width, height));
-        let clear = self.camera.background_color.linear();
-        let result = capture_frame(
-            &self.gpu,
-            self.surface.format(),
-            width,
-            height,
-            |encoder, view| {
-                self.triangle_renderer.draw(encoder, view, clear);
-            },
-        );
-        // Restore the window-sized matrix for the next on-screen frame.
-        let (w, h) = self.surface.size();
-        self.triangle_renderer
-            .set_mvp(&self.gpu.queue, self.mvp(w, h));
-        result
+    pub fn plugin(mut self, p: &dyn Plugin) -> Self {
+        p.build(&mut self.world, &mut self.systems);
+        self
+    }
+
+    pub fn system(mut self, s: impl System + 'static) -> Self {
+        self.systems.push(Box::new(s));
+        self
+    }
+
+    /// Scene setup, run once before the first frame (in order of registration).
+    pub fn setup(mut self, f: impl FnOnce(&mut World) + 'static) -> Self {
+        self.setup.push(Box::new(f));
+        self
+    }
+
+    pub fn size(mut self, width: u32, height: u32) -> Self {
+        self.config.width = width;
+        self.config.height = height;
+        self
+    }
+
+    pub fn world_mut(&mut self) -> &mut World {
+        &mut self.world
+    }
+
+    /// Opens the window and runs until it is closed or the game quits.
+    pub fn run(self) -> Result<(), Box<dyn Error>> {
+        run_app(self)
+    }
+
+    /// Builds the World with setup applied, without a window (tests, servers).
+    pub fn into_world(mut self) -> (World, Vec<Box<dyn System>>) {
+        for f in std::mem::take(&mut self.setup) {
+            f(&mut self.world);
+        }
+        (self.world, self.systems)
     }
 }
 
-struct App {
+struct Runner {
     config: EngineConfig,
+    pending: Option<(World, Vec<Box<dyn System>>)>,
     engine: Option<Engine>,
     jobs: Receiver<Envelope>,
     mcp_url: Option<String>,
     failed: Option<String>,
 }
 
-impl App {
+impl Runner {
     fn drain_jobs(&mut self) {
         let Some(engine) = self.engine.as_mut() else {
             return;
@@ -223,11 +155,14 @@ impl App {
     }
 }
 
-impl ApplicationHandler<Wake> for App {
+impl ApplicationHandler<Wake> for Runner {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.engine.is_some() {
             return;
         }
+        let Some((world, systems)) = self.pending.take() else {
+            return;
+        };
         let attrs = Window::default_attributes()
             .with_title(&self.config.title)
             .with_inner_size(LogicalSize::new(self.config.width, self.config.height));
@@ -240,7 +175,13 @@ impl ApplicationHandler<Wake> for App {
                         event_loop.owned_display_handle(),
                     )),
                 );
-                Engine::new(Arc::new(window), instance, self.mcp_url.clone())
+                Engine::new(
+                    Arc::new(window),
+                    instance,
+                    self.mcp_url.clone(),
+                    world,
+                    systems,
+                )
             });
         match result {
             Ok(engine) => {
@@ -260,16 +201,57 @@ impl ApplicationHandler<Wake> for App {
         self.drain_jobs();
     }
 
+    fn device_event(&mut self, _: &ActiveEventLoop, _: DeviceId, event: DeviceEvent) {
+        let Some(engine) = self.engine.as_mut() else {
+            return;
+        };
+        if let DeviceEvent::MouseMotion { delta } = event {
+            engine
+                .world
+                .resource_mut::<Input>()
+                .mouse_motion(delta.0 as f32, delta.1 as f32);
+        }
+    }
+
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
         let Some(engine) = self.engine.as_mut() else {
             return;
         };
+        let input = engine.world.resource_mut::<Input>();
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
-                engine.surface.resize(&engine.gpu, size.width, size.height)
+                input.screen_height = size.height as f32;
+                engine.surface.resize(&engine.gpu, size.width, size.height);
             }
             WindowEvent::RedrawRequested => engine.frame(),
+            WindowEvent::KeyboardInput { event, .. } => {
+                if let PhysicalKey::Code(code) = event.physical_key
+                    && let Some(k) = input_map::key(code)
+                {
+                    input.key_event(k, event.state == ElementState::Pressed);
+                }
+                if event.state == ElementState::Pressed
+                    && let Some(t) = &event.text
+                {
+                    input.text_event(t);
+                }
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                if let Some(b) = input_map::mouse(button) {
+                    input.mouse_button_event(b, state == ElementState::Pressed);
+                }
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                input.mouse_move(position.x as f32, position.y as f32)
+            }
+            WindowEvent::MouseWheel { delta, .. } => match delta {
+                MouseScrollDelta::LineDelta(x, y) => input.scroll_event(x, y),
+                MouseScrollDelta::PixelDelta(p) => {
+                    input.scroll_event(p.x as f32 / 40.0, p.y as f32 / 40.0)
+                }
+            },
+            WindowEvent::Focused(false) => input.release_all(),
             _ => {}
         }
     }
@@ -286,14 +268,13 @@ impl ApplicationHandler<Wake> for App {
     }
 }
 
-/// Opens the window and runs until it is closed (or an MCP client calls `quit`).
-pub fn run(config: EngineConfig) -> Result<(), Box<dyn Error>> {
+fn run_app(mut app: App) -> Result<(), Box<dyn Error>> {
     debug::install_log_bridge(log::LevelFilter::Warn);
     let event_loop = EventLoop::<Wake>::with_user_event().build()?;
-    event_loop.set_control_flow(ControlFlow::Wait);
+    event_loop.set_control_flow(ControlFlow::Poll);
 
     let (bus, jobs) = Bus::new(event_loop.create_proxy());
-    let http = match &config.mcp_addr {
+    let http = match &app.config.mcp_addr {
         Some(addr) => {
             match HttpServer::start(Arc::new(mcp_tools::build_server(Arc::new(bus))), addr) {
                 Ok(http) => {
@@ -309,16 +290,25 @@ pub fn run(config: EngineConfig) -> Result<(), Box<dyn Error>> {
         None => None,
     };
 
-    let mut app = App {
-        config,
+    let setup = std::mem::take(&mut app.setup);
+    let had_setup = !setup.is_empty();
+    for f in setup {
+        f(&mut app.world);
+    }
+    if !had_setup {
+        crate::objects::create_default_scene(&mut app.world);
+    }
+    let mut runner = Runner {
+        config: app.config,
+        pending: Some((app.world, app.systems)),
         engine: None,
         jobs,
         mcp_url: http.as_ref().map(HttpServer::url),
         failed: None,
     };
-    event_loop.run_app(&mut app)?;
+    event_loop.run_app(&mut runner)?;
     drop(http);
-    match app.failed {
+    match runner.failed {
         Some(e) => Err(e.into()),
         None => Ok(()),
     }

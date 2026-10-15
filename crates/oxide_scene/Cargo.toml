@@ -1,0 +1,15 @@
+[package]
+name = "oxide_scene"
+description = "Oxide scenes: GameObjects, Transform hierarchy, Components and their Unity lifecycle, scene files, prefabs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+oxide_math.workspace = true
+oxide_core.workspace = true
+oxide_assets.workspace = true
+oxide_input.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml_ng.workspace = true

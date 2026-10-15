@@ -3,8 +3,8 @@
 //!
 //! Reference: <https://docs.unity3d.com/Manual/script-serialization.html>
 //!
-//! Types opt in with the [`reflect_struct!`](crate::reflect_struct) macro for now; a
-//! `#[derive(Reflect)]` proc-macro replaces it in P1 when GameObject components arrive.
+//! Types opt in with `#[derive(Reflect)]` (crate `oxide_derive`), or the older
+//! [`reflect_struct!`](crate::reflect_struct) macro.
 
 use oxide_math::{Color, Quaternion, Vector2, Vector3, Vector4};
 use serde::{Deserialize, Serialize};
@@ -25,6 +25,15 @@ pub enum Value {
     Quaternion([f32; 4]),
     /// `[r, g, b, a]`.
     Color([f32; 4]),
+    /// A unit-variant enum, by variant name.
+    Enum(String),
+    /// An asset reference, by asset path (`builtin:Cube`, `Assets/car.glb#mesh0`, ...).
+    Asset(String),
+    /// A GameObject reference, by raw id.
+    ObjectRef(u64),
+    List(Vec<Value>),
+    /// Unity's `null` (an empty `Option`).
+    Null,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -38,6 +47,11 @@ pub enum ValueKind {
     Vector4,
     Quaternion,
     Color,
+    Enum,
+    Asset,
+    ObjectRef,
+    List,
+    Null,
 }
 
 impl Value {
@@ -52,6 +66,11 @@ impl Value {
             Value::Vector4(_) => ValueKind::Vector4,
             Value::Quaternion(_) => ValueKind::Quaternion,
             Value::Color(_) => ValueKind::Color,
+            Value::Enum(_) => ValueKind::Enum,
+            Value::Asset(_) => ValueKind::Asset,
+            Value::ObjectRef(_) => ValueKind::ObjectRef,
+            Value::List(_) => ValueKind::List,
+            Value::Null => ValueKind::Null,
         }
     }
 }
@@ -59,6 +78,12 @@ impl Value {
 /// Conversion between a Rust field type and [`Value`].
 pub trait FieldValue: Sized {
     const KIND: ValueKind;
+    /// Variant names, for enums.
+    const OPTIONS: &'static [&'static str] = &[];
+    /// Concrete type behind an `Enum`, `Asset`, `ObjectRef` or `List` field.
+    const TYPE_NAME: Option<&'static str> = None;
+    /// Kind of each element, for `List` fields.
+    const ELEMENT: Option<ValueKind> = None;
     fn to_value(&self) -> Value;
     fn from_value(v: Value) -> Option<Self>;
 }
@@ -104,10 +129,55 @@ field_value!(Color, Color, |s| (*s).into(), |v| Color::new(
     v[0], v[1], v[2], v[3]
 ));
 
+/// Unity `Option<T>` fields hold `null` as [`Value::Null`].
+impl<T: FieldValue> FieldValue for Option<T> {
+    const KIND: ValueKind = T::KIND;
+    const OPTIONS: &'static [&'static str] = T::OPTIONS;
+    const TYPE_NAME: Option<&'static str> = T::TYPE_NAME;
+    const ELEMENT: Option<ValueKind> = T::ELEMENT;
+    fn to_value(&self) -> Value {
+        self.as_ref().map_or(Value::Null, T::to_value)
+    }
+    fn from_value(v: Value) -> Option<Self> {
+        match v {
+            Value::Null => Some(None),
+            v => T::from_value(v).map(Some),
+        }
+    }
+}
+
+impl<T: FieldValue> FieldValue for Vec<T> {
+    const KIND: ValueKind = ValueKind::List;
+    const TYPE_NAME: Option<&'static str> = T::TYPE_NAME;
+    const ELEMENT: Option<ValueKind> = Some(T::KIND);
+    const OPTIONS: &'static [&'static str] = T::OPTIONS;
+    fn to_value(&self) -> Value {
+        Value::List(self.iter().map(T::to_value).collect())
+    }
+    fn from_value(v: Value) -> Option<Self> {
+        match v {
+            Value::List(items) => items.into_iter().map(T::from_value).collect(),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Serialize)]
 pub struct FieldInfo {
     pub name: &'static str,
     pub kind: ValueKind,
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    pub options: &'static [&'static str],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub type_name: Option<&'static str>,
+    /// Element kind of a `List` field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub element: Option<ValueKind>,
+    /// Inspector slider bounds (Unity `[Range]`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub range: Option<(f64, f64)>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tooltip: Option<&'static str>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -166,6 +236,11 @@ macro_rules! reflect_struct {
                     fields: vec![$($crate::reflect::FieldInfo {
                         name: stringify!($field),
                         kind: $crate::reflect::field_kind(&self.$field),
+                        options: $crate::reflect::field_options(&self.$field),
+                        type_name: $crate::reflect::field_type_name(&self.$field),
+                        element: $crate::reflect::field_element(&self.$field),
+                        range: None,
+                        tooltip: None,
                     }),*],
                 }
             }
@@ -203,6 +278,21 @@ macro_rules! reflect_struct {
 #[doc(hidden)]
 pub fn field_kind<T: FieldValue>(_: &T) -> ValueKind {
     T::KIND
+}
+
+#[doc(hidden)]
+pub fn field_options<T: FieldValue>(_: &T) -> &'static [&'static str] {
+    T::OPTIONS
+}
+
+#[doc(hidden)]
+pub fn field_element<T: FieldValue>(_: &T) -> Option<ValueKind> {
+    T::ELEMENT
+}
+
+#[doc(hidden)]
+pub fn field_type_name<T: FieldValue>(_: &T) -> Option<&'static str> {
+    T::TYPE_NAME
 }
 
 struct Registration {

@@ -12,3 +12,5 @@ wgpu.workspace = true
 bytemuck.workspace = true
 png.workspace = true
 pollster.workspace = true
+oxide_assets.workspace = true
+serde.workspace = true

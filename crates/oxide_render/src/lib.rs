@@ -1,14 +1,20 @@
 //! Rendering for Oxide, on top of `wgpu` (Metal / Vulkan / DX12 / WebGPU).
 //!
-//! P0 scope: GPU device + window surface ([`gpu`]), a test renderer ([`triangle`]) and
-//! readback of rendered frames to PNG ([`capture`]) for screenshots and MCP tools.
-//! The render graph and Scriptable Render Pipeline arrive in P4.
+//! - [`gpu`]: device and window surface.
+//! - [`frame`]: the plain-data [`RenderFrame`] the engine extracts from the scene.
+//! - [`renderer`]: the built-in forward renderer (PBR, cascaded shadows, sky, fog, instancing).
+//! - [`post`]: bloom and tonemapping.
+//! - [`capture`]: offscreen rendering and readback (screenshots, MCP, tests).
 
 pub mod capture;
+pub mod frame;
 pub mod gpu;
-pub mod triangle;
+pub mod gpu_assets;
+pub mod post;
+pub mod renderer;
 
 pub use capture::{CapturedImage, capture_frame};
+pub use frame::*;
 pub use gpu::{Gpu, GpuError, WindowSurface};
-pub use triangle::TriangleRenderer;
+pub use renderer::SceneRenderer;
 pub use wgpu;

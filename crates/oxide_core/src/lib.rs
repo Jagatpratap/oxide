@@ -9,6 +9,7 @@ pub mod reflect;
 pub mod time;
 
 pub use debug::{LogEntry, LogType};
+pub use oxide_derive::Reflect;
 pub use time::Time;
 
 /// Engine version reported to tools and the MCP server.

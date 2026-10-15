@@ -36,14 +36,15 @@ impl CapturedImage {
     }
 }
 
-/// Calls `draw` to render into a fresh `width`×`height` texture of `format`, then reads it
-/// back. Supports 8-bit RGBA/BGRA formats (sRGB or not). Blocks until the GPU is done.
+/// Calls `draw` to render (and submit) into a fresh `width`×`height` texture of `format`,
+/// then reads it back. Supports 8-bit RGBA/BGRA formats (sRGB or not). Blocks until the GPU
+/// is done.
 pub fn capture_frame(
     gpu: &Gpu,
     format: wgpu::TextureFormat,
     width: u32,
     height: u32,
-    draw: impl FnOnce(&mut wgpu::CommandEncoder, &wgpu::TextureView),
+    draw: impl FnOnce(&wgpu::TextureView),
 ) -> Result<CapturedImage, String> {
     use wgpu::TextureFormat as F;
     let bgra = match format {
@@ -66,7 +67,9 @@ pub fn capture_frame(
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });
     let view = texture.create_view(&Default::default());
@@ -80,8 +83,8 @@ pub fn capture_frame(
         mapped_at_creation: false,
     });
 
+    draw(&view);
     let mut encoder = gpu.device.create_command_encoder(&Default::default());
-    draw(&mut encoder, &view);
     encoder.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {
             texture: &texture,

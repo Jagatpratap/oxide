@@ -3,7 +3,7 @@
 //! GPU, window and scene state live on the main thread. A tool handler sends a [`Job`] here,
 //! wakes the event loop, and blocks until the job's result comes back (or times out).
 
-use crate::app::Engine;
+use crate::engine::Engine;
 use oxide_mcp::ToolResult;
 use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, Sender, SyncSender, channel, sync_channel};

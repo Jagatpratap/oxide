@@ -1,0 +1,10 @@
+[package]
+name = "oxide_input"
+description = "Oxide input: Unity Input Manager API (keys, mouse, axes, gamepads)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+oxide_math.workspace = true
+serde.workspace = true

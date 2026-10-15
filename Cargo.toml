@@ -14,6 +14,12 @@ oxide_core = { path = "crates/oxide_core" }
 oxide_render = { path = "crates/oxide_render" }
 oxide_mcp = { path = "crates/oxide_mcp" }
 oxide_engine = { path = "crates/oxide_engine" }
+oxide_derive = { path = "crates/oxide_derive" }
+oxide_assets = { path = "crates/oxide_assets" }
+oxide_scene = { path = "crates/oxide_scene" }
+oxide_input = { path = "crates/oxide_input" }
+oxide_physics = { path = "crates/oxide_physics" }
+oxide_audio = { path = "crates/oxide_audio" }
 
 glam = { version = "0.30", features = ["bytemuck", "serde"] }
 serde = { version = "1", features = ["derive"] }
@@ -26,6 +32,16 @@ bytemuck = { version = "1", features = ["derive"] }
 png = "0.18"
 base64 = "0.22"
 tiny_http = "0.12"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "hdr", "tga", "bmp"] }
+gltf = { version = "1.4", features = ["KHR_materials_emissive_strength", "KHR_texture_transform", "KHR_lights_punctual", "extras", "names", "utils"] }
+rapier3d = { version = "0.36", features = ["simd-stable"] }
+kira = "0.12"
+gilrs = "0.11"
+serde_yaml_ng = "0.10"
+egui = "0.36"
+egui-wgpu = "0.36"
+egui-winit = { version = "0.36", default-features = false, features = ["clipboard", "links"] }
+egui_dock = "0.21"
 
 [profile.dev.package."*"]
 opt-level = 2
