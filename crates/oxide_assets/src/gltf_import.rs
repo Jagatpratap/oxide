@@ -279,7 +279,7 @@ impl Importer<'_> {
                 .map_or_else(|| format!("Take {}", anim.index()), str::to_owned),
             looping: true,
             curves: by_node.into_values().collect(),
-            length: 0.0,
+            ..Default::default()
         };
         clip.curves.sort_by(|a, b| a.path.cmp(&b.path));
         clip.recalculate_length();

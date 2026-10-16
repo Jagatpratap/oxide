@@ -12,7 +12,7 @@ use std::any::Any;
 use std::collections::BTreeMap;
 
 /// A field value of one of the types the Inspector knows how to draw.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub enum Value {
     Bool(bool),
     Int(i64),
@@ -35,6 +35,7 @@ pub enum Value {
     /// A nested serializable struct (Unity `[Serializable]` class field), by field name.
     Object(BTreeMap<String, Value>),
     /// Unity's `null` (an empty `Option`).
+    #[default]
     Null,
 }
 

@@ -84,7 +84,8 @@ only when the editor is running (not with `--player`).
 | `scenes` | Loaded scenes (handle, name, path, objects), pending background operations and WorldStreamer cell states; optional `load` (additive by default, `background` for LoadSceneAsync), `unload`, `save` | yes |
 | `split_scene_into_cells` | Moves the main scene's (static) root objects into one scene per `cell_size` grid cell, saves them and adds a WorldStreamer | yes (destructive) |
 | `play_sound` | Plays an audio clip once: at a world `position` (3D, like AudioSource.PlayClipAtPoint) or 2D if omitted | yes |
-| `animator` | Reads an object's Animator (states, parameters, current state) and optionally changes it: `parameters` {name: number\|bool} (SetFloat/SetBool), `trigger` name (SetTrigger), `play` state name, `cross_fade` [state, seconds], `speed` | yes |
+| `animator` | Reads an object's Animator (layers with current state, normalized time and weight; parameters; root motion velocity; humanoid bone mapping) and optionally changes it: `parameters` {name: number\|bool}, `trigger`, `play`, `cross_fade` [state, seconds], `speed`, `layer_weights`, `apply_root_motion`, `ik_pass` {layer: bool}, `ik` {LeftHand\|RightHand\|LeftFoot\|RightFoot: [x,y,z] or null}, `look_at` [x,y,z] or null | yes |
+| `ragdoll` | Ragdolls on humanoids (Ragdoll Wizard): `create` (Rigidbodies, colliders, CharacterJoints on the mapped bones; `mass`), `activate` (Animator off, bodies fall), `deactivate` | yes |
 | `create_terrain` | Creates a generated terrain (noise heights, auto grass/rock/sand/snow texturing, heightfield collider) | yes |
 | `terrain_height` | Unity Terrain.SampleHeight: world Y of the terrain surface at `x`, `z` (null off-terrain) | no |
 | `spawn_effect` | Creates a ParticleSystem from a preset (smoke, fire, explosion, muzzle_flash, dust, rain) at `position` | yes |

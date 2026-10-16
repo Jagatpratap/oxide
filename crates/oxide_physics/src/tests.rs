@@ -273,3 +273,119 @@ fn character_on_8km_mesh_ground() {
     let pos = s.world.position(p);
     assert!(pos.y.abs() < 0.05 && (pos.z - 3006.0).abs() < 0.5, "{pos}");
 }
+
+/// A T-pose skeleton of empty bones facing +Z (left = -X), pelvis at `y`.
+fn skeleton(w: &mut World, y: f32) -> (GameObjectId, RagdollBones) {
+    let root = w.create("Character");
+    let bone = |w: &mut World, name: &str, parent: GameObjectId, p: Vector3| {
+        let id = w.create_at(name, p + Vector3::Y * (y - 1.0), Quaternion::IDENTITY);
+        w.set_parent(id, Some(parent), true).unwrap();
+        id
+    };
+    let pelvis = bone(w, "Hips", root, Vector3::new(0.0, 1.0, 0.0));
+    let spine = bone(w, "Spine", pelvis, Vector3::new(0.0, 1.25, 0.0));
+    let head = bone(w, "Head", spine, Vector3::new(0.0, 1.6, 0.0));
+    let side = |w: &mut World, s: f32, n: &str| {
+        let hips = bone(
+            w,
+            &format!("{n}UpLeg"),
+            pelvis,
+            Vector3::new(0.1 * s, 0.95, 0.0),
+        );
+        let knee = bone(w, &format!("{n}Leg"), hips, Vector3::new(0.1 * s, 0.5, 0.0));
+        let foot = bone(
+            w,
+            &format!("{n}Foot"),
+            knee,
+            Vector3::new(0.1 * s, 0.08, 0.0),
+        );
+        let arm = bone(
+            w,
+            &format!("{n}Arm"),
+            spine,
+            Vector3::new(0.2 * s, 1.45, 0.0),
+        );
+        let elbow = bone(
+            w,
+            &format!("{n}ForeArm"),
+            arm,
+            Vector3::new(0.5 * s, 1.45, 0.0),
+        );
+        let hand = bone(
+            w,
+            &format!("{n}Hand"),
+            elbow,
+            Vector3::new(0.8 * s, 1.45, 0.0),
+        );
+        (hips, knee, foot, arm, elbow, hand)
+    };
+    let l = side(w, -1.0, "Left");
+    let r = side(w, 1.0, "Right");
+    (
+        root,
+        RagdollBones {
+            pelvis,
+            left_hips: l.0,
+            left_knee: l.1,
+            left_foot: l.2,
+            right_hips: r.0,
+            right_knee: r.1,
+            right_foot: r.2,
+            left_arm: l.3,
+            left_elbow: l.4,
+            left_hand: Some(l.5),
+            right_arm: r.3,
+            right_elbow: r.4,
+            right_hand: Some(r.5),
+            middle_spine: spine,
+            head,
+        },
+    )
+}
+
+#[test]
+fn ragdoll_falls_and_settles_in_one_piece() {
+    let mut s = Sim::new();
+    s.ground();
+    let (root, b) = skeleton(&mut s.world, 2.0);
+    let bodies = build_ragdoll(&mut s.world, &b, 70.0, true).unwrap();
+    assert_eq!(bodies.len(), 11);
+    // Kinematic: nothing moves.
+    s.step(0.5);
+    assert!((s.world.position(b.pelvis).y - 2.0).abs() < 1e-3);
+    // Go limp.
+    assert_eq!(set_ragdoll_kinematic(&mut s.world, root, false), 11);
+    s.step(4.0);
+    let p = s.world.position(b.pelvis);
+    assert!(p.y < 0.5 && p.y > 0.0, "pelvis on the ground: {p}");
+    for &id in &bodies {
+        let q = s.world.position(id);
+        assert!(
+            q.distance(p) < 1.5,
+            "bone stayed attached: {q} vs pelvis {p}"
+        );
+        let v = s.world.get_component::<Rigidbody>(id).unwrap().velocity;
+        assert!(v.length() < 0.5, "settled: {v}");
+    }
+    // Joints hold: bones keep their lengths.
+    let len = |a, c| s.world.position(a).distance(s.world.position(c));
+    assert!((len(b.left_hips, b.left_knee) - 0.45).abs() < 0.05);
+    assert!((len(b.right_arm, b.right_elbow) - 0.3).abs() < 0.05);
+    // Knees never bend forward: the foot stays behind the thigh's line (in the thigh's
+    // own frame, the knee joint only rotates one way).
+    for (hips, knee, foot) in [
+        (b.left_hips, b.left_knee, b.left_foot),
+        (b.right_hips, b.right_knee, b.right_foot),
+    ] {
+        let (h, k, f) = (
+            s.world.position(hips),
+            s.world.position(knee),
+            s.world.position(foot),
+        );
+        let thigh = (k - h).normalize();
+        let shin = (f - k).normalize();
+        let right = s.world.right(hips);
+        let bend = thigh.cross(shin).dot(right);
+        assert!(bend > -0.2, "knee bent the wrong way: {bend}");
+    }
+}

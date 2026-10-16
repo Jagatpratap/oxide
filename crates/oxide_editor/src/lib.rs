@@ -146,6 +146,8 @@ pub enum Action {
     BuildPlayer(bool),
     /// Split the main scene into streaming cells of this size (m).
     SplitIntoCells(f32),
+    /// Ragdoll Wizard on the active (humanoid) object.
+    CreateRagdoll,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -605,6 +607,12 @@ impl Editor {
                     r.cells.len(),
                     opts.folder
                 )
+            }
+            Action::CreateRagdoll => {
+                let id = st.active().ok_or("select a humanoid character first")?;
+                st.record(w, "Create Ragdoll", None, now);
+                let bodies = oxide_engine::prelude::create_ragdoll(w, id, 70.0)?;
+                format!("Added a ragdoll with {} bodies", bodies.len())
             }
             Action::SelectAll => {
                 st.selection = w.hierarchy_order();

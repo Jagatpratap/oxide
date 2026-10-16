@@ -618,6 +618,71 @@ fn sync_joints(world: &mut World, phys: &mut Physics) {
         );
         want.push((cid, id, j.connected_body, joint, h.finish()));
     }
+    for (id, cid) in world.query_ids::<crate::components::CharacterJoint>() {
+        let j = world
+            .component::<crate::components::CharacterJoint>(id, cid)
+            .expect("listed")
+            .clone();
+        // Joint frame: X = twist axis, Y = swing axis (orthonormalized).
+        let x = j.axis.normalize_or(Vector3::X);
+        let y0 = j.swing_axis - x * j.swing_axis.dot(x);
+        let y = y0
+            .try_normalize()
+            .unwrap_or_else(|| x.any_orthonormal_vector());
+        let z = x.cross(y);
+        let basis = Quaternion::from_mat3(&oxide_math::glam::Mat3::from_cols(x, y, z));
+        let s = world.lossy_scale(id);
+        let anchor_world = world.transform_point(id, j.anchor);
+        let rot_world = world.rotation(id) * basis;
+        let frame2 = match j.connected_body {
+            Some(o) if world.is_alive(o) => {
+                let (p2, r2) = (world.position(o), world.rotation(o));
+                pose(r2.inverse() * (anchor_world - p2), r2.inverse() * rot_world)
+            }
+            _ => pose(anchor_world, rot_world),
+        };
+        let joint = GenericJointBuilder::new(JointAxesMask::LOCKED_SPHERICAL_AXES)
+            .local_frame1(pose(j.anchor * s, basis))
+            .local_frame2(frame2)
+            .limits(
+                JointAxis::AngX,
+                [
+                    j.low_twist_limit.min(j.high_twist_limit).to_radians(),
+                    j.high_twist_limit.max(j.low_twist_limit).to_radians(),
+                ],
+            )
+            .limits(JointAxis::AngY, {
+                let a = j.swing1_limit.abs().to_radians();
+                [-a, a]
+            })
+            .limits(JointAxis::AngZ, {
+                let a = j.swing2_limit.abs().to_radians();
+                [-a, a]
+            })
+            .contacts_enabled(j.enable_collision)
+            .build();
+        let mut h = DefaultHasher::new();
+        (j.connected_body, 3u8, j.enable_collision).hash(&mut h);
+        hash_f(
+            &mut h,
+            &[
+                j.low_twist_limit,
+                j.high_twist_limit,
+                j.swing1_limit,
+                j.swing2_limit,
+                j.axis.x,
+                j.axis.y,
+                j.axis.z,
+                j.swing_axis.x,
+                j.swing_axis.y,
+                j.swing_axis.z,
+                j.anchor.x,
+                j.anchor.y,
+                j.anchor.z,
+            ],
+        );
+        want.push((cid, id, j.connected_body, joint, h.finish()));
+    }
     for (cid, id, other, joint, sig) in want {
         let Some(b1) = phys.bodies.get(&id).map(|b| b.handle) else {
             continue;
@@ -683,8 +748,25 @@ fn remove_stale_bodies(phys: &mut Physics, seen: &HashSet<GameObjectId>) {
     }
 }
 
+/// Body ids, parents before children: a nested body (ragdoll bone) must be written after
+/// the body it hangs from, or its world pose would be computed from a stale parent.
+fn ids_top_down(world: &World, phys: &Physics) -> Vec<GameObjectId> {
+    let depth = |mut id: GameObjectId| {
+        let mut d = 0;
+        while let Some(p) = world.parent(id) {
+            d += 1;
+            id = p;
+        }
+        d
+    };
+    let mut ids: Vec<(usize, GameObjectId)> =
+        phys.bodies.keys().map(|&id| (depth(id), id)).collect();
+    ids.sort_by_key(|(d, id)| (*d, id.to_bits()));
+    ids.into_iter().map(|(_, id)| id).collect()
+}
+
 fn write_back(world: &mut World, phys: &mut Physics) {
-    let ids: Vec<GameObjectId> = phys.bodies.keys().copied().collect();
+    let ids = ids_top_down(world, phys);
     for id in ids {
         let e = phys.bodies.get_mut(&id).expect("listed");
         let Some(body) = phys.world.bodies.get(e.handle) else {
@@ -919,14 +1001,15 @@ impl oxide_scene::System for PhysicsSystem {
         let Some(mut phys) = world.resources.remove::<Physics>() else {
             return;
         };
-        for (id, e) in phys.bodies.iter_mut() {
+        for id in ids_top_down(world, &phys) {
+            let e = phys.bodies.get_mut(&id).expect("listed");
             if !e.interpolate || e.kind != BodyKind::Dynamic {
                 continue;
             }
             let p = e.prev.0.lerp(e.curr.0, alpha);
             let r = e.prev.1.slerp(e.curr.1, alpha);
-            world.set_rotation(*id, r);
-            world.set_position(*id, p);
+            world.set_rotation(id, r);
+            world.set_position(id, p);
             e.synced = (p, r);
         }
         crate::vehicle::pose_wheels(world, &phys);

@@ -22,8 +22,10 @@ pub mod terrain;
 pub mod texture;
 
 pub use animation::{
-    AnimationClip, AnimatorController, AnimatorState, Condition, ConditionMode, Interpolation,
-    Motion, Parameter, ParameterType, Track, TransformCurves, Transition,
+    AnimationClip, AnimationEvent, AnimatorController, AnimatorControllerLayer,
+    AnimatorLayerBlendingMode, AnimatorState, AnimatorStateMachine, AvatarMask, BlendTree2DType,
+    Condition, ConditionMode, Interpolation, Motion, Parameter, ParameterType, Track,
+    TransformCurves, Transition,
 };
 pub use handle::{Asset, AssetId, Assets, Handle};
 pub use material::{Material, ShaderKind, SurfaceType};

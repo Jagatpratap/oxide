@@ -158,9 +158,14 @@ pub mod prelude {
         create_primitive, instantiate_model, set_material,
     };
     pub use crate::{App, AppControl};
-    pub use oxide_animation::{Animation, Animator};
+    pub use oxide_animation::{
+        Animation, Animator, AnimatorStateInfo, AnimatorUpdateMode, AvatarIKGoal, AvatarIKHint,
+        HumanBodyBones,
+    };
     pub use oxide_assets::{
-        AnimationClip, AnimatorController, Condition, ConditionMode, Motion, ParameterType,
+        AnimationClip, AnimationEvent, AnimatorController, AnimatorControllerLayer,
+        AnimatorLayerBlendingMode, AvatarMask, BlendTree2DType, Condition, ConditionMode, Motion,
+        ParameterType,
     };
     pub use oxide_assets::{
         AssetServer, Handle, Material, Mesh, PrimitiveType, ShaderKind, SurfaceType, Texture2D,
@@ -185,10 +190,10 @@ pub mod prelude {
     };
     pub use oxide_math::prelude::*;
     pub use oxide_physics::{
-        BoxCollider, CapsuleCollider, CharacterController, CharacterExt, CollisionDetectionMode,
-        DEFAULT_RAYCAST_LAYERS, FixedJoint, ForceMode, HingeJoint, MeshCollider, Physics,
-        PhysicsExt, RaycastHit, Rigidbody, RigidbodyInterpolation, SphereCollider, TerrainCollider,
-        WheelCollider,
+        BoxCollider, CapsuleCollider, CharacterController, CharacterExt, CharacterJoint,
+        CollisionDetectionMode, DEFAULT_RAYCAST_LAYERS, FixedJoint, ForceMode, HingeJoint,
+        MeshCollider, Physics, PhysicsExt, RaycastHit, Rigidbody, RigidbodyInterpolation,
+        SphereCollider, TerrainCollider, WheelCollider,
     };
     pub use oxide_scene::{
         Camera, CameraClearFlags, Collision, Component, Ctx, GameObjectId, Light, LightShadows,

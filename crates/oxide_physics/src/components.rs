@@ -555,3 +555,40 @@ impl Default for HingeJoint {
 }
 
 impl Component for HingeJoint {}
+
+/// Unity `CharacterJoint`: a ball-and-socket joint with twist and swing limits, made for
+/// ragdolls. `axis` is the twist axis and `swing_axis` the first swing axis (both local).
+/// Bodies joined by it do not collide with each other (Unity `enableCollision` off).
+#[derive(Clone, Debug, Reflect)]
+pub struct CharacterJoint {
+    pub connected_body: Option<GameObjectId>,
+    pub anchor: Vector3,
+    pub axis: Vector3,
+    pub swing_axis: Vector3,
+    /// Degrees.
+    pub low_twist_limit: f32,
+    pub high_twist_limit: f32,
+    /// Swing around `swing_axis`, degrees either way.
+    pub swing1_limit: f32,
+    /// Swing around the third axis, degrees either way.
+    pub swing2_limit: f32,
+    pub enable_collision: bool,
+}
+
+impl Default for CharacterJoint {
+    fn default() -> Self {
+        Self {
+            connected_body: None,
+            anchor: Vector3::ZERO,
+            axis: Vector3::X,
+            swing_axis: Vector3::Y,
+            low_twist_limit: -20.0,
+            high_twist_limit: 70.0,
+            swing1_limit: 40.0,
+            swing2_limit: 40.0,
+            enable_collision: false,
+        }
+    }
+}
+
+impl Component for CharacterJoint {}

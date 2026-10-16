@@ -6,6 +6,7 @@
 //! - [`FollowCamera`], [`OrbitCamera`], [`FlyCamera`]: chase cam, mouse orbit, free fly.
 //! - [`FirstPersonController`], [`ThirdPersonController`]: CharacterController players.
 //! - [`WorldStreamer`]: loads and unloads scene cells around the player (big worlds).
+//! - [`create_ragdoll`], [`set_ragdoll_active`]: humanoid ragdolls.
 //! - [`Rotator`], [`Lifetime`]: small utilities.
 
 pub mod ai;
@@ -13,6 +14,7 @@ pub mod cameras;
 pub mod car;
 pub mod car_audio;
 pub mod characters;
+pub mod ragdoll;
 pub mod streaming;
 
 pub use ai::{CarAIControl, WaypointCircuit};
@@ -20,6 +22,7 @@ pub use cameras::{FlyCamera, FollowCamera, OrbitCamera};
 pub use car::{CarController, DriveType};
 pub use car_audio::CarAudio;
 pub use characters::{FirstPersonController, Locomotion, ThirdPersonController};
+pub use ragdoll::{create_ragdoll, humanoid_ragdoll_bones, set_ragdoll_active};
 pub use streaming::{StreamingCell, WorldStreamer};
 
 use oxide_core::Reflect;

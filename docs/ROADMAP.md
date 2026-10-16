@@ -322,7 +322,7 @@ project's editor and its Scripts both link. Not yet: coroutines, execution order
 runner, native plugins.
 
 ### P7 — Physics, Input, 2D
-- ◐ 3D: Rigidbody, Box/Sphere/Capsule/Mesh colliders, triggers, layers collision matrix, raycasts/overlaps, physics materials, joints, CharacterController, articulations, ragdoll wizard, cloth (later)
+- ◐ 3D: Rigidbody, Box/Sphere/Capsule/Mesh colliders, triggers, layers collision matrix, raycasts/overlaps, physics materials, joints (Fixed/Hinge/Character ☑), CharacterController, articulations, ragdoll wizard ☑, cloth (later)
   ([Built-in 3D physics](https://docs.unity3d.com/Manual/PhysicsOverview.html),
   [Character control](https://docs.unity3d.com/Manual/character-control-section.html),
   [Joints](https://docs.unity3d.com/Manual/joints-section.html),
@@ -343,7 +343,7 @@ runner, native plugins.
 **Exit:** a playable 3D third-person controller demo and a 2D tilemap platformer, both built only in the editor.
 
 ### P8 — Animation, Audio, UI, VFX, Terrain, Video
-- ◐ Animation: AnimationClip, Animation window (dopesheet/curves, keyframe recording), Animator Controller (state machine, transitions, parameters, layers, masks, blend trees 1D/2D), Avatar/humanoid retargeting, root motion, IK, animation events
+- ◐ Animation: AnimationClip ☑, Animation window (dopesheet/curves, keyframe recording) ☐, Animator Controller (state machine, transitions, parameters, layers, masks, blend trees 1D/2D) ☑ (in code; `.controller` files and the Animator window ☐), humanoid bone mapping ☑ / retargeting ☐, root motion ☑, IK (goals, hints, LookAt) ☑, animation events ☑, update modes ☑
   ([Mecanim](https://docs.unity3d.com/Manual/animation-mecanim.html))
 - ☐ Timeline-style sequencer for cutscenes
 - ◐ Audio: AudioClip import settings, AudioSource/Listener, 3D rolloff, Doppler, Audio Mixer (groups, snapshots, effects, sends, ducking), reverb zones, filters, random containers
@@ -440,10 +440,10 @@ needs, and where the engine is:
 |---|---|---|---|
 | Editor to build levels | ✔ | ✔ | ☑ P2 editor, prefabs |
 | Vehicle physics (WheelCollider) | ✔ | ✔ (vehicles) | ☑ Rapier ray-cast vehicles, CarController |
-| Character controller + animation | | ✔ | ◐ CharacterController, Animator, 1D blend trees; missing 2D blend trees, root motion, IK, humanoid retargeting |
+| Character controller + animation | | ✔ | ◐ CharacterController; Animator with layers (Override/Additive, Avatar Masks), 1D/2D blend trees, root motion, animation events, humanoid bone mapping, IK goals/hints + LookAt; retargeting between rigs, Animator window ☐ |
 | Terrain + foliage | ✔ | ✔ | ◐ chunked LOD terrain, trees; missing grass/details, sculpt tools, streaming |
 | Big worlds (8×8 km) | | ✔ | ◐ LOD Groups (+ `_LODn` model import, LOD bias); occlusion culling ✔; world streaming ✔ (scene cells; assets still load on the main thread); floating origin ☐ |
-| Weapons, hits, ragdolls | | ✔ | ◐ raycasts and joints exist; ragdoll wizard, hit boxes ☐ |
+| Weapons, hits, ragdolls | | ✔ | ◐ raycasts, CharacterJoint, Ragdoll Wizard (from the humanoid map), animated ↔ limp switch; hit boxes ☐ |
 | Game scripts in the editor | ✔ | ✔ | ☑ project Scripts crate, hot reload in Edit and Play mode |
 | HUD, menus | ✔ | ✔ | ◐ Canvas UI + immediate GUI; UI Toolkit-style layout ☐ |
 | Audio (engine, 3D, mixer) | ✔ | ✔ | ◐ 3D sources, car audio; mixer ☐ |
@@ -451,8 +451,7 @@ needs, and where the engine is:
 | Multiplayer | ◐ | ✔ | ◐ UDP netcode: spawning, NetworkTransform with interpolation, NetworkRigidbody, RPCs; prediction, lag compensation, interest management, dedicated server ☐ |
 | Ship the game | ✔ | ✔ | ◐ desktop player builds (macOS/Windows/Linux); Android/iOS ☐ |
 
-Build order from here: animation (2D blend trees, root motion, IK, ragdolls) → NavMesh →
-netcode (prediction, interest management) and dedicated server → mobile.
+Build order from here: NavMesh → netcode (prediction, interest management) and dedicated server → mobile.
 
 ---
 

@@ -2725,6 +2725,7 @@ dependencies = [
 name = "oxide_standard"
 version = "0.1.0"
 dependencies = [
+ "oxide_animation",
  "oxide_audio",
  "oxide_core",
  "oxide_input",

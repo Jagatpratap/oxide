@@ -1052,6 +1052,7 @@ pub fn build_server(bus: Arc<Bus>) -> McpServer {
     crate::mcp_occlusion::register(&mut s, bus);
     crate::mcp_streaming::register(&mut s, bus);
     crate::mcp_animation::register(&mut s, bus);
+    crate::mcp_animation::register_ragdoll(&mut s, bus);
     crate::mcp_terrain::register(&mut s, bus);
     crate::mcp_terrain::register_effects(&mut s, bus);
 

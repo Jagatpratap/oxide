@@ -104,12 +104,27 @@ pub struct TransformCurves {
     pub scale: Option<Track<Vector3>>,
 }
 
+/// Unity `AnimationEvent`: calls `function_name` on the animated object's scripts (as a
+/// `SendMessage`) when playback passes `time` (seconds).
+#[derive(Clone, Debug, Default)]
+pub struct AnimationEvent {
+    pub time: f32,
+    pub function_name: String,
+    /// Passed as the message argument (`Value::Null` for none).
+    pub parameter: oxide_core::reflect::Value,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct AnimationClip {
     pub name: String,
     pub length: f32,
     pub looping: bool,
     pub curves: Vec<TransformCurves>,
+    /// Sorted by time.
+    pub events: Vec<AnimationEvent>,
+    /// Path of the transform whose motion becomes root motion (Unity's import setting
+    /// "Root node"). `None` picks the shallowest transform with a position curve.
+    pub root_node: Option<String>,
 }
 
 impl Asset for AnimationClip {
@@ -117,6 +132,35 @@ impl Asset for AnimationClip {
 }
 
 impl AnimationClip {
+    /// Unity `AnimationClip.AddEvent`.
+    pub fn add_event(
+        &mut self,
+        time: f32,
+        function_name: &str,
+        parameter: oxide_core::reflect::Value,
+    ) {
+        self.events.push(AnimationEvent {
+            time,
+            function_name: function_name.into(),
+            parameter,
+        });
+        self.events.sort_by(|a, b| a.time.total_cmp(&b.time));
+    }
+
+    /// Index into `curves` of the root-motion transform.
+    pub fn root_curve(&self) -> Option<usize> {
+        match &self.root_node {
+            Some(p) => self.curves.iter().position(|c| &c.path == p),
+            None => self
+                .curves
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| c.position.is_some())
+                .min_by_key(|(_, c)| c.path.matches('/').count())
+                .map(|(i, _)| i),
+        }
+    }
+
     pub fn recalculate_length(&mut self) {
         self.length = self
             .curves
@@ -185,6 +229,19 @@ pub struct Condition {
     pub mode: ConditionMode,
 }
 
+/// Unity `BlendTreeType` for two-parameter blend trees.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum BlendTree2DType {
+    /// Motions at different directions (strafe walk/run sets). Gradient-band interpolation in
+    /// polar space, so speed and direction blend separately.
+    SimpleDirectional,
+    /// Several motions per direction (walk and run forward, ...); same interpolation.
+    FreeformDirectional,
+    /// Motions that are not directions (e.g. lean / aim offsets). Cartesian gradient bands.
+    #[default]
+    FreeformCartesian,
+}
+
 #[derive(Clone, Debug)]
 pub enum Motion {
     Clip(crate::handle::Handle<AnimationClip>),
@@ -193,6 +250,13 @@ pub enum Motion {
         parameter: String,
         children: Vec<(f32, crate::handle::Handle<AnimationClip>)>,
     },
+    /// 2D blend tree: each child sits at a position in (`parameter_x`, `parameter_y`).
+    BlendTree2D {
+        parameter_x: String,
+        parameter_y: String,
+        kind: BlendTree2DType,
+        children: Vec<(oxide_math::Vector2, crate::handle::Handle<AnimationClip>)>,
+    },
     /// No motion (holds the current pose).
     Empty,
 }
@@ -200,6 +264,8 @@ pub enum Motion {
 #[derive(Clone, Debug)]
 pub struct AnimatorState {
     pub name: String,
+    /// Unity state tag (`AnimatorStateInfo.IsTag`).
+    pub tag: String,
     pub motion: Motion,
     pub speed: f32,
     pub looping: bool,
@@ -218,14 +284,113 @@ pub struct Transition {
     pub exit_time: f32,
 }
 
-/// Unity `AnimatorController`: parameters, states and transitions (one layer).
+/// Unity `AnimatorStateMachine`: the states and transitions of one layer.
+#[derive(Clone, Debug, Default)]
+pub struct AnimatorStateMachine {
+    pub states: Vec<AnimatorState>,
+    pub default_state: usize,
+    pub transitions: Vec<Transition>,
+}
+
+impl AnimatorStateMachine {
+    pub fn state_index(&self, name: &str) -> Option<usize> {
+        self.states.iter().position(|s| s.name == name)
+    }
+
+    pub fn add_state(&mut self, name: &str, motion: Motion) -> &mut AnimatorState {
+        self.states.push(AnimatorState {
+            name: name.into(),
+            tag: String::new(),
+            motion,
+            speed: 1.0,
+            looping: true,
+        });
+        self.states.last_mut().expect("pushed")
+    }
+
+    pub fn add_transition(
+        &mut self,
+        from: Option<&str>,
+        to: &str,
+        conditions: Vec<Condition>,
+        duration: f32,
+    ) -> &mut Transition {
+        self.transitions.push(Transition {
+            from: from.map(str::to_owned),
+            to: to.into(),
+            conditions,
+            duration,
+            has_exit_time: false,
+            exit_time: 1.0,
+        });
+        self.transitions.last_mut().expect("pushed")
+    }
+}
+
+/// Unity `AvatarMask` (transform part): which transforms a layer animates. A transform is
+/// included when its path equals, or sits below, one of `transform_paths`; an empty list
+/// includes everything.
+#[derive(Clone, Debug, Default)]
+pub struct AvatarMask {
+    pub name: String,
+    pub transform_paths: Vec<String>,
+}
+
+impl AvatarMask {
+    pub fn includes(&self, path: &str) -> bool {
+        self.transform_paths.is_empty()
+            || self.transform_paths.iter().any(|m| {
+                path == m
+                    || path.ends_with(&format!("/{m}"))
+                    || path.starts_with(&format!("{m}/"))
+                    || path.contains(&format!("/{m}/"))
+            })
+    }
+}
+
+/// Unity `AnimatorLayerBlendingMode`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum AnimatorLayerBlendingMode {
+    /// Replaces the layers above it (by `weight`).
+    #[default]
+    Override,
+    /// Adds the motion relative to each clip's first frame.
+    Additive,
+}
+
+/// Unity `AnimatorControllerLayer`.
+#[derive(Clone, Debug)]
+pub struct AnimatorControllerLayer {
+    pub name: String,
+    pub state_machine: AnimatorStateMachine,
+    /// Starting weight (the base layer is always 1).
+    pub default_weight: f32,
+    pub blending_mode: AnimatorLayerBlendingMode,
+    pub avatar_mask: Option<AvatarMask>,
+    /// Calls `OnAnimatorIK(layer)` on scripts after this layer is evaluated.
+    pub ik_pass: bool,
+}
+
+impl AnimatorControllerLayer {
+    pub fn new(name: &str) -> Self {
+        Self {
+            name: name.into(),
+            state_machine: AnimatorStateMachine::default(),
+            default_weight: 1.0,
+            blending_mode: AnimatorLayerBlendingMode::Override,
+            avatar_mask: None,
+            ik_pass: false,
+        }
+    }
+}
+
+/// Unity `AnimatorController`: parameters and layers of state machines.
 #[derive(Clone, Debug, Default)]
 pub struct AnimatorController {
     pub name: String,
     pub parameters: Vec<Parameter>,
-    pub states: Vec<AnimatorState>,
-    pub default_state: usize,
-    pub transitions: Vec<Transition>,
+    /// Layer 0 is the Base Layer.
+    pub layers: Vec<AnimatorControllerLayer>,
 }
 
 impl crate::handle::Asset for AnimatorController {
@@ -239,23 +404,37 @@ impl AnimatorController {
         name: &str,
         clips: &[(String, crate::handle::Handle<AnimationClip>)],
     ) -> Self {
-        Self {
+        let mut c = Self {
             name: name.into(),
-            states: clips
-                .iter()
-                .map(|(n, h)| AnimatorState {
-                    name: n.clone(),
-                    motion: Motion::Clip(h.clone()),
-                    speed: 1.0,
-                    looping: true,
-                })
-                .collect(),
             ..Default::default()
+        };
+        for (n, h) in clips {
+            c.add_state(n, Motion::Clip(h.clone()));
         }
+        c
+    }
+
+    /// The Base Layer's state machine (created on first use).
+    pub fn base(&mut self) -> &mut AnimatorStateMachine {
+        if self.layers.is_empty() {
+            self.layers.push(AnimatorControllerLayer::new("Base Layer"));
+        }
+        &mut self.layers[0].state_machine
+    }
+
+    /// States of the Base Layer.
+    pub fn states(&self) -> &[AnimatorState] {
+        self.layers
+            .first()
+            .map_or(&[], |l| l.state_machine.states.as_slice())
     }
 
     pub fn state_index(&self, name: &str) -> Option<usize> {
-        self.states.iter().position(|s| s.name == name)
+        self.layers.first()?.state_machine.state_index(name)
+    }
+
+    pub fn layer_index(&self, name: &str) -> Option<usize> {
+        self.layers.iter().position(|l| l.name == name)
     }
 
     pub fn add_parameter(&mut self, name: &str, kind: ParameterType) -> &mut Self {
@@ -267,31 +446,45 @@ impl AnimatorController {
         self
     }
 
-    pub fn add_state(&mut self, name: &str, motion: Motion) -> &mut Self {
-        self.states.push(AnimatorState {
-            name: name.into(),
-            motion,
-            speed: 1.0,
-            looping: true,
-        });
-        self
+    /// Adds a state to the Base Layer.
+    pub fn add_state(&mut self, name: &str, motion: Motion) -> &mut AnimatorState {
+        self.base().add_state(name, motion)
     }
 
+    /// Adds a transition to the Base Layer.
     pub fn add_transition(
         &mut self,
         from: Option<&str>,
         to: &str,
         conditions: Vec<Condition>,
         duration: f32,
-    ) -> &mut Self {
-        self.transitions.push(Transition {
-            from: from.map(str::to_owned),
-            to: to.into(),
-            conditions,
-            duration,
-            has_exit_time: false,
-            exit_time: 1.0,
-        });
-        self
+    ) -> &mut Transition {
+        self.base().add_transition(from, to, conditions, duration)
+    }
+
+    /// Unity `AddLayer`; returns the new layer to fill in.
+    pub fn add_layer(&mut self, name: &str) -> &mut AnimatorControllerLayer {
+        self.base();
+        self.layers.push(AnimatorControllerLayer::new(name));
+        self.layers.last_mut().expect("pushed")
+    }
+}
+
+#[cfg(test)]
+mod mask_tests {
+    use super::*;
+
+    #[test]
+    fn mask_includes_subtrees() {
+        let m = AvatarMask {
+            name: "Upper".into(),
+            transform_paths: vec!["Hips/Spine".into()],
+        };
+        assert!(m.includes("Hips/Spine"));
+        assert!(m.includes("Hips/Spine/Chest/Head"));
+        assert!(m.includes("Armature/Hips/Spine/Chest"));
+        assert!(!m.includes("Hips"));
+        assert!(!m.includes("Hips/LeftUpLeg"));
+        assert!(!m.includes("Hips/Spine2"));
     }
 }
