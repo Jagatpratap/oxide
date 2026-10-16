@@ -1225,6 +1225,26 @@ pub fn new_asset(
         "TextAsset" => {
             std::fs::write(root.join(&path), "").map_err(|e| e.to_string())?;
         }
+        "AnimationClip" => {
+            let clip = oxide_assets::AnimationClip {
+                name: info.default_name.to_owned(),
+                looping: true,
+                length: 1.0,
+                ..Default::default()
+            };
+            assets.save_animation_clip(&path, &clip)?;
+        }
+        "AnimatorController" => {
+            let mut c = oxide_assets::AnimatorController::default();
+            c.base();
+            assets.save_animator_controller(&path, &c)?;
+        }
+        "AnimatorOverrideController" => {
+            assets.save_override_controller(&path, &Default::default())?;
+        }
+        "AvatarMask" => {
+            assets.save_avatar_mask(&path, &Default::default())?;
+        }
         "Scene" => {
             // Unity's new scene: a Main Camera and a Directional Light.
             let mut w = oxide_scene::World::new();
@@ -1310,6 +1330,18 @@ pub fn open(
         "InputActionAsset" => {
             st.input_actions.open(engine, path);
             st.actions.push(Action::OpenTab(crate::Tab::InputActions));
+        }
+        "AnimatorController" => {
+            st.animator.open(path);
+            st.actions.push(Action::OpenTab(crate::Tab::Animator));
+        }
+        "AnimationClip" => {
+            st.animation.open_clip(path);
+            st.actions.push(Action::OpenTab(crate::Tab::Animation));
+        }
+        "AnimatorOverrideController" | "AvatarMask" => {
+            st.project.selected = Some(path.to_owned());
+            st.project.inspecting = true;
         }
         // Other data assets are edited in the Inspector.
         t if engine.world.resource::<AssetServer>().types.is_data(t) => {

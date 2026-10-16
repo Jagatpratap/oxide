@@ -8,6 +8,9 @@
 //! References: <https://docs.unity3d.com/Manual/UsingTheEditor.html>,
 //! <https://docs.unity3d.com/Manual/GameView.html>, <https://docs.unity3d.com/Manual/UndoWindow.html>
 
+mod anim_inspectors;
+mod animation_window;
+mod animator_window;
 mod asset_inspector;
 mod asset_ops;
 mod console;
@@ -60,6 +63,8 @@ pub enum Tab {
     UndoHistory,
     Shortcuts,
     InputActions,
+    Animator,
+    Animation,
 }
 
 impl Tab {
@@ -87,6 +92,8 @@ impl Tab {
             Tab::UndoHistory => "Undo History",
             Tab::Shortcuts => "Shortcuts",
             Tab::InputActions => "Input Actions",
+            Tab::Animator => "Animator",
+            Tab::Animation => "Animation",
         }
     }
 }
@@ -282,6 +289,9 @@ pub struct EditorState {
     pub keymap: shortcuts::Keymap,
     shortcuts_ui: shortcuts::ShortcutsWindow,
     input_actions: input_actions_window::InputActionsWindow,
+    animator: animator_window::AnimatorWindow,
+    animation: animation_window::AnimationWindow,
+    mask: anim_inspectors::MaskState,
     pub(crate) search: search_window::SearchState,
     scene_ui: scene_view::SceneViewState,
     pub(crate) game: game_view::GameViewState,
@@ -332,6 +342,9 @@ impl EditorState {
             keymap: Default::default(),
             shortcuts_ui: Default::default(),
             input_actions: Default::default(),
+            animator: Default::default(),
+            animation: Default::default(),
+            mask: Default::default(),
             search: Default::default(),
             scene_ui: Default::default(),
             game: Default::default(),
@@ -527,6 +540,8 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::UndoHistory => undo::window_ui(self.st, ui),
             Tab::Shortcuts => shortcuts::window_ui(self.st, ui),
             Tab::InputActions => input_actions_window::window_ui(self.st, self.engine, ui),
+            Tab::Animator => animator_window::window_ui(self.st, self.engine, ui),
+            Tab::Animation => animation_window::window_ui(self.st, self.engine, ui),
         }
     }
 
@@ -1491,6 +1506,8 @@ impl Shell for Editor {
             self.st.selection.retain(|&id| w.is_alive(id));
         }
         project::sync_asset_types(&engine.world.resource::<oxide_assets::AssetServer>().types);
+        let animation_open = self.dock.iter_all_tabs().any(|(_, t)| *t == Tab::Animation);
+        animation_window::end_preview_if(&mut self.st, engine, animation_open);
         shortcuts::dispatch(&mut self.st, engine, &ctx);
         self.st.previews.update(engine, &ctx);
         // The Project window claims keyboard commands when it is clicked (it sets this).

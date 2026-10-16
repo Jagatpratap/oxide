@@ -49,6 +49,11 @@ pub struct AssetServer {
     pub models: Assets<Model>,
     pub animations: Assets<AnimationClip>,
     pub controllers: Assets<AnimatorController>,
+    /// Avatar Mask assets (`.mask`).
+    pub masks: Assets<crate::animation::AvatarMask>,
+    /// Animator Override Controllers as authored (their resolved controllers are in
+    /// `controllers` under the same path).
+    pub override_controllers: Assets<crate::animation::AnimatorOverrideController>,
     pub audio: Assets<AudioClip>,
     pub terrains: Assets<crate::terrain::TerrainData>,
     pub render_textures: Assets<crate::render_texture::RenderTexture>,
@@ -75,6 +80,8 @@ impl AssetServer {
             models: Assets::default(),
             animations: Assets::default(),
             controllers: Assets::default(),
+            masks: Assets::default(),
+            override_controllers: Assets::default(),
             audio: Assets::default(),
             terrains: Assets::default(),
             render_textures: Assets::default(),
@@ -204,6 +211,10 @@ impl AssetServer {
                 "mat" => self.load_material(&path).map(|_| ()),
                 "wgsl" => self.load_shader(&path).map(|_| ()),
                 "rendertexture" => self.load_render_texture(&path).map(|_| ()),
+                "anim" => self.load_animation_clip(&path).map(|_| ()),
+                "controller" => self.load_animator_controller(&path).map(|_| ()),
+                "overridecontroller" => self.load_override_controller(&path).map(|_| ()),
+                "mask" => self.load_avatar_mask(&path).map(|_| ()),
                 _ if self
                     .types
                     .for_path(&path)
@@ -577,6 +588,26 @@ impl AssetServer {
             "wav" | "ogg" | "mp3" | "flac" => {
                 if self.audio.handle_of(file).is_none() {
                     self.load_audio(file)?;
+                }
+            }
+            "anim" => {
+                if self.animations.handle_of(file).is_none() {
+                    self.load_animation_clip(file)?;
+                }
+            }
+            "controller" => {
+                if self.controllers.handle_of(file).is_none() {
+                    self.load_animator_controller(file)?;
+                }
+            }
+            "overridecontroller" => {
+                if self.controllers.handle_of(file).is_none() {
+                    self.load_override_controller(file)?;
+                }
+            }
+            "mask" => {
+                if self.masks.handle_of(file).is_none() {
+                    self.load_avatar_mask(file)?;
                 }
             }
             _ if self

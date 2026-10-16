@@ -84,6 +84,12 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: &s
                     }
                 }
                 "InputActionAsset" => input_actions(st, engine, ui, path),
+                "AnimationClip" => crate::anim_inspectors::clip(st, engine, ui, path),
+                "AnimatorController" => crate::anim_inspectors::controller(st, engine, ui, path),
+                "AnimatorOverrideController" => {
+                    crate::anim_inspectors::override_controller(st, engine, ui, path)
+                }
+                "AvatarMask" => crate::anim_inspectors::avatar_mask(st, engine, ui, path),
                 "Preset" => preset(st, engine, ui, path),
                 t if engine.world.resource::<AssetServer>().types.is_data(t) => {
                     data_asset(st, engine, ui, path)
@@ -243,7 +249,7 @@ fn preset(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: &s
         }
     }
     ui.add_space(4.0);
-    ui.weak("Apply it from a component's ⋮ menu → Apply Preset.");
+    ui.weak("Apply it from a component's menu (right-click its header) > Apply Preset.");
 }
 
 /// Input Actions: Unity's "Edit Asset" button and a summary of maps and actions.
@@ -405,10 +411,27 @@ fn model(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: &st
             }
         });
     }
+    let has_clips = !m.animations.is_empty();
     ui.add_space(4.0);
-    if ui.button("Add to Scene").clicked() {
-        st.actions.push(Action::InstantiateModel(path.to_owned()));
-    }
+    ui.horizontal(|ui| {
+        if ui.button("Add to Scene").clicked() {
+            st.actions.push(Action::InstantiateModel(path.to_owned()));
+        }
+        if has_clips
+            && ui
+                .button("Extract Animations")
+                .on_hover_text("Copy the clips to editable .anim files beside the model")
+                .clicked()
+        {
+            st.status = match crate::anim_inspectors::extract_model_clips(engine, path) {
+                Ok(v) => {
+                    st.project.invalidate();
+                    format!("Extracted {} clip(s)", v.len())
+                }
+                Err(e) => e,
+            };
+        }
+    });
 }
 
 fn prefab(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: &str) {

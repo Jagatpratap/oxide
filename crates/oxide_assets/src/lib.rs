@@ -10,6 +10,7 @@
 // Submesh lists are `Vec<Range<u32>>`; a single-entry list is the normal case.
 #![allow(clippy::single_range_in_vec_init)]
 
+pub mod anim_files;
 pub mod animation;
 pub mod asset_types;
 pub mod gltf_import;
@@ -30,9 +31,9 @@ pub mod texture_compress;
 
 pub use animation::{
     AnimationClip, AnimationEvent, AnimatorController, AnimatorControllerLayer,
-    AnimatorLayerBlendingMode, AnimatorState, AnimatorStateMachine, AvatarMask, BlendTree2DType,
-    Condition, ConditionMode, Interpolation, Motion, Parameter, ParameterType, Track,
-    TransformCurves, Transition,
+    AnimatorLayerBlendingMode, AnimatorOverrideController, AnimatorState, AnimatorStateMachine,
+    AvatarMask, BlendTree2DType, ClipOverride, Condition, ConditionMode, Interpolation, Motion,
+    Parameter, ParameterType, PropertyCurve, Track, TransformCurves, Transition,
 };
 pub use asset_types::{AssetTypeInfo, AssetTypeRegistry, CreateKind, DataAsset, DataAssets};
 pub use handle::{Asset, AssetId, Assets, Handle};

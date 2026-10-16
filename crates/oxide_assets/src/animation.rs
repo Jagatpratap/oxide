@@ -1,10 +1,11 @@
 //! Unity `AnimationClip` for transform animation: keyframe tracks bound by hierarchy path.
 //! Reference: <https://docs.unity3d.com/Manual/AnimationClips.html>
 
-use crate::handle::Asset;
-use oxide_math::{Quaternion, Vector3};
+use crate::handle::{Asset, Handle};
+use oxide_math::{Quaternion, Vector2, Vector3};
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Interpolation {
     Step,
     Linear,
@@ -44,7 +45,7 @@ impl Animatable for Quaternion {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Track<T> {
     pub times: Vec<f32>,
     pub values: Vec<T>,
@@ -96,7 +97,7 @@ impl<T: Animatable> Track<T> {
 
 /// Animation of one transform, found by its path below the animated root
 /// (`"Armature/Hips/Spine"`, like Unity's binding paths).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct TransformCurves {
     pub path: String,
     pub position: Option<Track<Vector3>>,
@@ -106,7 +107,7 @@ pub struct TransformCurves {
 
 /// Unity `AnimationEvent`: calls `function_name` on the animated object's scripts (as a
 /// `SendMessage`) when playback passes `time` (seconds).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct AnimationEvent {
     pub time: f32,
     pub function_name: String,
@@ -114,7 +115,7 @@ pub struct AnimationEvent {
     pub parameter: oxide_core::reflect::Value,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct AnimationClip {
     pub name: String,
     pub length: f32,
@@ -125,6 +126,24 @@ pub struct AnimationClip {
     /// Path of the transform whose motion becomes root motion (Unity's import setting
     /// "Root node"). `None` picks the shallowest transform with a position curve.
     pub root_node: Option<String>,
+    /// Curves on any reflected component property (Light intensity, a material colour's
+    /// channel, script fields), like Unity's generic float curves.
+    #[serde(default)]
+    pub properties: Vec<PropertyCurve>,
+}
+
+/// A float curve on a component property of a transform below the animated root (Unity
+/// `EditorCurveBinding` + `AnimationCurve`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct PropertyCurve {
+    /// Transform path below the animated root; empty = the root itself.
+    pub path: String,
+    /// Component type name (`Light`, `MeshRenderer`, a script type).
+    pub component: String,
+    /// Field name, with `.x/.y/.z/.w` or `.r/.g/.b/.a` for one channel of a vector or
+    /// colour (`intensity`, `color.r`).
+    pub property: String,
+    pub curve: oxide_core::AnimationCurve,
 }
 
 impl Asset for AnimationClip {
@@ -162,7 +181,7 @@ impl AnimationClip {
     }
 
     pub fn recalculate_length(&mut self) {
-        self.length = self
+        let transforms = self
             .curves
             .iter()
             .flat_map(|c| {
@@ -172,8 +191,9 @@ impl AnimationClip {
                     c.scale.as_ref().map(Track::end_time),
                 ]
             })
-            .flatten()
-            .fold(0.0, f32::max);
+            .flatten();
+        let props = self.properties.iter().map(|p| p.curve.time_range().1);
+        self.length = transforms.chain(props).fold(0.0, f32::max);
     }
 }
 
@@ -196,7 +216,7 @@ mod tests {
 }
 
 /// Unity `AnimatorControllerParameterType`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ParameterType {
     Float,
     Int,
@@ -204,7 +224,7 @@ pub enum ParameterType {
     Trigger,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Parameter {
     pub name: String,
     pub kind: ParameterType,
@@ -212,7 +232,7 @@ pub struct Parameter {
 }
 
 /// Unity `AnimatorConditionMode`.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ConditionMode {
     /// Bool true / trigger set.
     If,
@@ -223,14 +243,14 @@ pub enum ConditionMode {
     NotEqual(f32),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Condition {
     pub parameter: String,
     pub mode: ConditionMode,
 }
 
 /// Unity `BlendTreeType` for two-parameter blend trees.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum BlendTree2DType {
     /// Motions at different directions (strafe walk/run sets). Gradient-band interpolation in
     /// polar space, so speed and direction blend separately.
@@ -242,7 +262,7 @@ pub enum BlendTree2DType {
     FreeformCartesian,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Motion {
     Clip(crate::handle::Handle<AnimationClip>),
     /// 1D blend tree: children sorted by threshold, blended on `parameter`.
@@ -261,9 +281,12 @@ pub enum Motion {
     Empty,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AnimatorState {
     pub name: String,
+    /// Where the Animator window draws the state.
+    #[serde(default)]
+    pub position: Vector2,
     /// Unity state tag (`AnimatorStateInfo.IsTag`).
     pub tag: String,
     pub motion: Motion,
@@ -271,7 +294,7 @@ pub struct AnimatorState {
     pub looping: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Transition {
     /// Source state name; `None` = Any State.
     pub from: Option<String>,
@@ -285,7 +308,7 @@ pub struct Transition {
 }
 
 /// Unity `AnimatorStateMachine`: the states and transitions of one layer.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct AnimatorStateMachine {
     pub states: Vec<AnimatorState>,
     pub default_state: usize,
@@ -298,8 +321,11 @@ impl AnimatorStateMachine {
     }
 
     pub fn add_state(&mut self, name: &str, motion: Motion) -> &mut AnimatorState {
+        let n = self.states.len() as f32;
         self.states.push(AnimatorState {
             name: name.into(),
+            // Laid out in a column until the Animator window moves them.
+            position: Vector2::new(240.0, 60.0 + 70.0 * n),
             tag: String::new(),
             motion,
             speed: 1.0,
@@ -330,10 +356,14 @@ impl AnimatorStateMachine {
 /// Unity `AvatarMask` (transform part): which transforms a layer animates. A transform is
 /// included when its path equals, or sits below, one of `transform_paths`; an empty list
 /// includes everything.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct AvatarMask {
     pub name: String,
     pub transform_paths: Vec<String>,
+}
+
+impl Asset for AvatarMask {
+    const TYPE_NAME: &'static str = "AvatarMask";
 }
 
 impl AvatarMask {
@@ -349,7 +379,7 @@ impl AvatarMask {
 }
 
 /// Unity `AnimatorLayerBlendingMode`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum AnimatorLayerBlendingMode {
     /// Replaces the layers above it (by `weight`).
     #[default]
@@ -359,7 +389,7 @@ pub enum AnimatorLayerBlendingMode {
 }
 
 /// Unity `AnimatorControllerLayer`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AnimatorControllerLayer {
     pub name: String,
     pub state_machine: AnimatorStateMachine,
@@ -367,6 +397,9 @@ pub struct AnimatorControllerLayer {
     pub default_weight: f32,
     pub blending_mode: AnimatorLayerBlendingMode,
     pub avatar_mask: Option<AvatarMask>,
+    /// The `.mask` asset `avatar_mask` was loaded from (saved instead of the inline mask).
+    #[serde(default)]
+    pub avatar_mask_asset: Option<Handle<AvatarMask>>,
     /// Calls `OnAnimatorIK(layer)` on scripts after this layer is evaluated.
     pub ik_pass: bool,
 }
@@ -379,13 +412,14 @@ impl AnimatorControllerLayer {
             default_weight: 1.0,
             blending_mode: AnimatorLayerBlendingMode::Override,
             avatar_mask: None,
+            avatar_mask_asset: None,
             ik_pass: false,
         }
     }
 }
 
 /// Unity `AnimatorController`: parameters and layers of state machines.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct AnimatorController {
     pub name: String,
     pub parameters: Vec<Parameter>,
@@ -486,5 +520,82 @@ mod mask_tests {
         assert!(!m.includes("Hips"));
         assert!(!m.includes("Hips/LeftUpLeg"));
         assert!(!m.includes("Hips/Spine2"));
+    }
+}
+
+/// Unity's Animator Override Controller (`.overrideController`): a controller's state
+/// machines with some clips swapped (a different character's run, a pistol idle). It loads
+/// as a ready-to-use [`AnimatorController`] under its own path.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AnimatorOverrideController {
+    pub controller: Option<Handle<AnimatorController>>,
+    pub overrides: Vec<ClipOverride>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ClipOverride {
+    pub original: Handle<AnimationClip>,
+    /// `None` keeps the original.
+    pub replacement: Option<Handle<AnimationClip>>,
+}
+
+impl Asset for AnimatorOverrideController {
+    const TYPE_NAME: &'static str = "AnimatorOverrideController";
+}
+
+impl AnimatorOverrideController {
+    /// `base` with this controller's clips swapped in.
+    pub fn resolve(&self, base: &AnimatorController, name: &str) -> AnimatorController {
+        let swap = |h: &Handle<AnimationClip>| {
+            self.overrides
+                .iter()
+                .find(|o| &o.original == h)
+                .and_then(|o| o.replacement.clone())
+                .unwrap_or_else(|| h.clone())
+        };
+        let mut c = base.clone();
+        c.name = name.to_owned();
+        for l in &mut c.layers {
+            for s in &mut l.state_machine.states {
+                match &mut s.motion {
+                    Motion::Clip(h) => *h = swap(h),
+                    Motion::BlendTree1D { children, .. } => {
+                        children.iter_mut().for_each(|(_, h)| *h = swap(h))
+                    }
+                    Motion::BlendTree2D { children, .. } => {
+                        children.iter_mut().for_each(|(_, h)| *h = swap(h))
+                    }
+                    Motion::Empty => {}
+                }
+            }
+        }
+        c
+    }
+}
+
+impl AnimatorController {
+    /// Every clip the controller's states use, in order, without repeats.
+    pub fn clips(&self) -> Vec<Handle<AnimationClip>> {
+        let mut out: Vec<Handle<AnimationClip>> = Vec::new();
+        let mut add = |h: &Handle<AnimationClip>| {
+            if !out.contains(h) {
+                out.push(h.clone());
+            }
+        };
+        for l in &self.layers {
+            for s in &l.state_machine.states {
+                match &s.motion {
+                    Motion::Clip(h) => add(h),
+                    Motion::BlendTree1D { children, .. } => {
+                        children.iter().for_each(|(_, h)| add(h))
+                    }
+                    Motion::BlendTree2D { children, .. } => {
+                        children.iter().for_each(|(_, h)| add(h))
+                    }
+                    Motion::Empty => {}
+                }
+            }
+        }
+        out
     }
 }

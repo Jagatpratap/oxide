@@ -283,3 +283,61 @@ fn animation_events_fire_once_per_pass() {
     tick(&mut w, &mut sys, 0.3); // → 1.05: wraps past 0 again
     assert_eq!(count(&w), 201);
 }
+
+/// Clips animate any component property (Unity's generic curves): a child's Light
+/// intensity follows the curve, and an override layer at half weight blends halfway.
+#[test]
+fn property_curves_drive_component_fields() {
+    let (mut w, mut sys, root, bone) = setup();
+    w.registry.register::<oxide_scene::Light>("Rendering/Light");
+    w.add_component(
+        bone,
+        oxide_scene::Light {
+            intensity: 1.0,
+            ..Default::default()
+        },
+    );
+    let mut flicker = AnimationClip {
+        name: "Flicker".into(),
+        looping: true,
+        properties: vec![
+            oxide_assets::PropertyCurve {
+                path: "Bone".into(),
+                component: "Light".into(),
+                property: "intensity".into(),
+                curve: oxide_core::AnimationCurve::linear(0.0, 0.0, 2.0, 8.0),
+            },
+            oxide_assets::PropertyCurve {
+                path: "Bone".into(),
+                component: "Light".into(),
+                property: "color.g".into(),
+                curve: oxide_core::AnimationCurve::constant(0.0, 2.0, 0.25),
+            },
+        ],
+        ..Default::default()
+    };
+    flicker.recalculate_length();
+    let h = w
+        .resource_mut::<AssetServer>()
+        .animations
+        .insert("flicker", flicker);
+    // Legacy Animation component, 1 s in: intensity 4, green channel 0.25.
+    w.add_component(
+        root,
+        Animation {
+            clip: Some(h.clone()),
+            ..Default::default()
+        },
+    );
+    for _ in 0..4 {
+        tick(&mut w, &mut sys, 0.25);
+    }
+    let l = w.get_component::<oxide_scene::Light>(bone).unwrap();
+    assert!(
+        (l.intensity - 4.0).abs() < 1e-3,
+        "intensity {}",
+        l.intensity
+    );
+    assert!((l.color.g - 0.25).abs() < 1e-5, "green {}", l.color.g);
+    assert_eq!(read_property(&w, bone, "Light", "color.g"), Some(0.25));
+}

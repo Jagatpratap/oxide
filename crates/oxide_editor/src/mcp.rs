@@ -293,6 +293,8 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
             crate::Tab::Preferences,
             crate::Tab::Shortcuts,
             crate::Tab::InputActions,
+            crate::Tab::Animator,
+            crate::Tab::Animation,
         ])
         .map(|t| t.title())
         .collect();
@@ -319,6 +321,8 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
                     crate::Tab::Preferences,
                     crate::Tab::Shortcuts,
                     crate::Tab::InputActions,
+                    crate::Tab::Animator,
+                    crate::Tab::Animation,
                 ]);
                 let Some(tab) = all
                     .into_iter()
@@ -465,6 +469,35 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
                 ToolResult::json(
                     json!({ "locked": ins.locked.is_some(), "debug": ins.debug, "inspecting": names }),
                 )
+            })
+        },
+    );
+
+    tool(
+        s,
+        bus,
+        ToolDef::new(
+            "editor_animation",
+            "Animation window",
+            "The Animation window (it edits the clips of the selected object's Animator): returns its target, \
+             clip, playhead, record and preview state. `time` moves the playhead (seconds, snapped to 60 fps \
+             frames), `record` toggles Record mode (moving objects or changing component values then writes \
+             keys), `preview` poses the object with the clip in Edit mode, `clip` picks one of the target's clips.",
+            schema(
+                json!({ "time": { "type": "number" }, "record": { "type": "boolean" }, "preview": { "type": "boolean" }, "clip": { "type": "string" } }),
+                &[],
+            ),
+        ),
+        |args, e| {
+            with_editor(e, |ed, e| {
+                ed.st.animation.control(
+                    &mut e.world,
+                    args.get("time").and_then(Json::as_f64).map(|t| t as f32),
+                    args.get("record").and_then(Json::as_bool),
+                    args.get("preview").and_then(Json::as_bool),
+                    args.get("clip").and_then(Json::as_str),
+                );
+                ToolResult::json(ed.st.animation.state_json())
             })
         },
     );

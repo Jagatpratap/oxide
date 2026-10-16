@@ -539,6 +539,126 @@ struct Sampler<'a> {
     pose: HashMap<GameObjectId, Channel>,
     rm: RootAcc,
     events: Vec<(String, Value)>,
+    /// Property curves: (weighted sum, weight) per animated property.
+    props: HashMap<PropKey, (f32, f32)>,
+}
+
+/// An animated component property: (object, component type, property with channel).
+type PropKey = (GameObjectId, String, String);
+
+/// Finished property values (weighted sums divided by their weights).
+fn finalize_props(props: HashMap<PropKey, (f32, f32)>) -> HashMap<PropKey, f32> {
+    props
+        .into_iter()
+        .filter(|(_, (_, w))| *w > 0.0)
+        .map(|(k, (v, w))| (k, v / w))
+        .collect()
+}
+
+/// Splits `color.r` into the field and a channel index (`x/r` = 0 ... `w/a` = 3).
+fn split_channel(property: &str) -> (&str, Option<usize>) {
+    match property.rsplit_once('.') {
+        Some((f, c)) => match c {
+            "x" | "r" => (f, Some(0)),
+            "y" | "g" => (f, Some(1)),
+            "z" | "b" => (f, Some(2)),
+            "w" | "a" => (f, Some(3)),
+            _ => (property, None),
+        },
+        None => (property, None),
+    }
+}
+
+/// The current value of an animated property (to blend layers onto), if it exists.
+pub fn read_property(
+    world: &World,
+    id: GameObjectId,
+    component: &str,
+    property: &str,
+) -> Option<f32> {
+    let o = world.get(id)?;
+    let (cid, _, _) = o.component_list().into_iter().find(|c| c.1 == component)?;
+    let (field, ch) = split_channel(property);
+    let v = world.component_dyn(id, cid)?.get_field(field)?;
+    Some(match (v, ch) {
+        (Value::Float(f), None) => f as f32,
+        (Value::Int(i), None) => i as f32,
+        (Value::Bool(b), None) => f32::from(u8::from(b)),
+        (Value::Vector2(a), Some(i)) => *a.get(i)?,
+        (Value::Vector3(a), Some(i)) => *a.get(i)?,
+        (Value::Vector4(a) | Value::Color(a) | Value::Quaternion(a), Some(i)) => *a.get(i)?,
+        _ => return None,
+    })
+}
+
+/// Writes animated property values through reflection.
+fn apply_props(world: &mut World, props: HashMap<PropKey, f32>) {
+    for ((id, component, property), x) in props {
+        write_property(world, id, &component, &property, x);
+    }
+}
+
+/// The transform at `path` below `root` (`""` is the root), by child names like Unity's
+/// binding paths.
+pub fn find_path(world: &World, root: GameObjectId, path: &str) -> Option<GameObjectId> {
+    let mut cur = root;
+    for part in path.split('/').filter(|p| !p.is_empty()) {
+        cur = world
+            .children(cur)
+            .iter()
+            .copied()
+            .find(|&c| world.get(c).is_some_and(|o| o.name == part))?;
+    }
+    Some(cur)
+}
+
+/// Sets one animated property (`intensity`, `color.r`) through reflection, as a clip does.
+/// Returns whether it was written.
+pub fn write_property(
+    world: &mut World,
+    id: GameObjectId,
+    component: &str,
+    property: &str,
+    x: f32,
+) -> bool {
+    {
+        let Some(o) = world.get(id) else {
+            return false;
+        };
+        let Some((cid, _, _)) = o.component_list().into_iter().find(|c| c.1 == component) else {
+            return false;
+        };
+        let (field, ch) = split_channel(property);
+        let Some(c) = world.component_dyn_mut(id, cid) else {
+            return false;
+        };
+        let Some(v) = c.get_field(field) else {
+            return false;
+        };
+        let nv = match (v, ch) {
+            (Value::Float(_), None) => Value::Float(x as f64),
+            (Value::Int(_), None) => Value::Int(x.round() as i64),
+            (Value::Bool(_), None) => Value::Bool(x >= 0.5),
+            (Value::Vector2(mut a), Some(i)) if i < 2 => {
+                a[i] = x;
+                Value::Vector2(a)
+            }
+            (Value::Vector3(mut a), Some(i)) if i < 3 => {
+                a[i] = x;
+                Value::Vector3(a)
+            }
+            (Value::Vector4(mut a), Some(i)) => {
+                a[i] = x;
+                Value::Vector4(a)
+            }
+            (Value::Color(mut a), Some(i)) => {
+                a[i] = x;
+                Value::Color(a)
+            }
+            _ => return false,
+        };
+        c.set_field(field, nv).is_ok()
+    }
 }
 
 impl Sampler<'_> {
@@ -593,6 +713,28 @@ impl Sampler<'_> {
                 e.scale += s * w;
                 e.sw += w;
             }
+        }
+        for pc in &clip.properties {
+            if let Some(m) = self.mask
+                && !pc.path.is_empty()
+                && !m.includes(&pc.path)
+            {
+                continue;
+            }
+            let id = if pc.path.is_empty() {
+                Some(self.root)
+            } else {
+                bind(self.world, self.root, self.bindings, &pc.path)
+            };
+            let Some(id) = id else {
+                continue;
+            };
+            let e = self
+                .props
+                .entry((id, pc.component.clone(), pc.property.clone()))
+                .or_insert((0.0, 0.0));
+            e.0 += pc.curve.evaluate(t) * w;
+            e.1 += w;
         }
         if events && self.collect_events && self.time_override.is_none() {
             for i in events_between(clip, prev, now, looping) {
@@ -938,6 +1080,7 @@ struct Output {
     root_position: Vector3,
     root_yaw: f32,
     events: Vec<(String, Value)>,
+    props: HashMap<PropKey, f32>,
 }
 
 fn sample_layer(
@@ -1047,15 +1190,34 @@ fn evaluate(
             pose: HashMap::new(),
             rm: RootAcc::default(),
             events: vec![],
+            props: HashMap::new(),
         };
         sample_layer(&mut s, sm, &lrt, &rt.params);
         let (pose, rm, events) = (finalize(s.pose), s.rm, s.events);
+        let props = finalize_props(s.props);
         out.events.extend(events);
         if li == 0 {
             out.pose = pose;
+            out.props = props;
             out.root_position = rm.position;
             out.root_yaw = rm.yaw;
             continue;
+        }
+        // Properties blend like positions: over the layers below by the layer weight.
+        let additive = layer.blending_mode == AnimatorLayerBlendingMode::Additive;
+        for ((pid, comp, prop), v) in props {
+            let base = out
+                .props
+                .get(&(pid, comp.clone(), prop.clone()))
+                .copied()
+                .or_else(|| read_property(world, pid, &comp, &prop))
+                .unwrap_or(0.0);
+            let nv = if additive {
+                base + v * weight
+            } else {
+                base + (v - base) * weight
+            };
+            out.props.insert((pid, comp, prop), nv);
         }
         let base_of = |out: &Output, id: GameObjectId| -> (Vector3, Quaternion, Vector3) {
             let t = world.transform(id);
@@ -1101,6 +1263,7 @@ fn evaluate(
                     pose: HashMap::new(),
                     rm: RootAcc::default(),
                     events: vec![],
+                    props: HashMap::new(),
                 };
                 sample_layer(&mut rs, sm, &lrt, &rt.params);
                 let reference = finalize(rs.pose);
@@ -1165,6 +1328,7 @@ fn update_animator(
         return;
     };
     apply(world, out.pose);
+    apply_props(world, out.props);
     // Root motion, in world space.
     let to_world = world.local_to_world(id);
     a.rt.delta_position = to_world.transform_vector3(out.root_position);
@@ -1339,6 +1503,7 @@ fn update_legacy(world: &mut World, assets: &AssetServer, dt: f32) {
         }
         let mut events = vec![];
         let mut pose = HashMap::new();
+        let mut props = HashMap::new();
         if a.playing == Some(true)
             && let Some(clip) = a.clip.as_ref().and_then(|h| assets.animations.get(h))
         {
@@ -1359,9 +1524,11 @@ fn update_legacy(world: &mut World, assets: &AssetServer, dt: f32) {
                 pose: HashMap::new(),
                 rm: RootAcc::default(),
                 events: vec![],
+                props: HashMap::new(),
             };
             s.clip(clip, prev, a.time, a.looping, 1.0, true);
             pose = finalize(s.pose);
+            props = finalize_props(s.props);
             events = s.events;
         }
         if let Some(c) = world.component_mut::<Animation>(id, cid) {
@@ -1370,6 +1537,7 @@ fn update_legacy(world: &mut World, assets: &AssetServer, dt: f32) {
             c.bindings = a.bindings;
         }
         apply(world, pose);
+        apply_props(world, props);
         for (name, arg) in events {
             world.send_message(id, &name, arg);
         }

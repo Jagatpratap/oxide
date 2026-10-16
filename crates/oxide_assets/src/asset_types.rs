@@ -323,7 +323,26 @@ pub fn builtin_types() -> Vec<AssetTypeInfo> {
         .color(230, 190, 110),
         AssetTypeInfo::new("Model", &["glb", "gltf", "fbx", "obj"]).color(120, 220, 160),
         AssetTypeInfo::new("AudioClip", &["wav", "ogg", "mp3", "flac"]).color(230, 140, 200),
-        AssetTypeInfo::new("AnimationClip", &["anim"]).color(200, 200, 120),
+        AssetTypeInfo::new("AnimationClip", &["anim"])
+            .menu("Animation/Animation Clip", "New Animation", 70)
+            .color(200, 200, 120),
+        AssetTypeInfo::new("AnimatorController", &["controller"])
+            .menu(
+                "Animation/Animator Controller",
+                "New Animator Controller",
+                71,
+            )
+            .color(210, 170, 110),
+        AssetTypeInfo::new("AnimatorOverrideController", &["overrideController"])
+            .menu(
+                "Animation/Animator Override Controller",
+                "New Animator Override Controller",
+                72,
+            )
+            .color(210, 150, 110),
+        AssetTypeInfo::new("AvatarMask", &["mask"])
+            .menu("Animation/Avatar Mask", "New Avatar Mask", 73)
+            .color(160, 200, 200),
         AssetTypeInfo::new(
             "TextAsset",
             &["txt", "json", "md", "csv", "xml", "yaml", "bytes"],

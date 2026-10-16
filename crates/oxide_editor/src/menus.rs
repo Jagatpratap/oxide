@@ -187,6 +187,14 @@ pub fn menu_items(world: &World, keymap: &Keymap) -> Vec<MenuItem> {
             Action::OpenTab(t),
         ));
     }
+    v.push(item(
+        "Window/Animation/Animation",
+        Action::OpenTab(Tab::Animation),
+    ));
+    v.push(item(
+        "Window/Animation/Animator",
+        Action::OpenTab(Tab::Animator),
+    ));
     v.push(item("Assets/Refresh", Action::RefreshAssets));
     v.push(item("Assets/Recompile Scripts", Action::RecompileScripts));
     for size in [100.0, 200.0, 500.0] {

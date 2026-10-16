@@ -97,6 +97,19 @@ impl<T: Asset> FieldValue for Handle<T> {
     }
 }
 
+/// Serialized as its asset path.
+impl<T> serde::Serialize for Handle<T> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&self.path)
+    }
+}
+
+impl<'de, T> serde::Deserialize<'de> for Handle<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        String::deserialize(d).map(Handle::from_path)
+    }
+}
+
 struct Entry<T> {
     path: Arc<str>,
     value: T,

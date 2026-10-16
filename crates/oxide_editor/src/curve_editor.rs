@@ -117,6 +117,20 @@ pub fn curve_field(ui: &mut egui::Ui, c: &mut AnimationCurve, salt: &str) -> boo
     changed
 }
 
+/// The Curve Editor drawn in place (the Animation window's Curves view). `salt` keeps its
+/// view and selection; returns whether a curve changed.
+pub fn curves_inline(
+    ui: &mut egui::Ui,
+    salt: &str,
+    curves: &mut [(&mut AnimationCurve, Color32)],
+) -> bool {
+    let id = state_id(salt);
+    let mut st: CurveState = load(ui, id);
+    let changed = curve_editor(ui, &mut st, curves, None);
+    store(ui, id, st);
+    changed
+}
+
 /// Thumbnail of one or more curves framed to fit `rect` (Unity's curve field swatch).
 fn draw_curve_preview(
     painter: &egui::Painter,

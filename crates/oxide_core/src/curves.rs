@@ -8,7 +8,9 @@ use crate::Reflect;
 use oxide_math::Color;
 
 /// How one side of a key's tangent is computed (Unity's `AnimationUtility.TangentMode`).
-#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(
+    Reflect, Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize,
+)]
 pub enum TangentMode {
     /// Smooth, never overshooting the neighbouring keys (Unity's default, "Clamped Auto").
     #[default]
@@ -24,7 +26,9 @@ pub enum TangentMode {
 }
 
 /// What a curve does before its first key and after its last (Unity's `WrapMode`).
-#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(
+    Reflect, Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize,
+)]
 pub enum CurveWrapMode {
     #[default]
     Clamp,
@@ -34,7 +38,7 @@ pub enum CurveWrapMode {
 
 /// One point of an [`AnimationCurve`] (Unity's `Keyframe`). Tangents are slopes
 /// (value per unit of time).
-#[derive(Default, Reflect, Clone, Copy, Debug, PartialEq)]
+#[derive(Default, Reflect, Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Keyframe {
     pub time: f32,
     pub value: f32,
@@ -69,7 +73,7 @@ impl Keyframe {
 }
 
 /// A curve of keys joined by cubic Hermite segments (Unity's `AnimationCurve`).
-#[derive(Reflect, Clone, Debug, PartialEq)]
+#[derive(Reflect, Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[reflect(default)]
 pub struct AnimationCurve {
     pub keys: Vec<Keyframe>,
@@ -332,21 +336,23 @@ fn hermite(a: Keyframe, b: Keyframe, t: f32) -> f32 {
 }
 
 /// Gradient colour key (Unity's `GradientColorKey`); alpha is ignored.
-#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct GradientColorKey {
     pub color: Color,
     pub time: f32,
 }
 
 /// Gradient alpha key (Unity's `GradientAlphaKey`).
-#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct GradientAlphaKey {
     pub alpha: f32,
     pub time: f32,
 }
 
 /// Unity's `GradientMode`.
-#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(
+    Reflect, Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize,
+)]
 pub enum GradientMode {
     #[default]
     Blend,
@@ -355,7 +361,7 @@ pub enum GradientMode {
 }
 
 /// Unity's `Gradient`: colour and alpha keys over 0..1, up to 8 of each.
-#[derive(Reflect, Clone, Debug, PartialEq)]
+#[derive(Reflect, Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[reflect(default)]
 pub struct Gradient {
     pub color_keys: Vec<GradientColorKey>,
@@ -471,7 +477,9 @@ fn sample<const N: usize>(
 }
 
 /// Unity's `ParticleSystemCurveMode`.
-#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(
+    Reflect, Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize,
+)]
 pub enum MinMaxCurveMode {
     #[default]
     Constant,
@@ -482,7 +490,7 @@ pub enum MinMaxCurveMode {
 
 /// Unity's `ParticleSystem.MinMaxCurve`: a constant, a curve, or a random value between
 /// two constants or two curves.
-#[derive(Reflect, Clone, Debug, PartialEq)]
+#[derive(Reflect, Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[reflect(default)]
 pub struct MinMaxCurve {
     pub mode: MinMaxCurveMode,
@@ -568,7 +576,9 @@ impl MinMaxCurve {
 }
 
 /// Unity's `ParticleSystemGradientMode`.
-#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(
+    Reflect, Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize,
+)]
 pub enum MinMaxGradientMode {
     #[default]
     Color,
@@ -580,7 +590,7 @@ pub enum MinMaxGradientMode {
 }
 
 /// Unity's `ParticleSystem.MinMaxGradient`.
-#[derive(Reflect, Clone, Debug, PartialEq)]
+#[derive(Reflect, Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[reflect(default)]
 pub struct MinMaxGradient {
     pub mode: MinMaxGradientMode,
