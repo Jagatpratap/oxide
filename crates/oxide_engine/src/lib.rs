@@ -2,6 +2,7 @@
 //! GameObject menu (primitives, lights, cameras, models) and the built-in MCP server tools.
 
 pub mod app;
+pub mod builtin_assets;
 pub mod bus;
 pub mod custom_editor;
 pub mod engine;

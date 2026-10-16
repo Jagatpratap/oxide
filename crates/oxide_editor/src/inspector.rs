@@ -909,7 +909,11 @@ fn components(
                     nicify(f.name)
                 };
                 let is_override = overridden.iter().any(|x| x == f.name);
-                let changed = ui
+                let block = is_block(&f, f.kind, f.type_name, &v2);
+                let changed = if block {
+                    field_row(ui, w, &f, label.clone(), &mut v2, mixed, &format!("{}{}", cid.0, f.name))
+                } else {
+                    ui
                     .horizontal(|ui| {
                         let text = if is_override {
                             RichText::new(&label).strong().color(Color32::WHITE)
@@ -943,7 +947,8 @@ fn components(
                             &format!("{}{}", cid.0, f.name),
                         )
                     })
-                    .inner;
+                    .inner
+                };
                 if changed && v2 != v {
                     edits.push((
                         Edit::Field(slot, f.name.to_owned(), v2),
@@ -1087,27 +1092,113 @@ pub fn reflect_grid(
                 continue;
             };
             let mut v2 = v.clone();
-            let edited = ui
-                .horizontal(|ui| {
-                    let lr = prop_label(ui, nicify(f.name));
-                    if let Some(t) = f.tooltip {
-                        lr.on_hover_text(t);
-                    }
-                    value_ui(
-                        ui,
-                        w,
-                        f,
-                        f.kind,
-                        f.type_name,
-                        &mut v2,
-                        false,
-                        &format!("{salt}{}", f.name),
-                    )
-                })
-                .inner;
+            let edited = field_row(
+                ui,
+                w,
+                f,
+                nicify(f.name),
+                &mut v2,
+                false,
+                &format!("{salt}{}", f.name),
+            );
             if edited && v2 != v && obj.set_field(f.name, v2).is_ok() {
                 changed = true;
             }
+        }
+    });
+    changed
+}
+
+/// Whether a value is drawn as a foldout block (a nested struct) rather than in a row.
+fn is_block(f: &FieldInfo, kind: ValueKind, type_name: Option<&str>, v: &Value) -> bool {
+    if crate::curve_editor::handles(type_name) {
+        return false;
+    }
+    match v {
+        // Volume parameters ({override, value}) stay in their row.
+        Value::Object(map) => {
+            !(map.len() == 2 && map.contains_key("override") && map.contains_key("value"))
+        }
+        Value::Null => {
+            kind == ValueKind::Object
+                && f.nullable
+                && (f.new_item)().is_some_and(|n| matches!(n, Value::Object(_)))
+        }
+        _ => false,
+    }
+}
+
+/// One property: a label and its value, or for a nested struct an indented foldout over
+/// the full width (Unity's serialized class fields), with Add / Remove for optional ones.
+/// Returns whether the value changed.
+#[allow(clippy::too_many_arguments)]
+pub fn field_row(
+    ui: &mut egui::Ui,
+    w: &World,
+    f: &FieldInfo,
+    label: impl Into<egui::WidgetText>,
+    v: &mut Value,
+    mixed: bool,
+    salt: &str,
+) -> bool {
+    let kind = f.kind;
+    if !is_block(f, kind, f.type_name, v) {
+        return ui
+            .horizontal(|ui| {
+                let lr = prop_label(ui, label);
+                if let Some(t) = f.tooltip {
+                    lr.on_hover_text(t);
+                }
+                value_ui(ui, w, f, kind, f.type_name, v, mixed, salt)
+            })
+            .inner;
+    }
+    let mut changed = false;
+    let id = ui.id().with(("block", salt));
+    let state =
+        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
+    let present = matches!(v, Value::Object(_));
+    let header = state.show_header(ui, |ui| {
+        let lr = ui.label(label);
+        if let Some(t) = f.tooltip {
+            lr.on_hover_text(t);
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if present && f.nullable {
+                if ui.small_button("×").on_hover_text("Remove").clicked() {
+                    *v = Value::Null;
+                    changed = true;
+                }
+            } else if !present {
+                if let Some(new) = (f.new_item)()
+                    && ui.small_button("Add").clicked()
+                {
+                    *v = new;
+                    changed = true;
+                }
+                ui.weak("None");
+            }
+        });
+    });
+    header.body(|ui| {
+        let Value::Object(map) = v else {
+            return;
+        };
+        let info = (f.nested)();
+        let mut keys: Vec<String> = map.keys().cloned().collect();
+        if let Some(i) = &info {
+            keys.sort_by_key(|k| i.fields.iter().position(|fi| fi.name == k.as_str()));
+        }
+        for k in keys {
+            let Some(item) = map.get_mut(&k) else {
+                continue;
+            };
+            let sub = info
+                .as_ref()
+                .and_then(|i| i.fields.iter().find(|fi| fi.name == k.as_str()))
+                .copied()
+                .unwrap_or_else(|| FieldInfo::plain("", item.kind()));
+            changed |= field_row(ui, w, &sub, nicify(&k), item, false, &format!("{salt}.{k}"));
         }
     });
     changed
@@ -1205,22 +1296,34 @@ fn value_ui(
                 ui.horizontal(|ui| {
                     ui.weak(format!("{} item(s)", items.len()));
                     if ui.small_button("+").clicked() {
-                        let new = items.last().cloned().unwrap_or(match elem {
-                            ValueKind::Float => Value::Float(0.0),
-                            ValueKind::Int => Value::Int(0),
-                            ValueKind::Bool => Value::Bool(false),
-                            ValueKind::String => Value::String(String::new()),
-                            ValueKind::Vector3 => Value::Vector3([0.0; 3]),
-                            _ => Value::Null,
-                        });
-                        items.push(new);
-                        changed = true;
+                        // Unity duplicates the last element; an empty list gets a default one.
+                        if let Some(new) = items.last().cloned().or_else(f.new_item) {
+                            items.push(new);
+                            changed = true;
+                        }
                     }
                     if ui.small_button("-").clicked() && items.pop().is_some() {
                         changed = true;
                     }
                 });
                 for (n, item) in items.iter_mut().enumerate() {
+                    if elem == ValueKind::Object && is_block(f, elem, type_name, item) {
+                        // Structs in a list: a foldout per element (Unity's "Element 0").
+                        let ef = FieldInfo {
+                            nullable: false,
+                            ..*f
+                        };
+                        changed |= field_row(
+                            ui,
+                            w,
+                            &ef,
+                            format!("Element {n}"),
+                            item,
+                            false,
+                            &format!("{salt}[{n}]"),
+                        );
+                        continue;
+                    }
                     ui.horizontal(|ui| {
                         ui.weak(format!("{n}"));
                         changed |= value_ui(
@@ -1269,23 +1372,71 @@ fn value_ui(
         }
         Value::Object(map) => {
             let mut changed = false;
+            let mut remove = false;
+            // The nested struct's own field layout (enums, ranges, tooltips), if known.
+            let info = (f.nested)();
             ui.vertical(|ui| {
-                for (k, item) in map.iter_mut() {
+                if f.nullable {
                     ui.horizontal(|ui| {
-                        prop_label(ui, nicify(k));
-                        let k2 = item.kind();
-                        let sub = FieldInfo {
-                            name: "",
-                            kind: k2,
-                            options: &[],
-                            type_name: None,
-                            element: None,
-                            range: None,
-                            tooltip: None,
-                        };
-                        changed |=
-                            value_ui(ui, w, &sub, k2, None, item, false, &format!("{salt}.{k}"));
+                        ui.weak(type_name.unwrap_or("Object"));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            remove = ui.small_button("×").on_hover_text("Remove").clicked();
+                        });
                     });
+                }
+                // Declared field order when the layout is known (the map is sorted by name).
+                let mut keys: Vec<String> = map.keys().cloned().collect();
+                if let Some(i) = &info {
+                    keys.sort_by_key(|k| i.fields.iter().position(|fi| fi.name == k.as_str()));
+                }
+                for k in keys {
+                    let Some(item) = map.get_mut(&k) else {
+                        continue;
+                    };
+                    let sub = info
+                        .as_ref()
+                        .and_then(|i| i.fields.iter().find(|fi| fi.name == k.as_str()))
+                        .copied()
+                        .unwrap_or_else(|| FieldInfo::plain("", item.kind()));
+                    ui.horizontal(|ui| {
+                        let lr = prop_label(ui, nicify(&k));
+                        if let Some(t) = sub.tooltip {
+                            lr.on_hover_text(t);
+                        }
+                        let k2 = if matches!(item, Value::Null) {
+                            sub.kind
+                        } else {
+                            item.kind()
+                        };
+                        changed |= value_ui(
+                            ui,
+                            w,
+                            &sub,
+                            k2,
+                            sub.type_name,
+                            item,
+                            false,
+                            &format!("{salt}.{k}"),
+                        );
+                    });
+                }
+            });
+            if remove {
+                *v = Value::Null;
+                changed = true;
+            }
+            changed
+        }
+        // An empty optional struct: Unity's "None" with a button to fill it in.
+        Value::Null if kind == ValueKind::Object => {
+            let mut changed = false;
+            ui.horizontal(|ui| {
+                ui.weak("None");
+                if let Some(new) = (f.new_item)()
+                    && ui.small_button("Add").clicked()
+                {
+                    *v = new;
+                    changed = true;
                 }
             });
             changed

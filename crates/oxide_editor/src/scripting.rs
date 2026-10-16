@@ -329,8 +329,11 @@ impl ScriptHost {
             reload.extend(assets.data.remove_type(&t));
         }
         if let Some(f) = register_assets {
-            let before: std::collections::HashSet<String> =
-                assets.types.iter().map(|t| t.type_name.to_owned()).collect();
+            let before: std::collections::HashSet<String> = assets
+                .types
+                .iter()
+                .map(|t| t.type_name.to_owned())
+                .collect();
             f(assets);
             self.script_asset_types = assets
                 .types

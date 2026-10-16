@@ -128,3 +128,66 @@ fn baked_lighting_end_to_end() {
     assert!(shadow < open - 30, "baked shadow: {shadow} vs open {open}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The scene's Lighting Settings asset controls baking: Baked GI off refuses to bake, and
+/// a Lightmap Parameters asset with a higher resolution makes a bigger lightmap.
+#[test]
+fn lighting_settings_and_lightmap_parameters_assets() {
+    use oxide_assets::{AssetServer, Handle};
+    use oxide_scene::{LightingSettings, LightmapParameters};
+    let dir = std::env::temp_dir().join(format!("oxide-lighting-asset-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("Assets")).unwrap();
+    // Returns the share of the lightmap the floor got.
+    let bake = |params: Option<f32>, baked_gi: bool| -> Result<f32, String> {
+        let mut w = World::new();
+        oxide_engine::init_world(&mut w, dir.clone());
+        let a = w.resource_mut::<AssetServer>();
+        a.save_data(
+            "Assets/Scene.lighting",
+            Box::new(LightingSettings {
+                baked_global_illumination: baked_gi,
+                lightmap_resolution: 4.0,
+                indirect_samples: 4,
+                max_bounces: 0,
+                ..Default::default()
+            }),
+        )?;
+        a.save_data(
+            "Assets/Hi.giparams",
+            Box::new(LightmapParameters {
+                resolution: params.unwrap_or(1.0),
+            }),
+        )?;
+        w.resource_mut::<RenderSettings>().lighting_settings =
+            Some(Handle::from_path("Assets/Scene.lighting"));
+        let floor = objects::create_primitive(&mut w, PrimitiveType::Plane);
+        w.get_mut(floor).unwrap().static_flags = StaticEditorFlags::EVERYTHING;
+        if params.is_some() {
+            w.get_component_mut::<MeshRenderer>(floor)
+                .unwrap()
+                .lightmap_parameters = Some(Handle::from_path("Assets/Hi.giparams"));
+        }
+        objects::create_directional_light(&mut w);
+        lighting::start(&mut w)?;
+        let r = loop {
+            if let Some(r) = lighting::poll(&mut w) {
+                break r;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        r?;
+        Ok(w.get_component::<MeshRenderer>(floor)
+            .unwrap()
+            .lightmap_scale_offset
+            .x)
+    };
+    let err = bake(None, false).unwrap_err();
+    assert!(err.contains("Baked Global Illumination"), "{err}");
+    let normal = bake(None, true).unwrap();
+    let high = bake(Some(4.0), true).unwrap();
+    assert!(
+        high > normal * 3.0,
+        "4x resolution parameters: {high} vs {normal} of the atlas"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}

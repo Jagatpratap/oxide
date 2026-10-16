@@ -311,7 +311,13 @@ pub fn parse_fields(
         let nested = f.kind == ValueKind::Object
             || (f.kind == ValueKind::List && f.element == Some(ValueKind::Object));
         let parsed = if nested {
-            match current.and_then(|c| c.get_field(f.name)) {
+            // An empty Option<struct> is parsed against a fresh default of the struct.
+            let template = current
+                .and_then(|c| c.get_field(f.name))
+                .filter(|t| !matches!(t, Value::Null))
+                .or_else(f.new_item);
+            match template {
+                Some(t) if v.is_null() => json_like(&t, v, world).or(Ok(Value::Null)),
                 Some(t) => json_like(&t, v, world),
                 None => Err("nested value without a template".into()),
             }

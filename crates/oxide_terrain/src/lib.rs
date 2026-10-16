@@ -33,6 +33,9 @@ pub struct Terrain {
     pub draw_trees: bool,
     /// Trees beyond this distance from the camera are not drawn.
     pub tree_distance: f32,
+    /// Terrain Layer assets painted on this terrain (up to 4); when set they replace the
+    /// TerrainData's own layers.
+    pub layers: Vec<Handle<TerrainLayer>>,
 }
 
 impl Default for Terrain {
@@ -43,6 +46,7 @@ impl Default for Terrain {
             lod_distance: 120.0,
             draw_trees: true,
             tree_distance: 400.0,
+            layers: Vec::new(),
         }
     }
 }
@@ -280,6 +284,37 @@ impl System for TerrainSystem {
         let Some(mut assets) = world.resources.remove::<AssetServer>() else {
             return;
         };
+        // Terrain Layer assets replace the data's layers (rebuilt when they change).
+        for (_, t) in world.query::<Terrain>() {
+            let (Some(h), false) = (t.data.clone(), t.layers.is_empty()) else {
+                continue;
+            };
+            let wanted: Vec<TerrainLayer> = t
+                .layers
+                .iter()
+                .map(|l| {
+                    let _ = assets.data_asset(l);
+                    let mut layer = assets.data.get(l).cloned().unwrap_or_default();
+                    if layer.name.is_empty() {
+                        layer.name = l.path().rsplit('/').next().unwrap_or("").to_owned();
+                    }
+                    layer
+                })
+                .collect();
+            for l in &wanted {
+                if let Some(d) = &l.diffuse
+                    && let Err(e) = assets.ensure_loaded(d.path())
+                {
+                    oxide_core::debug_log_warning!("{e}");
+                }
+            }
+            if assets.terrains.get(&h).is_some_and(|d| d.layers != wanted)
+                && let Some(d) = assets.terrains.get_mut(&h)
+            {
+                d.layers = wanted;
+                d.version += 1;
+            }
+        }
         let mut meshes = world
             .resources
             .remove::<TerrainMeshes>()
@@ -530,6 +565,11 @@ pub fn install(world: &mut World) -> Box<dyn System> {
     world.resources.insert(TerrainMeshes::default());
     if let Some(a) = world.try_resource_mut::<AssetServer>() {
         register_builtin_textures(a);
+        a.register_data_asset::<TerrainLayer>(
+            oxide_assets::AssetTypeInfo::new("TerrainLayer", &["terrainlayer"])
+                .menu("Terrain Layer", "New Terrain Layer", 45)
+                .color(150, 200, 110),
+        );
     }
     Box::new(TerrainSystem)
 }

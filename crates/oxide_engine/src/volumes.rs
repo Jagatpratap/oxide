@@ -13,7 +13,7 @@ use oxide_scene::{
     Bloom, ChannelMixer, ChromaticAberration, ColorAdjustments, Component, DepthOfField,
     DepthOfFieldMode, FilmGrain, GameObjectId, LensDistortion, LiftGammaGain, MotionBlur,
     RenderSettings, ShadowsMidtonesHighlights, SplitToning, Tonemapping, TonemappingMode, Vignette,
-    Volume, WhiteBalance, World,
+    Volume, VolumeProfile, WhiteBalance, World,
 };
 use std::collections::HashMap;
 
@@ -218,17 +218,28 @@ fn collider_distance(world: &World, id: GameObjectId, p: Vector3) -> Option<f32>
     best
 }
 
-/// Enabled override components of type `T` on volume objects.
-fn overrides<'w, T: Component>(
-    world: &'w World,
+/// Override `T` of each volume: an enabled component on the volume's object, else the
+/// one in its Volume Profile (Unity's local overrides take precedence over the profile).
+fn overrides<T: Component + Clone>(
+    world: &World,
     volumes: &[(GameObjectId, f32)],
-) -> HashMap<GameObjectId, &'w T> {
-    if volumes.is_empty() {
-        return HashMap::new();
-    }
-    world
-        .query::<T>()
-        .filter(|(id, _)| volumes.iter().any(|(v, _)| v == id))
+    from_profile: fn(&VolumeProfile) -> Option<&T>,
+) -> HashMap<GameObjectId, T> {
+    let assets = world.resource::<oxide_assets::AssetServer>();
+    volumes
+        .iter()
+        .filter_map(|&(id, _)| {
+            let own = world
+                .query::<T>()
+                .find(|(o, _)| *o == id)
+                .map(|(_, c)| c.clone());
+            let shared = || {
+                let v = world.get_component::<Volume>(id)?;
+                let profile = assets.data.get(v.profile.as_ref()?)?;
+                from_profile(profile).cloned()
+            };
+            own.or_else(shared).map(|c| (id, c))
+        })
         .collect()
 }
 
@@ -255,20 +266,22 @@ pub fn evaluate(world: &World, rs: &RenderSettings, position: Vector3) -> Volume
     volumes.sort_by(|a, b| a.0.total_cmp(&b.0));
     let order: Vec<(GameObjectId, f32)> = volumes.iter().map(|&(_, id, w)| (id, w)).collect();
 
-    let bloom = overrides::<Bloom>(world, &order);
-    let tonemap = overrides::<Tonemapping>(world, &order);
-    let adjust = overrides::<ColorAdjustments>(world, &order);
-    let wb = overrides::<WhiteBalance>(world, &order);
-    let lgg = overrides::<LiftGammaGain>(world, &order);
-    let smh = overrides::<ShadowsMidtonesHighlights>(world, &order);
-    let split = overrides::<SplitToning>(world, &order);
-    let mixer = overrides::<ChannelMixer>(world, &order);
-    let vignette = overrides::<Vignette>(world, &order);
-    let ca = overrides::<ChromaticAberration>(world, &order);
-    let grain = overrides::<FilmGrain>(world, &order);
-    let distortion = overrides::<LensDistortion>(world, &order);
-    let dof = overrides::<DepthOfField>(world, &order);
-    let blur = overrides::<MotionBlur>(world, &order);
+    let bloom = overrides::<Bloom>(world, &order, |p| p.bloom.as_ref());
+    let tonemap = overrides::<Tonemapping>(world, &order, |p| p.tonemapping.as_ref());
+    let adjust = overrides::<ColorAdjustments>(world, &order, |p| p.color_adjustments.as_ref());
+    let wb = overrides::<WhiteBalance>(world, &order, |p| p.white_balance.as_ref());
+    let lgg = overrides::<LiftGammaGain>(world, &order, |p| p.lift_gamma_gain.as_ref());
+    let smh = overrides::<ShadowsMidtonesHighlights>(world, &order, |p| {
+        p.shadows_midtones_highlights.as_ref()
+    });
+    let split = overrides::<SplitToning>(world, &order, |p| p.split_toning.as_ref());
+    let mixer = overrides::<ChannelMixer>(world, &order, |p| p.channel_mixer.as_ref());
+    let vignette = overrides::<Vignette>(world, &order, |p| p.vignette.as_ref());
+    let ca = overrides::<ChromaticAberration>(world, &order, |p| p.chromatic_aberration.as_ref());
+    let grain = overrides::<FilmGrain>(world, &order, |p| p.film_grain.as_ref());
+    let distortion = overrides::<LensDistortion>(world, &order, |p| p.lens_distortion.as_ref());
+    let dof = overrides::<DepthOfField>(world, &order, |p| p.depth_of_field.as_ref());
+    let blur = overrides::<MotionBlur>(world, &order, |p| p.motion_blur.as_ref());
 
     let s = &mut stack;
     for (id, w) in order {
@@ -383,6 +396,50 @@ mod tests {
         let mut w = World::new();
         crate::init_world(&mut w, std::env::temp_dir());
         w
+    }
+
+    #[test]
+    fn volume_profile_assets_apply_and_local_overrides_win() {
+        let mut w = world();
+        let rs = RenderSettings::default();
+        // A Volume Profile asset with Bloom and Color Adjustments, saved and reloaded.
+        let mut bloom = Bloom::default();
+        bloom.intensity.set(3.0);
+        let mut adj = ColorAdjustments::default();
+        adj.saturation.set(-80.0);
+        let profile = VolumeProfile {
+            bloom: Some(bloom),
+            color_adjustments: Some(adj),
+            ..Default::default()
+        };
+        let path = format!("Assets/Test{}.volumeProfile", std::process::id());
+        let assets = w.resource_mut::<oxide_assets::AssetServer>();
+        assets.save_data(&path, Box::new(profile)).unwrap();
+        assets.data.remove(&path);
+        assets.ensure_loaded(&path).unwrap();
+        let v = w.create("Global");
+        w.add_component(
+            v,
+            Volume {
+                profile: Some(oxide_assets::Handle::from_path(path.clone())),
+                ..Default::default()
+            },
+        );
+        let s = evaluate(&w, &rs, Vector3::ZERO);
+        assert_eq!(s.bloom_intensity, 3.0, "bloom from the profile");
+        assert_eq!(s.saturation, -80.0, "colour adjustments from the profile");
+
+        // An override component on the Volume's object replaces the profile's.
+        let mut local = ColorAdjustments::default();
+        local.saturation.set(25.0);
+        w.add_component(v, local);
+        let s = evaluate(&w, &rs, Vector3::ZERO);
+        assert_eq!(s.saturation, 25.0, "local override wins");
+        assert_eq!(
+            s.bloom_intensity, 3.0,
+            "other profile overrides still apply"
+        );
+        let _ = std::fs::remove_file(std::env::temp_dir().join(&path));
     }
 
     #[test]

@@ -58,7 +58,9 @@ pub fn init_world(world: &mut World, project_root: std::path::PathBuf) {
     oxide_scene::register_builtin(&mut world.registry);
     world.resources.insert(Time::new());
     world.resources.insert(Input::new());
-    world.resources.insert(AssetServer::new(project_root));
+    let mut assets = AssetServer::new(project_root);
+    crate::builtin_assets::register(&mut assets);
+    world.resources.insert(assets);
     world.resources.insert(Timers::default());
     world.resources.insert(DebugDraw::default());
     world.resources.insert(RenderSettings::default());

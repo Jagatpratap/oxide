@@ -146,6 +146,9 @@ pub struct Volume {
     pub priority: f32,
     /// Local volumes fade in over this distance outside their colliders.
     pub blend_distance: f32,
+    /// Shared Volume Profile asset (Unity `sharedProfile`). Override components on this
+    /// GameObject take precedence over the profile's.
+    pub profile: Option<oxide_assets::Handle<VolumeProfile>>,
 }
 
 impl Default for Volume {
@@ -155,6 +158,7 @@ impl Default for Volume {
             weight: 1.0,
             priority: 0.0,
             blend_distance: 0.0,
+            profile: None,
         }
     }
 }
@@ -606,4 +610,29 @@ mod tests {
         t.mode.blend(&mut mode, 0.1);
         assert_eq!(mode, TonemappingMode::Neutral);
     }
+}
+
+/// Unity's Volume Profile asset (`.volumeProfile`): a reusable set of overrides that
+/// Volumes point to. Each slot is empty until an override is added.
+/// <https://docs.unity3d.com/Manual/urp/Volume-Profile.html>
+#[derive(Clone, Debug, Default, Reflect)]
+pub struct VolumeProfile {
+    pub bloom: Option<Bloom>,
+    pub tonemapping: Option<Tonemapping>,
+    pub color_adjustments: Option<ColorAdjustments>,
+    pub white_balance: Option<WhiteBalance>,
+    pub lift_gamma_gain: Option<LiftGammaGain>,
+    pub shadows_midtones_highlights: Option<ShadowsMidtonesHighlights>,
+    pub split_toning: Option<SplitToning>,
+    pub channel_mixer: Option<ChannelMixer>,
+    pub vignette: Option<Vignette>,
+    pub chromatic_aberration: Option<ChromaticAberration>,
+    pub film_grain: Option<FilmGrain>,
+    pub lens_distortion: Option<LensDistortion>,
+    pub depth_of_field: Option<DepthOfField>,
+    pub motion_blur: Option<MotionBlur>,
+}
+
+impl oxide_assets::Asset for VolumeProfile {
+    const TYPE_NAME: &'static str = "VolumeProfile";
 }

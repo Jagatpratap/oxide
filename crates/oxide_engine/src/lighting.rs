@@ -64,7 +64,30 @@ pub fn start(world: &mut World) -> Result<usize, String> {
         return Err("a bake is already running".into());
     }
     let rs = world.resource::<RenderSettings>().clone();
+    // The scene's Lighting Settings asset (and its default Lightmap Parameters) if any.
+    if let Some(h) = &rs.lighting_settings {
+        let assets = world.resource_mut::<AssetServer>();
+        let _ = assets.data_asset(h);
+        let params = assets
+            .data
+            .get(h)
+            .and_then(|l: &oxide_scene::LightingSettings| l.default_lightmap_parameters.clone());
+        if let Some(p) = params {
+            let _ = assets.data_asset(&p);
+        }
+    }
     let assets = world.resource::<AssetServer>();
+    let lighting: Option<oxide_scene::LightingSettings> = rs
+        .lighting_settings
+        .as_ref()
+        .and_then(|h| assets.data.get(h))
+        .cloned();
+    if lighting
+        .as_ref()
+        .is_some_and(|l| !l.baked_global_illumination)
+    {
+        return Err("Baked Global Illumination is off in the scene's Lighting Settings".into());
+    }
     let mut textures: HashMap<AssetId, Arc<Texture2D>> = HashMap::new();
     let mut material = |m: &Material| {
         let base = m.base_color.linear();
@@ -117,12 +140,21 @@ pub fn start(world: &mut World) -> Result<usize, String> {
                     .unwrap_or_default()
             })
             .collect();
+        // Lightmap Parameters: the renderer's, else the Lighting Settings' default.
+        let params = r
+            .lightmap_parameters
+            .as_ref()
+            .or(lighting
+                .as_ref()
+                .and_then(|l| l.default_lightmap_parameters.as_ref()))
+            .and_then(|h| assets.data.get(h))
+            .map_or(1.0, |p| p.resolution.max(0.0));
         objects.push(BakeObject {
             mesh: Arc::new(mesh.clone()),
             model: world.local_to_world(id),
             materials,
             receive_lightmap: r.receive_gi == ReceiveGI::Lightmaps,
-            scale_in_lightmap: r.scale_in_lightmap,
+            scale_in_lightmap: r.scale_in_lightmap * params,
         });
         ids.push(id);
     }
@@ -201,13 +233,23 @@ pub fn start(world: &mut World) -> Result<usize, String> {
         sky: oxide_render::sky::SkyModel::new(&env, sun.as_ref().map(|(_, s)| s)),
         ambient_intensity: rs.ambient_intensity,
         probes: probes.clone(),
-        settings: BakeSettings {
-            texels_per_unit: rs.lightmap_resolution.max(0.1),
-            max_lightmap_size: rs.max_lightmap_size.clamp(32, 4096),
-            samples: rs.bake_samples.clamp(1, 4096),
-            bounces: rs.bake_bounces.min(8),
-            padding: rs.lightmap_padding.clamp(1, 16),
-            denoise: true,
+        settings: match &lighting {
+            Some(l) => BakeSettings {
+                texels_per_unit: l.lightmap_resolution.max(0.1),
+                max_lightmap_size: l.max_lightmap_size.clamp(32, 4096),
+                samples: l.indirect_samples.clamp(1, 4096),
+                bounces: l.max_bounces.min(8),
+                padding: l.lightmap_padding.clamp(1, 16),
+                denoise: l.filtering,
+            },
+            None => BakeSettings {
+                texels_per_unit: rs.lightmap_resolution.max(0.1),
+                max_lightmap_size: rs.max_lightmap_size.clamp(32, 4096),
+                samples: rs.bake_samples.clamp(1, 4096),
+                bounces: rs.bake_bounces.min(8),
+                padding: rs.lightmap_padding.clamp(1, 16),
+                denoise: true,
+            },
         },
     };
     let count = input.objects.len();

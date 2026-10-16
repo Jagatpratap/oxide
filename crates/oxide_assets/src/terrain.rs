@@ -9,16 +9,36 @@ use crate::texture::Texture2D;
 use oxide_math::{Color, Vector2, Vector3};
 use std::sync::Arc;
 
-/// Unity `TerrainLayer`.
-#[derive(Clone, Debug)]
+/// Unity `TerrainLayer`: one paintable surface texture. Also an asset file
+/// (`.terrainlayer`) that Terrains can share.
+#[derive(Clone, Debug, PartialEq, oxide_core::Reflect)]
 pub struct TerrainLayer {
     pub name: String,
     pub diffuse: Option<Handle<Texture2D>>,
     /// World size of one texture repeat.
     pub tile_size: Vector2,
     pub tint: Color,
+    #[reflect(range(0, 1))]
     pub smoothness: f32,
+    #[reflect(range(0, 1))]
     pub metallic: f32,
+}
+
+impl Default for TerrainLayer {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            diffuse: None,
+            tile_size: Vector2::new(10.0, 10.0),
+            tint: Color::WHITE,
+            smoothness: 0.0,
+            metallic: 0.0,
+        }
+    }
+}
+
+impl Asset for TerrainLayer {
+    const TYPE_NAME: &'static str = "TerrainLayer";
 }
 
 /// Unity `TreePrototype`: what to draw for each tree instance.

@@ -243,6 +243,9 @@ pub struct MeshRenderer {
     pub receive_gi: ReceiveGI,
     /// Relative lightmap resolution (Unity "Scale In Lightmap").
     pub scale_in_lightmap: f32,
+    /// Lightmap Parameters asset (Unity "Lightmap Parameters"); else the Lighting Settings'
+    /// default.
+    pub lightmap_parameters: Option<Handle<LightmapParameters>>,
     /// Set by baking: which lightmap (-1 = none) and where in it.
     pub lightmap_index: i32,
     pub lightmap_scale_offset: Vector4,
@@ -257,6 +260,7 @@ impl Default for MeshRenderer {
             allow_occlusion_when_dynamic: true,
             receive_gi: ReceiveGI::Lightmaps,
             scale_in_lightmap: 1.0,
+            lightmap_parameters: None,
             lightmap_index: -1,
             lightmap_scale_offset: Vector4::new(1.0, 1.0, 0.0, 0.0),
         }
@@ -370,6 +374,9 @@ pub struct RenderSettings {
     #[reflect(range(0, 4))]
     pub bake_bounces: u32,
     pub lightmap_padding: u32,
+    /// Lighting Settings asset (Unity's per-scene `LightingSettings`); when set, Generate
+    /// Lighting uses it instead of the values above.
+    pub lighting_settings: Option<Handle<LightingSettings>>,
     /// Screen Space Ambient Occlusion (URP renderer feature).
     pub ssao: bool,
     #[reflect(range(0, 4))]
@@ -417,6 +424,7 @@ impl Default for RenderSettings {
             bake_samples: 64,
             bake_bounces: 2,
             lightmap_padding: 2,
+            lighting_settings: None,
             ssao: false,
             ssao_intensity: 1.5,
             ssao_radius: 0.35,
@@ -812,4 +820,62 @@ impl Component for LightProbeGroup {
     fn allow_multiple(&self) -> bool {
         false
     }
+}
+
+/// Unity's Lighting Settings asset (`.lighting`): lightmapping settings shared by scenes.
+/// <https://docs.unity3d.com/Manual/class-LightingSettings.html>
+#[derive(Clone, Debug, Reflect)]
+pub struct LightingSettings {
+    /// Bake lightmaps and light probes at all (Unity "Baked Global Illumination").
+    pub baked_global_illumination: bool,
+    /// Lightmap texels per world unit.
+    pub lightmap_resolution: f32,
+    pub max_lightmap_size: u32,
+    /// Indirect paths per texel.
+    pub indirect_samples: u32,
+    #[reflect(range(0, 4))]
+    pub max_bounces: u32,
+    /// Texels between objects in the atlas.
+    pub lightmap_padding: u32,
+    /// Smooth noise in the indirect light (Unity "Filtering").
+    pub filtering: bool,
+    /// Used by renderers without their own Lightmap Parameters.
+    pub default_lightmap_parameters: Option<Handle<LightmapParameters>>,
+}
+
+impl Default for LightingSettings {
+    fn default() -> Self {
+        Self {
+            baked_global_illumination: true,
+            lightmap_resolution: 10.0,
+            max_lightmap_size: 1024,
+            indirect_samples: 64,
+            max_bounces: 2,
+            lightmap_padding: 2,
+            filtering: true,
+            default_lightmap_parameters: None,
+        }
+    }
+}
+
+impl oxide_assets::Asset for LightingSettings {
+    const TYPE_NAME: &'static str = "LightingSettings";
+}
+
+/// Unity's Lightmap Parameters asset (`.giparams`): per-renderer baking options.
+/// <https://docs.unity3d.com/Manual/class-LightmapParameters.html>
+#[derive(Clone, Debug, Reflect)]
+pub struct LightmapParameters {
+    /// Multiplies the lightmap resolution of renderers using these parameters.
+    pub resolution: f32,
+}
+
+impl Default for LightmapParameters {
+    fn default() -> Self {
+        Self { resolution: 1.0 }
+    }
+}
+
+impl oxide_assets::Asset for LightmapParameters {
+    const TYPE_NAME: &'static str = "LightmapParameters";
 }

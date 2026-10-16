@@ -89,8 +89,23 @@ pub trait FieldValue: Sized {
     const TYPE_NAME: Option<&'static str> = None;
     /// Kind of each element, for `List` fields.
     const ELEMENT: Option<ValueKind> = None;
+    /// `Option<T>` fields: the Inspector can clear them and fill them in.
+    const NULLABLE: bool = false;
     fn to_value(&self) -> Value;
     fn from_value(v: Value) -> Option<Self>;
+    /// This type's default value, if it has one (nested structs: their `Default`).
+    fn default_value() -> Option<Value> {
+        None
+    }
+    /// The value a new list element or a filled-in `Option` starts from (Inspector "+").
+    fn new_item() -> Option<Value> {
+        Self::default_value()
+    }
+    /// Field layout of the struct this holds: itself, inside an `Option`, or the elements
+    /// of a list (so the Inspector can show nested enums, ranges and tooltips).
+    fn nested_info() -> Option<TypeInfo> {
+        None
+    }
     /// Updates `self` in place (nested structs merge field by field).
     fn set_from(&mut self, v: Value) -> bool {
         match Self::from_value(v) {
@@ -117,6 +132,9 @@ macro_rules! field_value {
                     _ => None,
                 }
             }
+            fn default_value() -> Option<Value> {
+                Some(<$t as Default>::default().to_value())
+            }
         }
     };
 }
@@ -127,6 +145,9 @@ field_value!(i64, Int, |s| *s, |v| v);
 field_value!(u32, Int, |s| *s as i64, |v| u32::try_from(v).ok()?);
 impl FieldValue for f32 {
     const KIND: ValueKind = ValueKind::Float;
+    fn default_value() -> Option<Value> {
+        Some(Value::Float(0.0))
+    }
     fn to_value(&self) -> Value {
         Value::Float(*self as f64)
     }
@@ -141,6 +162,9 @@ impl FieldValue for f32 {
 
 impl FieldValue for f64 {
     const KIND: ValueKind = ValueKind::Float;
+    fn default_value() -> Option<Value> {
+        Some(Value::Float(0.0))
+    }
     fn to_value(&self) -> Value {
         Value::Float(*self)
     }
@@ -175,6 +199,16 @@ impl<T: FieldValue> FieldValue for Option<T> {
     const OPTIONS: &'static [&'static str] = T::OPTIONS;
     const TYPE_NAME: Option<&'static str> = T::TYPE_NAME;
     const ELEMENT: Option<ValueKind> = T::ELEMENT;
+    const NULLABLE: bool = true;
+    fn default_value() -> Option<Value> {
+        Some(Value::Null)
+    }
+    fn new_item() -> Option<Value> {
+        T::default_value()
+    }
+    fn nested_info() -> Option<TypeInfo> {
+        T::nested_info()
+    }
     fn to_value(&self) -> Value {
         self.as_ref().map_or(Value::Null, T::to_value)
     }
@@ -184,6 +218,23 @@ impl<T: FieldValue> FieldValue for Option<T> {
             v => T::from_value(v).map(Some),
         }
     }
+    /// A filled-in value merges into the current one (a partial struct keeps the rest).
+    fn set_from(&mut self, v: Value) -> bool {
+        match (self.as_mut(), v) {
+            (_, Value::Null) => {
+                *self = None;
+                true
+            }
+            (Some(inner), v) => inner.set_from(v),
+            (None, v) => match T::from_value(v) {
+                Some(n) => {
+                    *self = Some(n);
+                    true
+                }
+                None => false,
+            },
+        }
+    }
 }
 
 impl<T: FieldValue> FieldValue for Vec<T> {
@@ -191,6 +242,15 @@ impl<T: FieldValue> FieldValue for Vec<T> {
     const TYPE_NAME: Option<&'static str> = T::TYPE_NAME;
     const ELEMENT: Option<ValueKind> = Some(T::KIND);
     const OPTIONS: &'static [&'static str] = T::OPTIONS;
+    fn default_value() -> Option<Value> {
+        Some(Value::List(Vec::new()))
+    }
+    fn new_item() -> Option<Value> {
+        T::default_value()
+    }
+    fn nested_info() -> Option<TypeInfo> {
+        T::nested_info()
+    }
     fn to_value(&self) -> Value {
         Value::List(self.iter().map(T::to_value).collect())
     }
@@ -218,6 +278,33 @@ pub struct FieldInfo {
     pub range: Option<(f64, f64)>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tooltip: Option<&'static str>,
+    /// An `Option` field (the Inspector can clear and fill it in).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub nullable: bool,
+    /// A fresh value for "+" on a list or an empty `Option`.
+    #[serde(skip)]
+    pub new_item: fn() -> Option<Value>,
+    /// Field layout of the nested struct this field holds, if any.
+    #[serde(skip)]
+    pub nested: fn() -> Option<TypeInfo>,
+}
+
+impl FieldInfo {
+    /// Info for a value with no declared field (map entries, synthetic rows).
+    pub fn plain(name: &'static str, kind: ValueKind) -> Self {
+        Self {
+            name,
+            kind,
+            options: &[],
+            type_name: None,
+            element: None,
+            range: None,
+            tooltip: None,
+            nullable: false,
+            new_item: || None,
+            nested: || None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -281,6 +368,9 @@ macro_rules! reflect_struct {
                         element: $crate::reflect::field_element(&self.$field),
                         range: None,
                         tooltip: None,
+                        nullable: $crate::reflect::field_nullable(&self.$field),
+                        new_item: $crate::reflect::field_new_item(&self.$field),
+                        nested: $crate::reflect::field_nested(&self.$field),
                     }),*],
                 }
             }
@@ -358,6 +448,21 @@ pub fn field_element<T: FieldValue>(_: &T) -> Option<ValueKind> {
 #[doc(hidden)]
 pub fn field_type_name<T: FieldValue>(_: &T) -> Option<&'static str> {
     T::TYPE_NAME
+}
+
+#[doc(hidden)]
+pub fn field_nullable<T: FieldValue>(_: &T) -> bool {
+    T::NULLABLE
+}
+
+#[doc(hidden)]
+pub fn field_new_item<T: FieldValue>(_: &T) -> fn() -> Option<Value> {
+    T::new_item
+}
+
+#[doc(hidden)]
+pub fn field_nested<T: FieldValue>(_: &T) -> fn() -> Option<TypeInfo> {
+    T::nested_info
 }
 
 struct Registration {

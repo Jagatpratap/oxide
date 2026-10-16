@@ -181,6 +181,9 @@ fn derive_struct(input: &DeriveInput, fields: &Fields) -> syn::Result<TokenStrea
                 element: #core::reflect::field_element(&self.#id),
                 range: #range,
                 tooltip: #tooltip,
+                nullable: #core::reflect::field_nullable(&self.#id),
+                new_item: #core::reflect::field_new_item(&self.#id),
+                nested: #core::reflect::field_nested(&self.#id),
             }
         });
         gets.push(quote! { #name => Some(#core::reflect::FieldValue::to_value(&self.#id)), });
@@ -228,6 +231,18 @@ fn derive_struct(input: &DeriveInput, fields: &Fields) -> syn::Result<TokenStrea
             fn from_value(v: #core::reflect::Value) -> Option<Self> {
                 #from_default
             }
+            fn default_value() -> Option<#core::reflect::Value> {
+                #[allow(unused_imports)]
+                use #core::reflect::__private::{NoDefault as _, ViaDefault as _};
+                let s: Option<Self> = (&#core::reflect::__private::Maker::<Self>(::core::marker::PhantomData)).make();
+                s.map(|s| #core::reflect::FieldValue::to_value(&s))
+            }
+            fn nested_info() -> Option<#core::reflect::TypeInfo> {
+                #[allow(unused_imports)]
+                use #core::reflect::__private::{NoDefault as _, ViaDefault as _};
+                let s: Option<Self> = (&#core::reflect::__private::Maker::<Self>(::core::marker::PhantomData)).make();
+                s.map(|s| #core::reflect::Reflect::type_info(&s))
+            }
             fn set_from(&mut self, v: #core::reflect::Value) -> bool {
                 match v {
                     #core::reflect::Value::Object(map) => map
@@ -261,6 +276,9 @@ fn derive_enum(input: &DeriveInput, data: &syn::DataEnum) -> syn::Result<TokenSt
             const KIND: #core::reflect::ValueKind = #core::reflect::ValueKind::Enum;
             const OPTIONS: &'static [&'static str] = &[#(#names),*];
             const TYPE_NAME: Option<&'static str> = Some(#ty_name);
+            fn default_value() -> Option<#core::reflect::Value> {
+                Self::OPTIONS.first().map(|n| #core::reflect::Value::Enum((*n).to_owned()))
+            }
             fn to_value(&self) -> #core::reflect::Value {
                 #core::reflect::Value::Enum(match self { #(Self::#idents => #names,)* }.to_owned())
             }
