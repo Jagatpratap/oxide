@@ -879,3 +879,52 @@ impl Default for LightmapParameters {
 impl oxide_assets::Asset for LightmapParameters {
     const TYPE_NAME: &'static str = "LightmapParameters";
 }
+
+/// Unity `SpriteDrawMode`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Reflect)]
+pub enum SpriteDrawMode {
+    /// The sprite at its own size.
+    #[default]
+    Simple,
+    /// 9-slice: corners keep their size, edges and centre stretch to `size`.
+    Sliced,
+    /// The sprite repeats to fill `size`.
+    Tiled,
+}
+
+/// Unity `SpriteRenderer`: draws a sprite in the world (2D games, billboards, UI-like
+/// world elements), sorted by sorting layer and order in layer.
+/// <https://docs.unity3d.com/Manual/class-SpriteRenderer.html>
+#[derive(Clone, Debug, Reflect)]
+pub struct SpriteRenderer {
+    pub sprite: Option<Handle<oxide_assets::Sprite>>,
+    pub color: oxide_math::Color,
+    pub flip_x: bool,
+    pub flip_y: bool,
+    pub draw_mode: SpriteDrawMode,
+    /// World size for Sliced and Tiled.
+    pub size: oxide_math::Vector2,
+    pub sorting_layer: String,
+    pub order_in_layer: i32,
+}
+
+impl Default for SpriteRenderer {
+    fn default() -> Self {
+        Self {
+            sprite: None,
+            color: oxide_math::Color::WHITE,
+            flip_x: false,
+            flip_y: false,
+            draw_mode: SpriteDrawMode::Simple,
+            size: oxide_math::Vector2::new(1.0, 1.0),
+            sorting_layer: "Default".into(),
+            order_in_layer: 0,
+        }
+    }
+}
+
+impl Component for SpriteRenderer {
+    fn allow_multiple(&self) -> bool {
+        false
+    }
+}

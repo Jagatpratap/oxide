@@ -23,6 +23,7 @@ pub mod mcp_terrain;
 pub mod mcp_tools;
 pub mod objects;
 pub mod project_settings;
+pub mod sprites2d;
 pub mod streaming;
 pub mod volumes;
 

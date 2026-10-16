@@ -18,6 +18,13 @@ pub struct TagsAndLayers {
     pub tags: Vec<String>,
     /// Names of layers 0..31 (empty = unused).
     pub layers: Vec<String>,
+    /// 2D Sorting Layers, back to front.
+    #[serde(default = "default_sorting_layers")]
+    pub sorting_layers: Vec<String>,
+}
+
+fn default_sorting_layers() -> Vec<String> {
+    vec!["Default".into()]
 }
 
 impl Default for TagsAndLayers {
@@ -25,6 +32,7 @@ impl Default for TagsAndLayers {
         Self {
             tags: Vec::new(),
             layers: oxide_scene::LayerNames::default().0.to_vec(),
+            sorting_layers: default_sorting_layers(),
         }
     }
 }
@@ -229,6 +237,7 @@ impl ProjectSettings {
             tags_and_layers: TagsAndLayers {
                 tags: world.tags.clone(),
                 layers: world.layers.0.to_vec(),
+                sorting_layers: world.sorting_layers.clone(),
             },
             time: TimeSettings {
                 fixed_timestep: time.fixed_delta_time(),
@@ -270,6 +279,11 @@ impl ProjectSettings {
         for (i, name) in world.layers.0.iter_mut().enumerate() {
             *name = tl.layers.get(i).cloned().unwrap_or_default();
         }
+        world.sorting_layers = if tl.sorting_layers.is_empty() {
+            default_sorting_layers()
+        } else {
+            tl.sorting_layers.clone()
+        };
         {
             let t = world.resource_mut::<Time>();
             t.set_fixed_delta_time(self.time.fixed_timestep.max(0.0001));

@@ -208,6 +208,28 @@ pub struct ParticleInstance {
     pub _pad: [f32; 3],
 }
 
+/// One sprite quad for the sprite pass: the unit square (0..1) placed by `model`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct SpriteInstance {
+    pub model: [[f32; 4]; 4],
+    /// UV origin and size in the texture (0..1, origin top-left).
+    pub uv_rect: [f32; 4],
+    /// Linear RGB and alpha.
+    pub color: [f32; 4],
+}
+
+/// A sprite to draw (Unity SpriteRenderer or a tile): drawn after transparent objects,
+/// sorted by sorting layer, then order in layer, then back to front.
+#[derive(Clone, Copy, Debug)]
+pub struct SpriteDraw {
+    pub texture: Option<AssetId>,
+    /// Index of the sorting layer (Project Settings → Tags and Layers).
+    pub sorting_layer: i32,
+    pub order: i32,
+    pub instance: SpriteInstance,
+}
+
 /// Particles of one system (one texture and blend mode).
 #[derive(Clone, Debug)]
 pub struct ParticleBatch {
@@ -636,6 +658,7 @@ pub struct RenderFrame {
     /// centered on the origin under each matrix.
     pub occluder_boxes: Vec<Matrix4x4>,
     pub particles: Vec<ParticleBatch>,
+    pub sprites: Vec<SpriteDraw>,
     pub reflection_probes: Vec<ReflectionProbeView>,
     /// Cameras rendering into Render Textures (Unity `Camera.targetTexture`), drawn before
     /// the main cameras, at most once per frame each.

@@ -259,6 +259,15 @@ impl LayerNames {
 }
 
 impl World {
+    /// Index of a sorting layer by name (unknown names sort with Default).
+    pub fn sorting_layer_index(&self, name: &str) -> i32 {
+        self.sorting_layers
+            .iter()
+            .position(|l| l == name)
+            .or_else(|| self.sorting_layers.iter().position(|l| l == "Default"))
+            .unwrap_or(0) as i32
+    }
+
     /// Every tag: the built-in ones, then the project's (Unity `UnityEditorInternal.InternalEditorUtility.tags`).
     pub fn all_tags(&self) -> Vec<String> {
         BUILTIN_TAGS
@@ -297,6 +306,8 @@ pub struct World {
     pub layers: LayerNames,
     /// Custom tags from Tags & Layers (the built-in ones are [`BUILTIN_TAGS`]).
     pub tags: Vec<String>,
+    /// Sorting Layers from Tags & Layers, drawn in this order (2D renderers).
+    pub sorting_layers: Vec<String>,
     /// Name of the active scene (Unity `SceneManager.GetActiveScene().name`).
     pub scene_name: String,
     pub scene_path: Option<String>,
@@ -327,6 +338,7 @@ impl World {
             resources: Resources::default(),
             layers: LayerNames::default(),
             tags: Vec::new(),
+            sorting_layers: vec!["Default".into()],
             scene_name: "Untitled".into(),
             scene_path: None,
             additive_scenes: Vec::new(),

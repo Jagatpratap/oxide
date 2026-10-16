@@ -57,6 +57,7 @@ pub fn register_builtin(reg: &mut ComponentRegistry) {
     reg.register::<FullScreenPassRendererFeature>("Rendering/Renderer Features/Full Screen Pass");
     reg.register::<RenderObjectsRendererFeature>("Rendering/Renderer Features/Render Objects");
     reg.register::<player_input::PlayerInput>("Input/Player Input");
+    reg.register::<SpriteRenderer>("Rendering/Sprite Renderer");
 }
 
 #[cfg(test)]

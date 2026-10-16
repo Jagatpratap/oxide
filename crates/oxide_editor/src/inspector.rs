@@ -1159,6 +1159,7 @@ fn assets_of_type(assets: &AssetServer, type_name: Option<&str>) -> Vec<String> 
         "Model" => assets.models.iter().map(|(p, _)| p.to_owned()).collect(),
         "TerrainData" => assets.terrains.iter().map(|(p, _)| p.to_owned()).collect(),
         "Shader" => assets.shaders.iter().map(|(p, _)| p.to_owned()).collect(),
+        "Sprite" => assets.sprite_paths(),
         // Audio Source Output: every group of every mixer (`Main.mixer#SFX`).
         "AudioMixerGroup" => assets
             .paths_of_type("AudioMixer")
@@ -1360,6 +1361,22 @@ fn value_ui(
                 .changed()
             }
         },
+        // 2D renderers pick a Sorting Layer from Tags & Layers.
+        Value::String(s) if f.name == "sorting_layer" => {
+            let mut changed = false;
+            egui::ComboBox::from_id_salt(("sorting-layer", salt))
+                .selected_text(s.as_str())
+                .width(avail(ui))
+                .show_ui(ui, |ui| {
+                    for l in &w.sorting_layers {
+                        if ui.selectable_label(s == l, l).clicked() {
+                            *s = l.clone();
+                            changed = true;
+                        }
+                    }
+                });
+            changed
+        }
         Value::String(s) => ui
             .add(egui::TextEdit::singleline(s).desired_width(f32::INFINITY))
             .changed(),

@@ -62,6 +62,12 @@ fn create_items(prefix: &str) -> Vec<MenuItem> {
         &format!("{prefix}3D Object/Ragdoll..."),
         Action::CreateRagdoll,
     ));
+    for s in ["Square", "Circle"] {
+        v.push(item(
+            &format!("{prefix}2D Object/Sprites/{s}"),
+            Action::Create(Create::Sprite(s)),
+        ));
+    }
     v.push(item(
         &format!("{prefix}Light/Directional Light"),
         Action::Create(Create::DirectionalLight),

@@ -195,6 +195,43 @@ fn tags_and_layers(ui: &mut egui::Ui, s: &mut ProjectSettings, new_tag: &mut Str
                 }
             });
         });
+    egui::CollapsingHeader::new("Sorting Layers")
+        .default_open(true)
+        .show(ui, |ui| {
+            ui.weak("2D renderers draw by sorting layer (top of the list is drawn first), then Order in Layer.");
+            let n = tl.sorting_layers.len();
+            let mut action = None;
+            for (i, name) in tl.sorting_layers.iter_mut().enumerate() {
+                ui.horizontal(|ui| {
+                    ui.label(format!("Layer {i}"));
+                    let default = name == "Default";
+                    ui.add_enabled(!default, egui::TextEdit::singleline(name));
+                    if ui.add_enabled(i > 0, egui::Button::new("^").small()).on_hover_text("Draw earlier").clicked() {
+                        action = Some((i, -1));
+                    }
+                    if ui.add_enabled(i + 1 < n, egui::Button::new("v").small()).on_hover_text("Draw later").clicked() {
+                        action = Some((i, 1));
+                    }
+                    if ui.add_enabled(!default, egui::Button::new("−").small()).on_hover_text("Remove").clicked() {
+                        action = Some((i, 0));
+                    }
+                });
+            }
+            match action {
+                Some((i, 0)) => {
+                    tl.sorting_layers.remove(i);
+                }
+                Some((i, d)) => tl.sorting_layers.swap(i, (i as i32 + d) as usize),
+                None => {}
+            }
+            if ui.small_button("+ Add Sorting Layer").clicked() {
+                let mut k = tl.sorting_layers.len();
+                while tl.sorting_layers.contains(&format!("New Layer {k}")) {
+                    k += 1;
+                }
+                tl.sorting_layers.push(format!("New Layer {k}"));
+            }
+        });
 }
 
 fn time(ui: &mut egui::Ui, s: &mut ProjectSettings) {

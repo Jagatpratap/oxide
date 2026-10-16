@@ -157,6 +157,8 @@ pub enum Create {
     BoxVolume,
     SphereVolume,
     Camera,
+    /// GameObject → 2D Object → Sprites → (built-in sprite name).
+    Sprite(&'static str),
 }
 
 impl Create {
@@ -174,6 +176,7 @@ impl Create {
             Create::BoxVolume => "Box Volume",
             Create::SphereVolume => "Sphere Volume",
             Create::Camera => "Camera",
+            Create::Sprite(n) => n,
         }
     }
 }
@@ -1419,6 +1422,19 @@ fn create(w: &mut World, kind: Create, active: Option<GameObjectId>) -> GameObje
                 Light {
                     light_type: LightType::Spot,
                     range: 10.0,
+                    ..Default::default()
+                },
+            );
+            id
+        }
+        Create::Sprite(name) => {
+            let id = w.create(name);
+            w.add_component(
+                id,
+                oxide_scene::SpriteRenderer {
+                    sprite: Some(oxide_assets::Handle::from_path(format!(
+                        "builtin:Sprites/{name}"
+                    ))),
                     ..Default::default()
                 },
             );

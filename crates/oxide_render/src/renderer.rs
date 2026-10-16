@@ -212,6 +212,7 @@ pub struct SceneRenderer {
     pub gpu_assets: GpuAssets,
     terrain: crate::terrain::TerrainGpu,
     particles: crate::particles::ParticleGpu,
+    sprites: crate::sprites::SpriteGpu,
     /// MSAA sample counts the GPU supports for the HDR and depth formats.
     supported_samples: Vec<u32>,
     frame_layout: wgpu::BindGroupLayout,
@@ -600,12 +601,16 @@ impl SceneRenderer {
         );
         let particles =
             crate::particles::ParticleGpu::new(device, &gpu.queue, &frame_layout, particle_module);
+        let sprite_module = shader(device, "sprites.wgsl", include_str!("shaders/sprites.wgsl"));
+        let sprites =
+            crate::sprites::SpriteGpu::new(device, &gpu.queue, &frame_layout, sprite_module);
         Self {
             wire_supported: device
                 .features()
                 .contains(wgpu::Features::POLYGON_MODE_LINE),
             terrain,
             particles,
+            sprites,
             gpu_assets,
             supported_samples,
             frame_layout,
@@ -1681,6 +1686,7 @@ impl SceneRenderer {
         self.ensure_targets(device, w, h, samples);
         self.ensure_fixed(device, samples);
         self.particles.ensure_pipelines(device, samples);
+        self.sprites.ensure_pipelines(device, samples);
         if capture.is_none() {
             self.last_samples = samples;
             self.motion.advance(frame);
@@ -2586,6 +2592,14 @@ impl SceneRenderer {
             &frame.particles,
             cam0,
         );
+        let sprite_ranges = self.sprites.prepare(
+            device,
+            queue,
+            &mut self.gpu_assets,
+            assets,
+            &frame.sprites,
+            cam0,
+        );
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("scene"),
         });
@@ -2860,6 +2874,9 @@ impl SceneRenderer {
                 draw_batches(&mut pass, tb, &mut stats);
                 if !particle_ranges.is_empty() {
                     stats.draw_calls += self.particles.draw(&mut pass, &particle_ranges, samples);
+                }
+                if !sprite_ranges.is_empty() {
+                    stats.draw_calls += self.sprites.draw(&mut pass, &sprite_ranges, samples);
                 }
                 for list in features_at(RenderPassEvent::AfterRenderingTransparents) {
                     draw_batches(&mut pass, list, &mut stats);

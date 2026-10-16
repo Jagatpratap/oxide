@@ -58,6 +58,8 @@ pub struct AssetServer {
     pub terrains: Assets<crate::terrain::TerrainData>,
     pub render_textures: Assets<crate::render_texture::RenderTexture>,
     pub shaders: Assets<crate::shader::Shader>,
+    /// Sprites made from textures imported as Sprite (`Assets/sheet.png#walk_0`).
+    pub sprites: Assets<crate::sprite::Sprite>,
     /// Every asset type the Project window knows (built-in and registered).
     pub types: crate::asset_types::AssetTypeRegistry,
     /// Loaded data assets (Unity ScriptableObjects): Physics Materials, Volume Profiles, ...
@@ -86,6 +88,7 @@ impl AssetServer {
             terrains: Assets::default(),
             render_textures: Assets::default(),
             shaders: Assets::default(),
+            sprites: Assets::default(),
             types: Default::default(),
             data: Default::default(),
             mtimes: Default::default(),
@@ -116,6 +119,40 @@ impl AssetServer {
             "builtin:normal",
             Texture2D::solid("normal", [128, 128, 255, 255], false),
         );
+        // Unity's built-in 2D sprites (GameObject → 2D Object → Sprites).
+        let n = 64u32;
+        let mut circle = Vec::with_capacity((n * n * 4) as usize);
+        for y in 0..n {
+            for x in 0..n {
+                let d = ((x as f32 + 0.5 - n as f32 / 2.0).hypot(y as f32 + 0.5 - n as f32 / 2.0))
+                    / (n as f32 / 2.0);
+                let a = ((1.0 - d) * n as f32 / 2.0).clamp(0.0, 1.0);
+                circle.extend_from_slice(&[255, 255, 255, (a * 255.0) as u8]);
+            }
+        }
+        for (name, tex, px) in [
+            ("Square", Texture2D::solid("Square", [255; 4], true), 1u32),
+            (
+                "Circle",
+                Texture2D::from_rgba8("Circle", n, n, circle, true),
+                n,
+            ),
+        ] {
+            let tpath = format!("builtin:sprite-{}", name.to_lowercase());
+            let th = s.textures.insert(tpath, tex);
+            s.sprites.insert(
+                format!("builtin:Sprites/{name}"),
+                crate::sprite::Sprite {
+                    name: name.into(),
+                    texture: th,
+                    rect: oxide_math::Vector4::new(0.0, 0.0, px as f32, px as f32),
+                    pivot: oxide_math::Vector2::new(0.5, 0.5),
+                    pixels_per_unit: px as f32,
+                    border: oxide_math::Vector4::ZERO,
+                    texture_size: oxide_math::Vector2::new(px as f32, px as f32),
+                },
+            );
+        }
         s.textures.insert(
             "builtin:grid",
             Texture2D::checker("grid", 256, 8, [200, 200, 200, 255], [150, 150, 150, 255]),
@@ -350,6 +387,8 @@ impl AssetServer {
             return Ok(self.textures.insert(path.to_owned(), tex));
         }
         let mut tex = Texture2D::decode(name, &bytes, imp.srgb)?;
+        // Sprite rects are in the source image's pixels, whatever the import size.
+        let source_size = (tex.width, tex.height);
         tex.limit_size(imp.max_size);
         if !imp.generate_mip_maps {
             tex.mips.truncate(1);
@@ -366,7 +405,94 @@ impl AssetServer {
         {
             tex.compressed = Some(self.compressed_cached(&bytes, &imp, format, &tex));
         }
-        Ok(self.textures.insert(path.to_owned(), tex))
+        let (w, h) = source_size;
+        let handle = self.textures.insert(path.to_owned(), tex);
+        self.make_sprites(path, &imp, w, h);
+        Ok(handle)
+    }
+
+    /// Sprite sub-assets of a texture imported as Sprite: the whole texture (Single) or
+    /// each slice (Multiple), at `<path>#<name>`.
+    fn make_sprites(&mut self, path: &str, imp: &crate::TextureImporter, w: u32, h: u32) {
+        let prefix = format!("{path}#");
+        let old: Vec<String> = self
+            .sprites
+            .iter()
+            .filter(|(p, _)| p.starts_with(&prefix))
+            .map(|(p, _)| p.to_owned())
+            .collect();
+        for p in old {
+            self.sprites.remove(&Handle::from_path(p));
+        }
+        if imp.texture_type != crate::TextureImporterType::Sprite {
+            return;
+        }
+        let stem = Path::new(path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Sprite")
+            .to_owned();
+        let texture: Handle<Texture2D> = Handle::from_path(path);
+        let size = oxide_math::Vector2::new(w as f32, h as f32);
+        let rects: Vec<crate::sprite::SpriteRect> = match imp.sprite_mode {
+            crate::sprite::SpriteImportMode::Single => vec![crate::sprite::SpriteRect {
+                name: stem,
+                rect: oxide_math::Vector4::new(0.0, 0.0, w as f32, h as f32),
+                pivot: imp.sprite_pivot,
+                border: imp.sprite_border,
+            }],
+            crate::sprite::SpriteImportMode::Multiple => imp.sprites.clone(),
+        };
+        for r in rects {
+            self.sprites.insert(
+                format!("{path}#{}", r.name),
+                crate::sprite::Sprite {
+                    name: r.name.clone(),
+                    texture: texture.clone(),
+                    rect: r.rect,
+                    pivot: r.pivot,
+                    pixels_per_unit: imp.pixels_per_unit,
+                    border: r.border,
+                    texture_size: size,
+                },
+            );
+        }
+    }
+
+    /// Every sprite in the project: loaded ones, and those of texture files imported as
+    /// Sprite (read from their `.meta`), for pickers.
+    pub fn sprite_paths(&self) -> Vec<String> {
+        let mut out: Vec<String> = self.sprites.iter().map(|(p, _)| p.to_owned()).collect();
+        for p in self.list_files() {
+            if self
+                .types
+                .for_path(&p)
+                .is_none_or(|t| t.type_name != "Texture")
+                || !std::fs::metadata(self.full_path(&format!("{p}.meta")))
+                    .is_ok_and(|m| m.is_file())
+            {
+                continue;
+            }
+            let imp = self.texture_importer(&p);
+            if imp.texture_type != crate::TextureImporterType::Sprite {
+                continue;
+            }
+            match imp.sprite_mode {
+                crate::sprite::SpriteImportMode::Single => {
+                    let stem = Path::new(&p)
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("Sprite");
+                    out.push(format!("{p}#{stem}"));
+                }
+                crate::sprite::SpriteImportMode::Multiple => {
+                    out.extend(imp.sprites.iter().map(|r| format!("{p}#{}", r.name)));
+                }
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
     }
 
     fn compressed_cached(

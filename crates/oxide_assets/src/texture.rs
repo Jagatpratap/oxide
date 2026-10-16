@@ -27,6 +27,8 @@ pub enum TextureImporterType {
     Default,
     /// Linear data, compressed as two channels (BC5); the shader rebuilds Z.
     NormalMap,
+    /// Unity "Sprite (2D and UI)": makes Sprite sub-assets for SpriteRenderers, tiles and UI.
+    Sprite,
 }
 
 /// Unity `TextureImporterCompression`.
@@ -78,6 +80,16 @@ pub struct TextureImporter {
     #[reflect(range(0, 16))]
     pub aniso_level: u32,
     pub compression: TextureCompression,
+    /// Sprite type: one sprite, or a sheet sliced in the Sprite Editor.
+    pub sprite_mode: crate::sprite::SpriteImportMode,
+    /// Texture pixels per world unit (Unity default 100).
+    pub pixels_per_unit: f32,
+    /// Single sprite's normalized pivot.
+    pub sprite_pivot: oxide_math::Vector2,
+    /// Single sprite's 9-slice border (left, bottom, right, top pixels).
+    pub sprite_border: oxide_math::Vector4,
+    /// Multiple: the slices (Sprite Editor).
+    pub sprites: Vec<crate::sprite::SpriteRect>,
 }
 
 impl Default for TextureImporter {
@@ -91,6 +103,11 @@ impl Default for TextureImporter {
             filter_mode: FilterMode::Trilinear,
             aniso_level: 8,
             compression: TextureCompression::NormalQuality,
+            sprite_mode: crate::sprite::SpriteImportMode::Single,
+            pixels_per_unit: 100.0,
+            sprite_pivot: oxide_math::Vector2::new(0.5, 0.5),
+            sprite_border: oxide_math::Vector4::ZERO,
+            sprites: Vec::new(),
         }
     }
 }
