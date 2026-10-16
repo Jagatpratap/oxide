@@ -1,5 +1,15 @@
 // ---- lighting -------------------------------------------------------------------------
 
+// Screen-space ambient occlusion of this camera (white when off).
+@group(2) @binding(0) var ssao_tex: texture_2d<f32>;
+
+fn screen_ao(frag_xy: vec2f) -> f32 {
+    if (frame.ssao.x < 0.5) {
+        return 1.0;
+    }
+    return textureLoad(ssao_tex, vec2i(frag_xy), 0).r;
+}
+
 fn d_ggx(nh: f32, a: f32) -> f32 {
     let a2 = a * a;
     let d = nh * nh * (a2 - 1.0) + 1.0;
@@ -147,8 +157,12 @@ fn env_specular(r: vec3f, pos: vec3f, rough: f32, sel: vec2u) -> vec3f {
 }
 
 // Full surface shading: sun (with shadows), punctual lights, sky ambient and reflections.
-fn shade(world_pos: vec3f, n: vec3f, geo_n: vec3f, albedo: vec3f, metallic: f32, rough: f32, ao: f32, receive_shadows: bool, probe_sel: vec2u) -> vec3f {
+fn shade(world_pos: vec3f, n: vec3f, geo_n: vec3f, albedo: vec3f, metallic: f32, rough: f32, ao_in: f32, receive_shadows: bool, probe_sel: vec2u, frag_xy: vec2f) -> vec3f {
     let f0 = mix(vec3f(0.04), albedo, metallic);
+    let ssao = screen_ao(frag_xy);
+    let ao = min(ao_in, ssao);
+    // URP: AO also darkens direct light by "Direct Lighting Strength".
+    let direct_ao = mix(1.0, ssao, frame.ssao.y);
     let v = normalize(frame.camera_pos.xyz - world_pos);
     let nv = max(dot(n, v), 1e-4);
     var color = vec3f(0.0);
@@ -158,7 +172,7 @@ fn shade(world_pos: vec3f, n: vec3f, geo_n: vec3f, albedo: vec3f, metallic: f32,
         if (receive_shadows) {
             shadow = sun_shadow(world_pos, geo_n, view_depth);
         }
-        color += brdf(n, v, sun_to_light(), albedo, f0, rough, metallic) * frame.sun_color.rgb * shadow;
+        color += brdf(n, v, sun_to_light(), albedo, f0, rough, metallic) * frame.sun_color.rgb * shadow * direct_ao;
     }
     let count = u32(frame.misc.x);
     for (var i = 0u; i < count; i++) {
@@ -179,7 +193,7 @@ fn shade(world_pos: vec3f, n: vec3f, geo_n: vec3f, albedo: vec3f, metallic: f32,
             let s = clamp((cd - L.spot.x) * L.spot.y, 0.0, 1.0);
             atten *= s * s;
         }
-        color += brdf(n, v, l, albedo, f0, rough, metallic) * L.color.rgb * atten;
+        color += brdf(n, v, l, albedo, f0, rough, metallic) * L.color.rgb * atten * direct_ao;
     }
     // Environment: SH diffuse ambient + prefiltered reflection probes / sky.
     let diffuse_amb = ambient_diffuse(n) * albedo * (1.0 - metallic);

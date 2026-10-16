@@ -435,6 +435,32 @@ impl PostSettings {
     }
 }
 
+/// URP's Screen Space Ambient Occlusion renderer feature.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SsaoSettings {
+    pub intensity: f32,
+    /// World-space sampling radius.
+    pub radius: f32,
+    /// How much AO also darkens direct light (0..1).
+    pub direct_lighting_strength: f32,
+    /// AO fades out by this distance from the camera.
+    pub falloff_distance: f32,
+    /// Samples per pixel (4..32).
+    pub samples: u32,
+}
+
+impl Default for SsaoSettings {
+    fn default() -> Self {
+        Self {
+            intensity: 1.5,
+            radius: 0.35,
+            direct_lighting_strength: 0.25,
+            falloff_distance: 100.0,
+            samples: 12,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Environment {
     /// sRGB inputs, converted in the renderer.
@@ -447,6 +473,8 @@ pub struct Environment {
     pub fog: Option<(FogKind, Color)>,
     /// Post-processing after the Volume stack is evaluated.
     pub post: PostSettings,
+    /// Screen-space ambient occlusion (first camera only).
+    pub ssao: Option<SsaoSettings>,
     pub shadow_distance: f32,
     /// MSAA samples (1, 2, 4 or 8; clamped to what the GPU supports).
     pub msaa_samples: u32,
@@ -463,6 +491,7 @@ impl Default for Environment {
             reflection_intensity: 1.0,
             fog: None,
             post: PostSettings::default(),
+            ssao: None,
             shadow_distance: 150.0,
             msaa_samples: 4,
         }

@@ -49,6 +49,7 @@ struct FrameUniform {
     misc: [f32; 4],
     clear_color: [f32; 4],
     cascade_texel: [f32; 4],
+    ssao: [f32; 4],
 }
 
 #[repr(C)]
@@ -142,6 +143,8 @@ struct Targets {
     motion: Option<wgpu::TextureView>,
     /// Depth of field / motion blur textures, made on first use.
     fx: Option<crate::postfx::FxTargets>,
+    /// SSAO textures, made on first use.
+    ssao: Option<crate::ssao::SsaoTargets>,
     bloom: Vec<(wgpu::TextureView, u32, u32)>,
     msaa: Option<wgpu::TextureView>,
     resolve_tex: wgpu::Texture,
@@ -196,6 +199,11 @@ pub struct SceneRenderer {
     motion: MotionHistory,
     taa_histories: HashMap<(u64, u32, u32), TaaHistory>,
     postfx: crate::postfx::PostFx,
+    ssao: crate::ssao::SsaoGpu,
+    prepass_layout: wgpu::PipelineLayout,
+    /// Depth-only pipelines for the SSAO prepass: (cutout, double sided, skinned).
+    prepass_pipelines: HashMap<(bool, bool, bool), wgpu::RenderPipeline>,
+    terrain_prepass: wgpu::RenderPipeline,
     /// Per view: (frame index, view-projection this frame, last frame's), for motion blur.
     view_prev: HashMap<(u64, u32, u32), (u64, Matrix4x4, Matrix4x4)>,
     frame_buffers: Vec<wgpu::Buffer>,
@@ -363,8 +371,18 @@ impl SceneRenderer {
                 storage_entry(1, wgpu::ShaderStages::VERTEX),
             ],
         });
+        let ssao = crate::ssao::SsaoGpu::new(device, &gpu.queue);
         let main_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("main pipeline layout"),
+            bind_group_layouts: &[
+                Some(&frame_layout),
+                Some(&gpu_assets.material_layout),
+                Some(&ssao.screen_layout),
+            ],
+            immediate_size: 0,
+        });
+        let prepass_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("depth prepass layout"),
             bind_group_layouts: &[Some(&frame_layout), Some(&gpu_assets.material_layout)],
             immediate_size: 0,
         });
@@ -458,9 +476,47 @@ impl SceneRenderer {
         let terrain_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("terrain pipeline layout"),
+                bind_group_layouts: &[
+                    Some(&frame_layout),
+                    Some(&terrain.layout),
+                    Some(&ssao.screen_layout),
+                ],
+                immediate_size: 0,
+            });
+        let terrain_prepass = {
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("terrain prepass layout"),
                 bind_group_layouts: &[Some(&frame_layout), Some(&terrain.layout)],
                 immediate_size: 0,
             });
+            let buffers = vertex_layouts(false);
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("terrain depth prepass"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &terrain_module,
+                    entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: &buffers,
+                },
+                primitive: wgpu::PrimitiveState {
+                    front_face: wgpu::FrontFace::Cw,
+                    cull_mode: Some(wgpu::Face::Back),
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::Greater),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: Default::default(),
+                fragment: None,
+                multiview_mask: None,
+                cache: None,
+            })
+        };
         let particle_module = shader(
             device,
             "particles.wgsl",
@@ -493,6 +549,10 @@ impl SceneRenderer {
             motion: MotionHistory::default(),
             taa_histories: HashMap::new(),
             postfx: crate::postfx::PostFx::new(device),
+            ssao,
+            prepass_layout,
+            prepass_pipelines: HashMap::new(),
+            terrain_prepass,
             view_prev: HashMap::new(),
             frame_buffers: Vec::new(),
             frame_groups: Vec::new(),
@@ -725,6 +785,49 @@ impl SceneRenderer {
         })
     }
 
+    fn prepass_pipeline(&mut self, device: &wgpu::Device, key: (bool, bool, bool)) {
+        let (cutout, double_sided, skinned) = key;
+        let (module, layout) = (&self.lit_module, &self.prepass_layout);
+        self.prepass_pipelines.entry(key).or_insert_with(|| {
+            let buffers = vertex_layouts(skinned);
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("depth prepass"),
+                layout: Some(layout),
+                vertex: wgpu::VertexState {
+                    module,
+                    entry_point: Some(if skinned { "vs_skinned" } else { "vs_main" }),
+                    compilation_options: Default::default(),
+                    buffers: &buffers,
+                },
+                primitive: wgpu::PrimitiveState {
+                    front_face: wgpu::FrontFace::Cw,
+                    cull_mode: if double_sided {
+                        None
+                    } else {
+                        Some(wgpu::Face::Back)
+                    },
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::Greater),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: Default::default(),
+                fragment: cutout.then(|| wgpu::FragmentState {
+                    module,
+                    entry_point: Some("fs_depth_cutout"),
+                    compilation_options: Default::default(),
+                    targets: &[],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        });
+    }
+
     fn shadow_pipeline(&mut self, device: &wgpu::Device, key: ShadowKey) -> &wgpu::RenderPipeline {
         let (module, layout) = (&self.shadow_module, &self.shadow_pipeline_layout);
         self.shadow_pipelines.entry(key).or_insert_with(|| {
@@ -831,6 +934,7 @@ impl SceneRenderer {
                 ldr: None,
                 motion: None,
                 fx: None,
+                ssao: None,
                 bloom,
                 msaa,
                 resolve_tex,
@@ -1223,6 +1327,11 @@ impl SceneRenderer {
         }
         let taa = mode == AntiAliasing::Taa;
         let fx = capture.is_none() && crate::postfx::PostFx::wanted(&frame.environment.post);
+        // SSAO for a single camera (its AO texture covers the whole target).
+        let ssao = frame
+            .environment
+            .ssao
+            .filter(|_| capture.is_none() && frame.cameras.len() == 1);
         let samples = if taa || !aa.allow_msaa {
             1
         } else {
@@ -1474,6 +1583,8 @@ impl SceneRenderer {
         let mut camera_batches: Vec<(Vec<Batch>, Vec<Batch>)> = Vec::new();
         // (jittered, unjittered view-projection, frustum) of the TAA camera.
         let mut taa_matrices: Option<(Matrix4x4, Matrix4x4, [Vector4; 6])> = None;
+        // Projection (jittered with TAA) of the first camera, for SSAO.
+        let mut cam0_proj = Matrix4x4::IDENTITY;
         let mut camera_terrain: Vec<Vec<(AssetId, AssetId, u32)>> = Vec::new();
         let mut occlusion = std::mem::take(&mut self.occlusion);
         occlusion.resize_with(frame.cameras.len(), Default::default);
@@ -1495,8 +1606,14 @@ impl SceneRenderer {
                 ));
                 let jittered = j * vp;
                 taa_matrices = Some((jittered, vp, planes));
+                if ci == 0 {
+                    cam0_proj = j * cam.projection(aspect);
+                }
                 jittered
             } else {
+                if ci == 0 {
+                    cam0_proj = cam.projection(aspect);
+                }
                 vp
             };
             let occ = &mut occlusion[ci];
@@ -1753,6 +1870,12 @@ impl SceneRenderer {
                 misc: [lights.len() as f32, 0.0, w as f32, h as f32],
                 clear_color: clear,
                 cascade_texel: texels,
+                ssao: [
+                    ssao.is_some() as u32 as f32,
+                    ssao.map_or(0.0, |s| s.direct_lighting_strength.clamp(0.0, 1.0)),
+                    0.0,
+                    0.0,
+                ],
             };
             queue.write_buffer(&self.frame_buffers[ci], 0, bytemuck::bytes_of(&u));
         }
@@ -1845,8 +1968,87 @@ impl SceneRenderer {
             }
         }
 
+        // ---- SSAO: depth prepass of the first camera, then AO ---------------------------
+        if let (Some(settings), Some(cam)) = (ssao, frame.cameras.first()) {
+            for b in &camera_batches[0].0 {
+                let cutout = self.gpu_assets.materials[&b.material].cutout;
+                self.prepass_pipeline(device, (cutout, b.key.double_sided, b.key.skinned));
+            }
+            let t = self.targets.get_mut(&(w, h, samples)).expect("targets");
+            if t.ssao.is_none() {
+                t.ssao = Some(self.ssao.targets(device, w, h));
+            }
+            let st = self.targets[&(w, h, samples)]
+                .ssao
+                .as_ref()
+                .expect("made above");
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("depth prepass"),
+                    color_attachments: &[],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &st.depth,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(0.0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    ..Default::default()
+                });
+                let [vx, vy, vw, vh] = cam.viewport;
+                let px = (vx * w as f32).clamp(0.0, w as f32);
+                let pw = (vw * w as f32).clamp(1.0, w as f32 - px);
+                let ph = (vh * h as f32).clamp(1.0, h as f32);
+                let py = (h as f32 - (vy * h as f32) - ph).clamp(0.0, h as f32 - ph);
+                pass.set_viewport(px, py, pw, ph, 0.0, 1.0);
+                pass.set_bind_group(0, &self.frame_groups[0], &[]);
+                pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+                if !camera_terrain[0].is_empty() {
+                    pass.set_pipeline(&self.terrain_prepass);
+                    for &(data, mesh_id, idx) in &camera_terrain[0] {
+                        let (Some(bg), Some(mesh)) = (
+                            self.terrain.bind_group(data),
+                            self.gpu_assets.meshes.get(&mesh_id),
+                        ) else {
+                            continue;
+                        };
+                        pass.set_bind_group(1, bg, &[]);
+                        pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                        pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                        pass.draw_indexed(mesh.submeshes[0].clone(), 0, idx..idx + 1);
+                    }
+                }
+                for b in &camera_batches[0].0 {
+                    let mesh = &self.gpu_assets.meshes[&b.mesh];
+                    let mat = &self.gpu_assets.materials[&b.material];
+                    pass.set_pipeline(
+                        &self.prepass_pipelines[&(mat.cutout, b.key.double_sided, b.key.skinned)],
+                    );
+                    pass.set_bind_group(1, &mat.bind_group, &[]);
+                    pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                    if b.key.skinned {
+                        let Some(skin) = &mesh.skin else { continue };
+                        pass.set_vertex_buffer(2, skin.slice(..));
+                    }
+                    pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(
+                        mesh.submeshes[b.submesh as usize].clone(),
+                        0,
+                        b.instances.clone(),
+                    );
+                }
+            }
+            self.ssao
+                .run(device, queue, &mut encoder, st, cam0_proj, &settings);
+        }
+
         // ---- camera passes -------------------------------------------------------------
         let targets = self.targets.get(&(w, h, samples)).expect("targets");
+        let screen_group = match (&ssao, &targets.ssao) {
+            (Some(_), Some(st)) => &st.screen_group,
+            _ => &self.ssao.white_group,
+        };
         let fixed = &self.fixed[&samples];
         let (color_view, resolve) = match &targets.msaa {
             Some(m) => (m, Some(&targets.resolve)),
@@ -1888,6 +2090,7 @@ impl SceneRenderer {
                 pass.set_viewport(px, py, pw, ph, 0.0, 1.0);
                 pass.set_scissor_rect(px as u32, py as u32, (pw as u32).max(1), (ph as u32).max(1));
                 pass.set_bind_group(0, &self.frame_groups[ci], &[]);
+                pass.set_bind_group(2, screen_group, &[]);
                 match cam.clear {
                     ClearMode::Sky => pass.set_pipeline(&fixed.sky),
                     ClearMode::Color(_) => pass.set_pipeline(&fixed.solid),

@@ -18,6 +18,7 @@ struct Frame {
     misc: vec4f,            // x = punctual light count, y unused, zw = target size
     clear_color: vec4f,     // solid clear color (linear)
     cascade_texel: vec4f,   // world-space texel size of each cascade
+    ssao: vec4f,            // x = 1 when the AO texture is valid, y = direct lighting strength
 };
 
 struct PunctualLight {

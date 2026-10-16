@@ -93,6 +93,15 @@ fn sample_uv(uv: vec2f) -> vec2f {
     return vec2f(uv.x, 1.0 - uv.y);
 }
 
+// Depth prepass of alpha-cutout materials: only the alpha test.
+@fragment
+fn fs_depth_cutout(in: VertexOut) {
+    let a = material.base_color.a * textureSample(base_map, mat_sampler, sample_uv(in.uv)).a * in.color.a;
+    if (a < material.flags.x) {
+        discard;
+    }
+}
+
 @fragment
 fn fs_main(in: VertexOut, @builtin(front_facing) front: bool) -> FragOut {
     let uv = sample_uv(in.uv);
@@ -128,7 +137,7 @@ fn fs_main(in: VertexOut, @builtin(front_facing) front: bool) -> FragOut {
     let ao = mix(1.0, textureSample(occlusion_map, mat_sampler, uv).r, material.pbr.w);
 
     let albedo = base.rgb;
-    var color = shade(in.world_pos, n, normalize(in.normal), albedo, metallic, rough, ao, in.receive_shadows != 0u, in.probes);
+    var color = shade(in.world_pos, n, normalize(in.normal), albedo, metallic, rough, ao, in.receive_shadows != 0u, in.probes, in.clip.xy);
     color += emission;
 
     color = apply_fog(color, in.world_pos);

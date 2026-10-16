@@ -323,6 +323,20 @@ pub struct RenderSettings {
     pub lod_bias: f32,
     /// Multisample anti-aliasing for all cameras that allow it (URP asset MSAA).
     pub msaa: MsaaQuality,
+    /// Screen Space Ambient Occlusion (URP renderer feature).
+    pub ssao: bool,
+    #[reflect(range(0, 4))]
+    pub ssao_intensity: f32,
+    /// Sampling radius in world units.
+    #[reflect(range(0.05, 2))]
+    pub ssao_radius: f32,
+    /// How much AO also darkens direct light.
+    #[reflect(range(0, 1))]
+    pub ssao_direct_lighting_strength: f32,
+    /// AO fades out by this distance from the camera.
+    pub ssao_falloff_distance: f32,
+    #[reflect(range(4, 32))]
+    pub ssao_samples: u32,
 }
 
 impl Default for RenderSettings {
@@ -351,6 +365,12 @@ impl Default for RenderSettings {
             vignette: 0.15,
             lod_bias: 1.0,
             msaa: MsaaQuality::Msaa4x,
+            ssao: false,
+            ssao_intensity: 1.5,
+            ssao_radius: 0.35,
+            ssao_direct_lighting_strength: 0.25,
+            ssao_falloff_distance: 100.0,
+            ssao_samples: 12,
         }
     }
 }

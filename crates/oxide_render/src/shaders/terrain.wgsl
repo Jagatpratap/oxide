@@ -79,7 +79,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
         metal += t.w * weights[i];
     }
     let n = normalize(in.normal);
-    var color = shade(in.world_pos, n, n, albedo, metal, clamp(1.0 - smooth_, 0.045, 1.0), 1.0, in.receive_shadows != 0u, in.probes);
+    var color = shade(in.world_pos, n, n, albedo, metal, clamp(1.0 - smooth_, 0.045, 1.0), 1.0, in.receive_shadows != 0u, in.probes, in.clip.xy);
     color = apply_fog(color, in.world_pos);
     return vec4f(color, 1.0);
 }

@@ -18,6 +18,7 @@ pub mod post;
 pub mod postfx;
 pub mod reflection;
 pub mod renderer;
+pub mod ssao;
 pub mod terrain;
 
 pub use capture::{CapturedImage, capture_frame};

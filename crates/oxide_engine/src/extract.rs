@@ -87,6 +87,13 @@ pub fn environment(rs: &RenderSettings) -> Environment {
             rs.fog_color,
         )),
         post: crate::volumes::VolumeStack::base(rs).to_post(rs, true),
+        ssao: rs.ssao.then_some(oxide_render::SsaoSettings {
+            intensity: rs.ssao_intensity,
+            radius: rs.ssao_radius,
+            direct_lighting_strength: rs.ssao_direct_lighting_strength,
+            falloff_distance: rs.ssao_falloff_distance,
+            samples: rs.ssao_samples,
+        }),
         shadow_distance: rs.shadow_distance,
         msaa_samples: match rs.msaa {
             MsaaQuality::Disabled => 1,
