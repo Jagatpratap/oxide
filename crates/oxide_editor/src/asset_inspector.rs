@@ -83,6 +83,9 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: &s
                         st.actions.push(Action::OpenScene(path.to_owned()));
                     }
                 }
+                t if engine.world.resource::<AssetServer>().types.is_data(t) => {
+                    data_asset(st, engine, ui, path)
+                }
                 "Folder" => {
                     let n = std::fs::read_dir(&full)
                         .map(|d| {
@@ -197,6 +200,29 @@ fn edit_fields(ui: &mut egui::Ui, engine: &mut Engine, obj: &mut dyn Reflect, sa
         }
     }
     changed
+}
+
+/// A data asset (ScriptableObject): its reflected fields, saved to the file on every edit.
+fn data_asset(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: &str) {
+    let assets = engine.world.resource_mut::<AssetServer>();
+    if !assets.data.contains(path)
+        && let Err(e) = assets.load_data(path)
+    {
+        ui.colored_label(Color32::from_rgb(230, 120, 100), e);
+        return;
+    }
+    let Some(mut value) = assets.data.get_dyn(path).map(|v| v.clone_box()) else {
+        return;
+    };
+    let salt = format!("data:{path}");
+    if edit_fields(ui, engine, value.as_reflect_mut(), &salt)
+        && let Err(e) = engine
+            .world
+            .resource_mut::<AssetServer>()
+            .save_data(path, value)
+    {
+        st.status = e;
+    }
 }
 
 fn material(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: &str) {

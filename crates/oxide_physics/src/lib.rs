@@ -24,6 +24,13 @@ use oxide_scene::{System, World};
 /// Installs the `Physics` resource and physics components; returns the system to run.
 pub fn install(world: &mut World) -> Box<dyn System> {
     world.resources.insert(Physics::default());
+    if let Some(a) = world.resources.get_mut::<oxide_assets::AssetServer>() {
+        a.register_data_asset::<PhysicsMaterial>(
+            oxide_assets::AssetTypeInfo::new("PhysicsMaterial", &["physicMaterial"])
+                .menu("Physics Material", "New Physics Material", 40)
+                .color(120, 200, 150),
+        );
+    }
     let r = &mut world.registry;
     r.register::<Rigidbody>("Physics/Rigidbody");
     r.register::<BoxCollider>("Physics/Box Collider");

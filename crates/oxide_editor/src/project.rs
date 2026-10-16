@@ -146,8 +146,36 @@ pub struct Entry {
 }
 
 /// Unity type name of an asset file and its icon color.
+/// Extension → (type name, icon colour), from the asset type registry.
+static KINDS: std::sync::RwLock<Vec<(&'static str, &'static str, [u8; 3])>> =
+    std::sync::RwLock::new(Vec::new());
+
+/// Refreshes the Project window's view of the asset type registry (when it changed).
+pub fn sync_asset_types(types: &oxide_assets::AssetTypeRegistry) {
+    static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(u64::MAX);
+    let g = types.generation();
+    if GENERATION.swap(g, std::sync::atomic::Ordering::Relaxed) == g {
+        return;
+    }
+    let mut v = Vec::new();
+    for t in types.iter() {
+        for e in t.extensions {
+            v.push((*e, t.type_name, t.color));
+        }
+    }
+    if let Ok(mut k) = KINDS.write() {
+        *k = v;
+    }
+}
+
+/// Type name and icon colour of a file, by extension.
 pub fn kind(name: &str) -> (&'static str, Color32) {
     let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    if let Ok(k) = KINDS.read()
+        && let Some((_, t, c)) = k.iter().find(|(e, _, _)| e.eq_ignore_ascii_case(&ext))
+    {
+        return (t, Color32::from_rgb(c[0], c[1], c[2]));
+    }
     match ext.as_str() {
         "scene" => ("Scene", Color32::from_rgb(120, 200, 255)),
         "glb" | "gltf" | "fbx" | "obj" => ("Model", Color32::from_rgb(120, 220, 160)),
@@ -319,9 +347,12 @@ enum Op {
     Reveal(String),
     Reimport(String),
     NewFolder(String),
-    NewMaterial(String),
-    NewRenderTexture(String),
+    /// A new asset of a registered type (by type name) in a folder.
+    NewAsset(&'static str, String),
 }
+
+/// A Create menu entry: (menu path, asset type name, sort order).
+type MenuType = (&'static str, &'static str, i32);
 
 fn folder_tree(
     ui: &mut egui::Ui,
@@ -388,29 +419,79 @@ fn drop_target(r: &egui::Response, folder: &str, ops: &mut Vec<Op>) {
 }
 
 /// Create menu (the `+` button and right-click on empty space): new assets go into `folder`.
-fn create_menu(ui: &mut egui::Ui, ps: &mut ProjectState, scripts: bool, ops: &mut Vec<Op>) {
+/// Entries come from the asset type registry; `A/B` paths become submenus, as in Unity.
+fn create_menu(
+    ui: &mut egui::Ui,
+    ps: &mut ProjectState,
+    scripts: bool,
+    types: &[MenuType],
+    ops: &mut Vec<Op>,
+) {
     let folder = ps.folder.clone();
-    if ui.button("Folder").clicked() {
-        ops.push(Op::NewFolder(folder.clone()));
-        ui.close();
+    // Top-level entries first (a separator between order groups of 20), then submenus.
+    let mut subs: Vec<&str> = Vec::new();
+    let mut group = None;
+    for (path, type_name, order) in types {
+        match path.split_once('/') {
+            None => {
+                if group.is_some_and(|g| g != order / 20) {
+                    ui.separator();
+                }
+                group = Some(order / 20);
+                create_item(ui, ps, scripts, path, type_name, &folder, ops);
+            }
+            Some((sub, _)) if !subs.contains(&sub) => subs.push(sub),
+            Some(_) => {}
+        }
     }
-    ui.separator();
-    if ui
-        .add_enabled(scripts, egui::Button::new("Rust Script"))
-        .on_disabled_hover_text("Open a project created with `oxide new` to write scripts")
-        .clicked()
-    {
-        ps.new_script = Some("NewScript".into());
-        ui.close();
+    if !subs.is_empty() {
+        ui.separator();
     }
-    ui.separator();
-    if ui.button("Material").clicked() {
-        ops.push(Op::NewMaterial(folder.clone()));
-        ui.close();
+    for sub in subs {
+        ui.menu_button(sub, |ui| {
+            for (path, type_name, _) in types {
+                if let Some((s, rest)) = path.split_once('/')
+                    && s == sub
+                {
+                    create_item(ui, ps, scripts, rest, type_name, &folder, ops);
+                }
+            }
+        });
     }
-    if ui.button("Render Texture").clicked() {
-        ops.push(Op::NewRenderTexture(folder));
-        ui.close();
+}
+
+fn create_item(
+    ui: &mut egui::Ui,
+    ps: &mut ProjectState,
+    scripts: bool,
+    label: &str,
+    type_name: &'static str,
+    folder: &str,
+    ops: &mut Vec<Op>,
+) {
+    match type_name {
+        "Folder" => {
+            if ui.button(label).clicked() {
+                ops.push(Op::NewFolder(folder.to_owned()));
+                ui.close();
+            }
+        }
+        "Script" => {
+            if ui
+                .add_enabled(scripts, egui::Button::new(label))
+                .on_disabled_hover_text("Open a project created with `oxide new` to write scripts")
+                .clicked()
+            {
+                ps.new_script = Some("NewScript".into());
+                ui.close();
+            }
+        }
+        _ => {
+            if ui.button(label).clicked() {
+                ops.push(Op::NewAsset(type_name, folder.to_owned()));
+                ui.close();
+            }
+        }
     }
 }
 
@@ -534,11 +615,19 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
     let scripts = st.scripts_available;
     let mut ops: Vec<Op> = Vec::new();
     let labels = all_labels(&mut st.project, &root);
+    let menu: Vec<MenuType> = engine
+        .world
+        .resource::<AssetServer>()
+        .types
+        .create_menu()
+        .into_iter()
+        .filter_map(|t| Some((t.create_menu?, t.type_name, t.order)))
+        .collect();
     let ps = &mut st.project;
 
     // Toolbar: Create, breadcrumbs / search scope, search with Type and Label filters.
     ui.horizontal(|ui| {
-        ui.menu_button("+", |ui| create_menu(ui, ps, scripts, &mut ops))
+        ui.menu_button("+", |ui| create_menu(ui, ps, scripts, &menu, &mut ops))
             .response
             .on_hover_text("Create");
         if ps.search.trim().is_empty() {
@@ -752,7 +841,7 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
             ps.selected = None;
         }
         bg.context_menu(|ui| {
-            ui.menu_button("Create", |ui| create_menu(ui, ps, scripts, &mut ops));
+            ui.menu_button("Create", |ui| create_menu(ui, ps, scripts, &menu, &mut ops));
             let reveal = if cfg!(target_os = "macos") {
                 "Reveal in Finder"
             } else {
@@ -926,13 +1015,21 @@ fn item(
             let mut child = ui.new_child(
                 egui::UiBuilder::new().max_rect(label_rect.with_max_y(label_rect.min.y + 18.0)),
             );
-            let r = child.add(
-                egui::TextEdit::singleline(name)
-                    .font(font.clone())
-                    .desired_width(label_rect.width()),
-            );
+            let out = egui::TextEdit::singleline(name)
+                .font(font.clone())
+                .desired_width(label_rect.width())
+                .show(&mut child);
+            let r = out.response;
             if !r.has_focus() && !r.lost_focus() {
+                // Start with the whole name selected, so typing replaces it (Unity).
                 r.request_focus();
+                let mut state = out.state;
+                let all = egui::text::CCursorRange::two(
+                    egui::text::CCursor::new(0),
+                    egui::text::CCursor::new(name.chars().count()),
+                );
+                state.cursor.set_char_range(Some(all));
+                state.store(ui.ctx(), r.id);
             }
             if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 cancel = true;
@@ -1070,32 +1167,73 @@ fn run(st: &mut EditorState, engine: &mut Engine, root: &Path, op: Op) -> Result
             st.project.start_rename();
             st.project.invalidate();
         }
-        Op::NewMaterial(folder) => {
-            let path = asset_ops::unique_path(root, &format!("{folder}/New Material.mat"));
-            let m = oxide_assets::Material::lit("New Material", oxide_math::Color::WHITE);
-            engine
-                .world
-                .resource_mut::<AssetServer>()
-                .save_material(&path, &m)?;
+        Op::NewAsset(type_name, folder) => {
+            let path = new_asset(engine, root, type_name, &folder)?;
             st.project.selected = Some(path);
             st.project.inspecting = true;
-            st.project.start_rename();
-            st.project.invalidate();
-        }
-        Op::NewRenderTexture(folder) => {
-            let path =
-                asset_ops::unique_path(root, &format!("{folder}/New Render Texture.renderTexture"));
-            engine
-                .world
-                .resource_mut::<AssetServer>()
-                .save_render_texture(&path, &oxide_assets::RenderTexture::default())?;
-            st.project.selected = Some(path);
             st.project.start_rename();
             st.project.invalidate();
         }
     }
     Ok(())
 }
+
+/// Writes a new asset of `type_name` into `folder` and returns its path: data assets from
+/// their defaults, the built-in types from Unity-like templates.
+pub fn new_asset(
+    engine: &mut Engine,
+    root: &Path,
+    type_name: &str,
+    folder: &str,
+) -> Result<String, String> {
+    let info = engine
+        .world
+        .resource::<AssetServer>()
+        .types
+        .get(type_name)
+        .cloned()
+        .ok_or_else(|| format!("unknown asset type `{type_name}`"))?;
+    let path = asset_ops::unique_path(root, &format!("{folder}/{}", info.default_file_name()));
+    let assets = engine.world.resource_mut::<AssetServer>();
+    match type_name {
+        "Material" => {
+            let m = oxide_assets::Material::lit(info.default_name, oxide_math::Color::WHITE);
+            assets.save_material(&path, &m)?;
+        }
+        "RenderTexture" => {
+            assets.save_render_texture(&path, &oxide_assets::RenderTexture::default())?;
+        }
+        "Shader" => {
+            std::fs::write(root.join(&path), FULL_SCREEN_SHADER).map_err(|e| e.to_string())?;
+        }
+        "TextAsset" => {
+            std::fs::write(root.join(&path), "").map_err(|e| e.to_string())?;
+        }
+        "Scene" => {
+            // Unity's new scene: a Main Camera and a Directional Light.
+            let mut w = oxide_scene::World::new();
+            oxide_engine::init_world(&mut w, root.to_path_buf());
+            oxide_engine::objects::create_default_scene(&mut w);
+            oxide_engine::save_scene(&mut w, &path)?;
+        }
+        _ if assets.types.is_data(type_name) => assets.create_data_asset(type_name, &path)?,
+        _ => return Err(format!("{type_name} can't be created from the Create menu")),
+    }
+    Ok(path)
+}
+
+/// Template for Create → Shader → Full Screen Shader (a Full Screen Pass effect).
+const FULL_SCREEN_SHADER: &str =
+    "// A Full Screen Pass shader: add a Full Screen Pass Renderer Feature to a camera
+// and set its Shader to this file. Helpers: sample_source(uv), sample_depth(uv),
+// fx.params0 / fx.params1 (the feature's Params), fx.time.x (seconds).
+fn fs_main(in: FullscreenIn) -> vec4f {
+    let c = sample_source(in.uv);
+    // Example: desaturate by params0.x.
+    let grey = dot(c.rgb, vec3f(0.2126, 0.7152, 0.0722));
+    return vec4f(mix(c.rgb, vec3f(grey), fx.params0.x), c.a);
+}
+";
 
 /// The path of `path` renamed to `name` (the extension stays, typed or not).
 pub fn renamed_path(root: &Path, path: &str, name: &str) -> Result<String, String> {

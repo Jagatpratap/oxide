@@ -53,6 +53,10 @@ pub struct AssetServer {
     pub terrains: Assets<crate::terrain::TerrainData>,
     pub render_textures: Assets<crate::render_texture::RenderTexture>,
     pub shaders: Assets<crate::shader::Shader>,
+    /// Every asset type the Project window knows (built-in and registered).
+    pub types: crate::asset_types::AssetTypeRegistry,
+    /// Loaded data assets (Unity ScriptableObjects): Physics Materials, Volume Profiles, ...
+    pub data: crate::asset_types::DataAssets,
     /// Modification times of files read, for [`AssetServer::reload_changed`].
     mtimes: std::sync::Mutex<std::collections::HashMap<String, std::time::SystemTime>>,
 }
@@ -75,8 +79,13 @@ impl AssetServer {
             terrains: Assets::default(),
             render_textures: Assets::default(),
             shaders: Assets::default(),
+            types: Default::default(),
+            data: Default::default(),
             mtimes: Default::default(),
         };
+        for t in crate::asset_types::builtin_types() {
+            s.types.register(t);
+        }
         for p in PrimitiveType::ALL {
             // Built-in primitives have lightmap UVs, like Unity's.
             let mut m = p.mesh();
@@ -119,6 +128,28 @@ impl AssetServer {
         } else {
             self.root.join(p)
         }
+    }
+
+    /// Reads an asset file (and remembers its time for [`AssetServer::reload_changed`]).
+    pub(crate) fn read_file(&self, path: &str) -> Result<Vec<u8>, String> {
+        self.read(path)
+    }
+
+    /// Writes an asset file, creating its folder.
+    pub(crate) fn write_file(&self, path: &str, text: &str) -> Result<(), String> {
+        let full = self.full_path(path);
+        if let Some(dir) = full.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        std::fs::write(&full, text).map_err(|e| format!("cannot write {}: {e}", full.display()))?;
+        // Our own write isn't an outside edit to reload.
+        if let Ok(t) = std::fs::metadata(&full).and_then(|m| m.modified()) {
+            self.mtimes
+                .lock()
+                .expect("mtimes lock")
+                .insert(path.to_owned(), t);
+        }
+        Ok(())
     }
 
     fn read(&self, path: &str) -> Result<Vec<u8>, String> {
@@ -170,6 +201,13 @@ impl AssetServer {
                 "mat" => self.load_material(&path).map(|_| ()),
                 "wgsl" => self.load_shader(&path).map(|_| ()),
                 "rendertexture" => self.load_render_texture(&path).map(|_| ()),
+                _ if self
+                    .types
+                    .for_path(&path)
+                    .is_some_and(|t| self.types.is_data(t.type_name)) =>
+                {
+                    self.load_data(&path)
+                }
                 _ => {
                     // Not hot-reloadable yet: remember the new time so it isn't retried.
                     let _ = self.read(&path);
@@ -538,6 +576,15 @@ impl AssetServer {
                     self.load_audio(file)?;
                 }
             }
+            _ if self
+                .types
+                .for_path(file)
+                .is_some_and(|t| self.types.is_data(t.type_name)) =>
+            {
+                if !self.data.contains(file) {
+                    self.load_data(file)?;
+                }
+            }
             _ => return Err(format!("unsupported asset type: {path}")),
         }
         Ok(())
@@ -563,6 +610,16 @@ impl AssetServer {
         }
         out.sort();
         out
+    }
+}
+
+/// Calls `f` with every asset path referenced anywhere in `v` (nested objects and lists).
+pub(crate) fn visit_asset_refs(v: &Value, f: &mut dyn FnMut(&str)) {
+    match v {
+        Value::Asset(p) => f(p),
+        Value::List(items) => items.iter().for_each(|i| visit_asset_refs(i, f)),
+        Value::Object(m) => m.values().for_each(|i| visit_asset_refs(i, f)),
+        _ => {}
     }
 }
 

@@ -11,6 +11,7 @@
 #![allow(clippy::single_range_in_vec_init)]
 
 pub mod animation;
+pub mod asset_types;
 pub mod gltf_import;
 pub mod handle;
 pub mod ktx2_import;
@@ -32,6 +33,7 @@ pub use animation::{
     Condition, ConditionMode, Interpolation, Motion, Parameter, ParameterType, Track,
     TransformCurves, Transition,
 };
+pub use asset_types::{AssetTypeInfo, AssetTypeRegistry, CreateKind, DataAsset, DataAssets};
 pub use handle::{Asset, AssetId, Assets, Handle};
 pub use material::{Material, ShaderKind, SurfaceType};
 pub use mesh::Mesh;

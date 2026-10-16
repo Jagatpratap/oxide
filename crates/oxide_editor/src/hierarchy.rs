@@ -285,12 +285,22 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
                     let text_rect =
                         egui::Rect::from_min_max(pos2(text_pos.x, rect.top()), rect.right_bottom());
                     let (_, text) = st.hierarchy.renaming.as_mut().expect("renaming");
-                    let te = ui.put(
-                        text_rect,
-                        egui::TextEdit::singleline(text).desired_width(text_rect.width()),
-                    );
+                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(text_rect));
+                    let out = egui::TextEdit::singleline(text)
+                        .desired_width(text_rect.width())
+                        .show(&mut child);
+                    let te = out.response;
                     if !te.has_focus() && !te.lost_focus() {
+                        // The whole name starts selected, so typing replaces it (Unity).
                         te.request_focus();
+                        let mut state = out.state;
+                        state
+                            .cursor
+                            .set_char_range(Some(egui::text::CCursorRange::two(
+                                egui::text::CCursor::new(0),
+                                egui::text::CCursor::new(text.chars().count()),
+                            )));
+                        state.store(ui.ctx(), te.id);
                     }
                     if te.lost_focus() {
                         let cancel = ui.input(|i| i.key_pressed(egui::Key::Escape));

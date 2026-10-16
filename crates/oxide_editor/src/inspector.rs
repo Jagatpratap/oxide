@@ -1053,9 +1053,20 @@ fn assets_of_type(assets: &AssetServer, type_name: Option<&str>) -> Vec<String> 
             .collect(),
         "Model" => assets.models.iter().map(|(p, _)| p.to_owned()).collect(),
         "TerrainData" => assets.terrains.iter().map(|(p, _)| p.to_owned()).collect(),
+        "Shader" => assets.shaders.iter().map(|(p, _)| p.to_owned()).collect(),
         _ => Vec::new(),
     };
+    // Project files of the type too, loaded or not (they load when picked).
+    let file_type = match type_name.unwrap_or("") {
+        "Texture2D" => "Texture",
+        "RuntimeAnimatorController" => "AnimatorController",
+        t => t,
+    };
+    if assets.types.get(file_type).is_some() {
+        v.extend(assets.paths_of_type(file_type));
+    }
     v.sort();
+    v.dedup();
     v
 }
 

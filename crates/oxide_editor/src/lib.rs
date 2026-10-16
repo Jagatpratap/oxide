@@ -1475,6 +1475,7 @@ impl Shell for Editor {
             let w = &engine.world;
             self.st.selection.retain(|&id| w.is_alive(id));
         }
+        project::sync_asset_types(&engine.world.resource::<oxide_assets::AssetServer>().types);
         shortcuts::dispatch(&mut self.st, engine, &ctx);
         self.st.previews.update(engine, &ctx);
         // The Project window claims keyboard commands when it is clicked (it sets this).

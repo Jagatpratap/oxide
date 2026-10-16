@@ -481,3 +481,94 @@ fn ragdoll_falls_and_settles_in_one_piece() {
         assert!(bend > -0.2, "knee bent the wrong way: {bend}");
     }
 }
+
+/// Unity Physics Materials: an icy box slides further than a plain one, and a rubber
+/// ball (bounciness 1, combine Maximum) bounces.
+#[test]
+fn physics_materials_change_friction_and_bounce() {
+    use oxide_assets::{AssetServer, Handle};
+    let slide = |material: Option<PhysicsMaterial>| {
+        let mut s = Sim::new();
+        s.ground();
+        let handle = material.map(|m| {
+            let a = s.world.resource_mut::<AssetServer>();
+            a.data
+                .insert("Assets/Test.physicMaterial", "PhysicsMaterial", Box::new(m));
+            Handle::<PhysicsMaterial>::from_path("Assets/Test.physicMaterial")
+        });
+        let b = s
+            .world
+            .create_at("Box", Vector3::new(0.0, 0.5, 0.0), Quaternion::IDENTITY);
+        s.world.add_component(
+            b,
+            BoxCollider {
+                material: handle,
+                ..Default::default()
+            },
+        );
+        s.world.add_component(b, Rigidbody::default());
+        s.step(0.2);
+        s.world
+            .get_component_mut::<Rigidbody>(b)
+            .unwrap()
+            .set_velocity(Vector3::new(5.0, 0.0, 0.0));
+        s.step(2.0);
+        s.world.position(b).x
+    };
+    let plain = slide(None);
+    let ice = slide(Some(PhysicsMaterial {
+        dynamic_friction: 0.0,
+        static_friction: 0.0,
+        friction_combine: PhysicsMaterialCombine::Minimum,
+        ..Default::default()
+    }));
+    assert!(plain < 4.0, "the plain box stops quickly: {plain}");
+    assert!(
+        ice > plain * 2.0,
+        "ice slides much further: {ice} vs {plain}"
+    );
+
+    let mut s = Sim::new();
+    s.ground();
+    s.world.resource_mut::<AssetServer>().data.insert(
+        "Assets/Rubber.physicMaterial",
+        "PhysicsMaterial",
+        Box::new(PhysicsMaterial {
+            bounciness: 1.0,
+            bounce_combine: PhysicsMaterialCombine::Maximum,
+            ..Default::default()
+        }),
+    );
+    let ball = s
+        .world
+        .create_at("Ball", Vector3::new(0.0, 3.0, 0.0), Quaternion::IDENTITY);
+    s.world.add_component(
+        ball,
+        SphereCollider {
+            material: Some(Handle::from_path("Assets/Rubber.physicMaterial")),
+            ..Default::default()
+        },
+    );
+    s.world.add_component(ball, Rigidbody::default());
+    let mut peak_after_bounce = 0.0f32;
+    let mut bounced = false;
+    for _ in 0..120 {
+        s.step(1.0 / 60.0);
+        let v = s
+            .world
+            .get_component::<Rigidbody>(ball)
+            .unwrap()
+            .velocity()
+            .y;
+        if v > 0.5 {
+            bounced = true;
+        }
+        if bounced {
+            peak_after_bounce = peak_after_bounce.max(s.world.position(ball).y);
+        }
+    }
+    assert!(
+        bounced && peak_after_bounce > 2.0,
+        "bounced back up to {peak_after_bounce} m"
+    );
+}

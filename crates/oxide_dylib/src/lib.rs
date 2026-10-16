@@ -35,11 +35,14 @@ pub fn loaded_build_id() -> &'static str {
 }
 
 /// Declares a Scripts library's components: `Type => "Menu/Path"` for Add Component, then
-/// optionally `; editors: Type, ...` for components with a custom Inspector.
+/// optionally `; editors: Type, ...` for components with a custom Inspector, and
+/// `; assets: Type => ("ext", "Create/Menu")` for data asset types (ScriptableObjects).
 /// Expands to the entry points the editor calls after loading the library.
 #[macro_export]
 macro_rules! scripts {
-    ($($ty:ty => $menu:expr),* $(,)? $(; editors: $($ed:ty),* $(,)?)?) => {
+    ($($ty:ty => $menu:expr),* $(,)?
+     $(; editors: $($ed:ty),* $(,)?)?
+     $(; assets: $($at:ty => ($ext:expr, $amenu:expr)),* $(,)?)?) => {
         /// Engine build these scripts were compiled against.
         #[unsafe(no_mangle)]
         pub fn oxide_scripts_build_id() -> &'static str {
@@ -58,7 +61,34 @@ macro_rules! scripts {
             let _ = &editors;
             $($( editors.register::<$ed>(); )*)?
         }
+
+        /// Registers the data asset types (`assets:` — Unity ScriptableObjects with
+        /// `[CreateAssetMenu]`): `Type => ("extension", "Create/Menu/Path")`.
+        #[unsafe(no_mangle)]
+        pub fn oxide_register_assets(assets: &mut $crate::assets::AssetServer) {
+            let _ = &assets;
+            $($( $crate::register_script_asset::<$at>(assets, $ext, $amenu); )*)?
+        }
     };
+}
+
+/// Registers a script's data asset type (what `scripts! { ...; assets: ... }` expands to).
+pub fn register_script_asset<T>(
+    assets: &mut oxide_engine::assets::AssetServer,
+    extension: &'static str,
+    menu: &'static str,
+) where
+    T: core::reflect::Reflect + Clone + Default + Send + Sync + 'static,
+{
+    let name = T::default().type_info().name;
+    let extensions: &'static [&'static str] = Box::leak(Box::new([extension]));
+    let base = menu.rsplit('/').next().unwrap_or(name);
+    let default_name: &'static str = Box::leak(format!("New {base}").into_boxed_str());
+    assets.register_data_asset::<T>(
+        oxide_engine::assets::AssetTypeInfo::new(name, extensions)
+            .menu(menu, default_name, 300)
+            .color(150, 200, 140),
+    );
 }
 
 #[cfg(test)]
@@ -85,7 +115,35 @@ mod tests {
 
     impl Component for Plain {}
 
-    crate::scripts! { Dial => "Scripts/Dial", Plain => ""; editors: Dial }
+    #[derive(Clone, Default, Reflect)]
+    pub struct LootTable {
+        pub drops: Vec<String>,
+        pub chance: f32,
+    }
+
+    crate::scripts! {
+        Dial => "Scripts/Dial", Plain => "";
+        editors: Dial;
+        assets: LootTable => ("loot", "Game/Loot Table")
+    }
+
+    #[test]
+    fn scripts_macro_registers_data_assets() {
+        let dir = std::env::temp_dir().join(format!("oxide-dylib-assets-{}", std::process::id()));
+        let mut a = crate::assets::AssetServer::new(&dir);
+        oxide_register_assets(&mut a);
+        let t = a.types.get("LootTable").expect("registered");
+        assert_eq!(t.create_menu, Some("Game/Loot Table"));
+        assert_eq!(t.default_file_name(), "New Loot Table.loot");
+        assert!(a.types.is_data("LootTable"));
+        a.create_data_asset("LootTable", "Assets/Boss.loot")
+            .unwrap();
+        assert_eq!(
+            a.types.for_path("Assets/Boss.loot").unwrap().type_name,
+            "LootTable"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn scripts_macro_registers_components_and_editors() {

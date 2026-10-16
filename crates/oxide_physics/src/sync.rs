@@ -8,7 +8,7 @@
 
 use crate::components::*;
 use crate::physics::{BodyEntry, BodyKind, ColliderEntry, Physics, pose};
-use oxide_assets::AssetServer;
+use oxide_assets::{AssetServer, Handle};
 use oxide_core::Time;
 use oxide_math::{Color, Quaternion, Vector3};
 use oxide_scene::{
@@ -195,7 +195,40 @@ struct Desc {
     trigger: bool,
     friction: f32,
     bounciness: f32,
+    combine: (PhysicsMaterialCombine, PhysicsMaterialCombine),
     sig: u64,
+}
+
+fn combine_rule(c: PhysicsMaterialCombine) -> CoefficientCombineRule {
+    match c {
+        PhysicsMaterialCombine::Average => CoefficientCombineRule::Average,
+        PhysicsMaterialCombine::Minimum => CoefficientCombineRule::Min,
+        PhysicsMaterialCombine::Multiply => CoefficientCombineRule::Multiply,
+        PhysicsMaterialCombine::Maximum => CoefficientCombineRule::Max,
+    }
+}
+
+/// A collider's Physics Material, if it has one and it is loaded.
+fn collider_material(
+    world: &World,
+    obj: GameObjectId,
+    cid: ComponentId,
+) -> Option<(Handle<PhysicsMaterial>, PhysicsMaterial)> {
+    let h = if let Some(c) = world.component::<BoxCollider>(obj, cid) {
+        c.material.clone()
+    } else if let Some(c) = world.component::<SphereCollider>(obj, cid) {
+        c.material.clone()
+    } else if let Some(c) = world.component::<CapsuleCollider>(obj, cid) {
+        c.material.clone()
+    } else if let Some(c) = world.component::<MeshCollider>(obj, cid) {
+        c.material.clone()
+    } else if let Some(c) = world.component::<TerrainCollider>(obj, cid) {
+        c.material.clone()
+    } else {
+        None
+    }?;
+    let m = world.resource::<AssetServer>().data.get(&h)?.clone();
+    Some((h, m))
 }
 
 fn hash_f(h: &mut DefaultHasher, v: &[f32]) {
@@ -257,6 +290,7 @@ fn describe(world: &World, obj: GameObjectId, cid: ComponentId) -> Option<Desc> 
             trigger: c.is_trigger,
             friction: c.friction,
             bounciness: c.bounciness,
+            combine: Default::default(),
             sig: 0,
         }
     } else if let Some(c) = world.component::<SphereCollider>(obj, cid) {
@@ -279,6 +313,7 @@ fn describe(world: &World, obj: GameObjectId, cid: ComponentId) -> Option<Desc> 
             trigger: c.is_trigger,
             friction: c.friction,
             bounciness: c.bounciness,
+            combine: Default::default(),
             sig: 0,
         }
     } else if let Some(c) = world.component::<CapsuleCollider>(obj, cid) {
@@ -314,6 +349,7 @@ fn describe(world: &World, obj: GameObjectId, cid: ComponentId) -> Option<Desc> 
             trigger: c.is_trigger,
             friction: c.friction,
             bounciness: c.bounciness,
+            combine: Default::default(),
             sig: 0,
         }
     } else if let Some(c) = world.component::<MeshCollider>(obj, cid) {
@@ -325,6 +361,7 @@ fn describe(world: &World, obj: GameObjectId, cid: ComponentId) -> Option<Desc> 
             trigger: c.is_trigger,
             friction: c.friction,
             bounciness: c.bounciness,
+            combine: Default::default(),
             sig: 0,
         }
     } else if let Some(c) = world.component::<TerrainCollider>(obj, cid) {
@@ -352,6 +389,7 @@ fn describe(world: &World, obj: GameObjectId, cid: ComponentId) -> Option<Desc> 
             trigger: false,
             friction: c.friction,
             bounciness: 0.0,
+            combine: Default::default(),
             sig: 0,
         }
     } else {
@@ -365,9 +403,23 @@ fn describe(world: &World, obj: GameObjectId, cid: ComponentId) -> Option<Desc> 
             trigger: false,
             friction: 0.0,
             bounciness: 0.0,
+            combine: Default::default(),
             sig: 0,
         }
     };
+    // A Physics Material replaces the collider's own friction and bounciness.
+    let mut d = d;
+    if let Some((mh, m)) = collider_material(world, obj, cid) {
+        mh.id().hash(&mut h);
+        world
+            .resource::<AssetServer>()
+            .data
+            .version(mh.path())
+            .hash(&mut h);
+        d.friction = m.friction();
+        d.bounciness = m.bounciness;
+        d.combine = (m.friction_combine, m.bounce_combine);
+    }
     Some(Desc {
         sig: h.finish(),
         ..d
@@ -455,6 +507,8 @@ fn sync_colliders(
             .sensor(d.trigger)
             .friction(d.friction)
             .restitution(d.bounciness)
+            .friction_combine_rule(combine_rule(d.combine.0))
+            .restitution_combine_rule(combine_rule(d.combine.1))
             .active_events(ActiveEvents::COLLISION_EVENTS)
             .collision_groups(groups(phys, layer))
             .user_data(obj.to_bits() as u128 | ((layer as u128) << 64))

@@ -12,6 +12,7 @@
 //! References: <https://docs.unity3d.com/Manual/script-compilation.html>,
 //! <https://docs.unity3d.com/Manual/domain-reloading.html>
 
+use oxide_assets::AssetServer;
 use oxide_core::{debug_log, debug_log_error, debug_log_warning};
 use oxide_engine::Engine;
 use oxide_scene::ComponentRegistry;
@@ -52,6 +53,8 @@ pub struct ScriptHost {
     pub errors: Vec<String>,
     /// Component types the loaded library registered.
     pub script_types: Vec<String>,
+    /// Data asset types the loaded library registered (`scripts! { ...; assets: ... }`).
+    pub script_asset_types: Vec<String>,
     libraries: Vec<libloading::Library>,
     generation: u32,
     pub last_build_seconds: f32,
@@ -164,6 +167,7 @@ impl ScriptHost {
             state,
             errors: Vec::new(),
             script_types: Vec::new(),
+            script_asset_types: Vec::new(),
             libraries: Vec::new(),
             generation: 0,
             last_build_seconds: 0.0,
@@ -284,9 +288,11 @@ impl ScriptHost {
         let register: libloading::Symbol<fn(&mut ComponentRegistry)> =
             unsafe { lib.get(b"oxide_register_scripts") }.map_err(|e| e.to_string())?;
 
-        // Older Scripts libraries have no custom Inspectors.
+        // Older Scripts libraries have no custom Inspectors or data asset types.
         let register_editors: Option<libloading::Symbol<fn(&mut oxide_engine::CustomEditors)>> =
             unsafe { lib.get(b"oxide_register_editors") }.ok();
+        let register_assets: Option<libloading::Symbol<fn(&mut AssetServer)>> =
+            unsafe { lib.get(b"oxide_register_assets") }.ok();
 
         let w = &mut engine.world;
         let old = std::mem::take(&mut self.script_types);
@@ -312,6 +318,30 @@ impl ScriptHost {
             }
             if let Some(e) = w.resources.get_mut::<oxide_engine::CustomEditors>() {
                 f(e);
+            }
+        }
+        // Data asset types: drop the old library's (and their loaded values), register the
+        // new ones, then reload those assets from their files.
+        let assets = w.resource_mut::<AssetServer>();
+        let mut reload = Vec::new();
+        for t in std::mem::take(&mut self.script_asset_types) {
+            assets.types.unregister(&t);
+            reload.extend(assets.data.remove_type(&t));
+        }
+        if let Some(f) = register_assets {
+            let before: std::collections::HashSet<String> =
+                assets.types.iter().map(|t| t.type_name.to_owned()).collect();
+            f(assets);
+            self.script_asset_types = assets
+                .types
+                .iter()
+                .map(|t| t.type_name.to_owned())
+                .filter(|n| !before.contains(n))
+                .collect();
+        }
+        for p in reload {
+            if let Err(e) = assets.load_data(&p) {
+                debug_log_warning!("{e}");
             }
         }
         let missing = w.restore_components_after_reload(taken);

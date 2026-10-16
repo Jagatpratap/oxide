@@ -4,7 +4,7 @@
 //! <https://docs.unity3d.com/Manual/class-CharacterController.html>,
 //! <https://docs.unity3d.com/Manual/class-WheelCollider.html>
 
-use oxide_assets::{Handle, Mesh};
+use oxide_assets::{Asset, Handle, Mesh};
 use oxide_core::Reflect;
 use oxide_math::{Quaternion, Vector3};
 use oxide_scene::{Component, GameObjectId};
@@ -174,6 +174,56 @@ impl Component for Rigidbody {
     }
 }
 
+/// How two touching colliders' values combine (Unity `PhysicsMaterialCombine`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Reflect)]
+pub enum PhysicsMaterialCombine {
+    #[default]
+    Average,
+    Minimum,
+    Multiply,
+    Maximum,
+}
+
+/// Unity's Physics Material asset (`.physicMaterial`): surface friction and bounce shared by
+/// colliders (ice, rubber, tarmac). Rapier has one friction coefficient, so
+/// `dynamic_friction` is used while sliding and the larger of the two while at rest is
+/// approximated by `static_friction` when it is higher.
+/// Reference: <https://docs.unity3d.com/Manual/class-PhysicsMaterial.html>
+#[derive(Clone, Debug, PartialEq, Reflect)]
+pub struct PhysicsMaterial {
+    #[reflect(range(0, 1))]
+    pub dynamic_friction: f32,
+    #[reflect(range(0, 1))]
+    pub static_friction: f32,
+    #[reflect(range(0, 1))]
+    pub bounciness: f32,
+    pub friction_combine: PhysicsMaterialCombine,
+    pub bounce_combine: PhysicsMaterialCombine,
+}
+
+impl Default for PhysicsMaterial {
+    fn default() -> Self {
+        Self {
+            dynamic_friction: 0.6,
+            static_friction: 0.6,
+            bounciness: 0.0,
+            friction_combine: PhysicsMaterialCombine::Average,
+            bounce_combine: PhysicsMaterialCombine::Average,
+        }
+    }
+}
+
+impl Asset for PhysicsMaterial {
+    const TYPE_NAME: &'static str = "PhysicsMaterial";
+}
+
+impl PhysicsMaterial {
+    /// The friction coefficient given to Rapier.
+    pub fn friction(&self) -> f32 {
+        self.dynamic_friction.max(self.static_friction * 0.9)
+    }
+}
+
 /// Shared collider settings (Unity Collider + PhysicMaterial fields).
 macro_rules! collider_common {
     () => {
@@ -187,6 +237,8 @@ macro_rules! collider_common {
 #[derive(Clone, Debug, Reflect)]
 pub struct BoxCollider {
     pub is_trigger: bool,
+    /// Shared Physics Material (Unity `sharedMaterial`); overrides friction and bounciness.
+    pub material: Option<Handle<PhysicsMaterial>>,
     pub center: Vector3,
     pub size: Vector3,
     #[reflect(range(0, 1))]
@@ -199,6 +251,7 @@ impl Default for BoxCollider {
     fn default() -> Self {
         Self {
             is_trigger: false,
+            material: None,
             center: Vector3::ZERO,
             size: Vector3::ONE,
             friction: 0.6,
@@ -223,6 +276,8 @@ impl Component for BoxCollider {}
 #[derive(Clone, Debug, Reflect)]
 pub struct SphereCollider {
     pub is_trigger: bool,
+    /// Shared Physics Material (Unity `sharedMaterial`); overrides friction and bounciness.
+    pub material: Option<Handle<PhysicsMaterial>>,
     pub center: Vector3,
     pub radius: f32,
     #[reflect(range(0, 1))]
@@ -235,6 +290,7 @@ impl Default for SphereCollider {
     fn default() -> Self {
         Self {
             is_trigger: false,
+            material: None,
             center: Vector3::ZERO,
             radius: 0.5,
             friction: 0.6,
@@ -261,6 +317,8 @@ pub enum CapsuleDirection {
 #[derive(Clone, Debug, Reflect)]
 pub struct CapsuleCollider {
     pub is_trigger: bool,
+    /// Shared Physics Material (Unity `sharedMaterial`); overrides friction and bounciness.
+    pub material: Option<Handle<PhysicsMaterial>>,
     pub center: Vector3,
     pub radius: f32,
     /// Total height including the caps.
@@ -276,6 +334,7 @@ impl Default for CapsuleCollider {
     fn default() -> Self {
         Self {
             is_trigger: false,
+            material: None,
             center: Vector3::ZERO,
             radius: 0.5,
             height: 2.0,
@@ -297,6 +356,8 @@ impl Component for CapsuleCollider {}
 #[derive(Clone, Debug, Reflect)]
 pub struct MeshCollider {
     pub is_trigger: bool,
+    /// Shared Physics Material (Unity `sharedMaterial`); overrides friction and bounciness.
+    pub material: Option<Handle<PhysicsMaterial>>,
     pub mesh: Option<Handle<Mesh>>,
     pub convex: bool,
     #[reflect(range(0, 1))]
@@ -309,6 +370,7 @@ impl Default for MeshCollider {
     fn default() -> Self {
         Self {
             is_trigger: false,
+            material: None,
             mesh: None,
             convex: false,
             friction: 0.6,
@@ -339,6 +401,8 @@ pub struct TerrainCollider {
     pub version: u64,
     #[reflect(range(0, 1))]
     pub friction: f32,
+    /// Shared Physics Material; overrides friction.
+    pub material: Option<Handle<PhysicsMaterial>>,
 }
 
 impl Default for TerrainCollider {
@@ -348,6 +412,7 @@ impl Default for TerrainCollider {
             resolution: 2,
             heights: std::sync::Arc::new(vec![0.0; 4]),
             version: 0,
+            material: None,
             friction: 0.8,
         }
     }

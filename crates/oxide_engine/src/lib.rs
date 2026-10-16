@@ -11,6 +11,7 @@ pub mod input_map;
 pub mod lighting;
 pub mod mcp_animation;
 pub mod mcp_audio;
+pub mod mcp_data_assets;
 pub mod mcp_network;
 pub mod mcp_occlusion;
 pub mod mcp_physics;

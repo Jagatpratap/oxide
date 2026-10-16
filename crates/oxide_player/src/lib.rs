@@ -61,6 +61,14 @@ pub fn data_dir() -> std::path::PathBuf {
 /// Runs the game. `register` adds the Scripts' components. Pass `--mcp` to turn the MCP
 /// server on (off by default in a shipped game).
 pub fn run(register: fn(&mut scene::ComponentRegistry)) -> std::process::ExitCode {
+    run_scripts(register, |_| {})
+}
+
+/// [`run`] with the Scripts library's data asset types (`scripts! { ...; assets: ... }`).
+pub fn run_scripts(
+    register: fn(&mut scene::ComponentRegistry),
+    register_assets: fn(&mut assets::AssetServer),
+) -> std::process::ExitCode {
     let data = data_dir();
     let info: BuildInfo = match std::fs::read_to_string(data.join("build.yaml"))
         .map_err(|e| e.to_string())
@@ -83,6 +91,7 @@ pub fn run(register: fn(&mut scene::ComponentRegistry)) -> std::process::ExitCod
     };
     let mut app = App::with_config(config);
     register(&mut app.world_mut().registry);
+    register_assets(app.world_mut().resource_mut::<assets::AssetServer>());
     app.world_mut().resource_mut::<AppControl>().build_scenes = info.scenes.clone();
     let first = info.scenes.first().cloned();
     let app = app.setup(move |world| match first {
