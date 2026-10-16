@@ -753,6 +753,12 @@ impl AssetServer {
                     self.load_terrain_data(file)?;
                 }
             }
+            // Font files are read by the font library when a Font Asset is made.
+            "ttf" | "otf" => {
+                if !self.full_path(file).exists() {
+                    return Err(format!("{file} not found"));
+                }
+            }
             "overridecontroller" => {
                 if self.controllers.handle_of(file).is_none() {
                     self.load_override_controller(file)?;

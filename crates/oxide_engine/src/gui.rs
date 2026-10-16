@@ -28,11 +28,15 @@ impl GuiLayer {
             None,
             Some(max_side),
         );
-        let renderer = egui_wgpu::Renderer::new(
+        let mut renderer = egui_wgpu::Renderer::new(
             &gpu.device,
             format.remove_srgb_suffix(),
             egui_wgpu::RendererOptions::default(),
         );
+        // Canvas text draws with its own pipeline inside egui's pass.
+        renderer
+            .callback_resources
+            .insert(oxide_ui::UiTargetFormat(format.remove_srgb_suffix()));
 
         world.resources.insert(Gui::new(ctx));
         Self {

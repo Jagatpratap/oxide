@@ -1,0 +1,21 @@
+[package]
+name = "oxide_text"
+description = "Oxide text: TextMeshPro-style SDF Font Assets, rich text and layout"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+oxide_math.workspace = true
+oxide_core.workspace = true
+oxide_assets.workspace = true
+oxide_scene.workspace = true
+oxide_render.workspace = true
+ab_glyph = "0.2"
+epaint_default_fonts = "0.36"
+
+[dev-dependencies]
+pollster.workspace = true
+
+[lints]
+workspace = true

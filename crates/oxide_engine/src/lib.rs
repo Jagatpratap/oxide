@@ -47,6 +47,7 @@ pub use oxide_render as render;
 pub use oxide_scene as scene;
 pub use oxide_standard as standard;
 pub use oxide_terrain as terrain;
+pub use oxide_text as text;
 pub use oxide_ui as ui;
 
 /// Physics (Rapier) with Unity's components and `Physics` API.
@@ -98,6 +99,7 @@ impl Plugin for UiPlugin {
         systems: &mut Vec<Box<dyn oxide_scene::System>>,
     ) {
         systems.push(oxide_ui::install(world));
+        oxide_text::install(world);
     }
 }
 
@@ -212,8 +214,13 @@ pub mod prelude {
         BlendMode, ParticleShape, ParticleSystem, ParticlesExt, SimulationSpace,
     };
     pub use oxide_terrain::{Terrain, create_terrain, sample_height, simple_tree_mesh};
+    pub use oxide_text::{
+        FontAsset, FontStyles, HorizontalAlignment, TextMaterial, TextMeshPro, TextOverflowModes,
+        VerticalAlignment,
+    };
     pub use oxide_ui::{
-        Anchor, Canvas, Gui, GuiExt, TextAlign, UIButton, UIImage, UISlider, UIText, UIToggle, egui,
+        Anchor, Canvas, Gui, GuiExt, TextAlign, TextMeshProUGUI, UIButton, UIImage, UISlider,
+        UIText, UIToggle, egui,
     };
 
     pub use oxide_core::{

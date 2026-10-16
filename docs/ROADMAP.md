@@ -408,7 +408,7 @@ runner, native plugins.
 - ◐ Canvas UI (uGUI equivalent): Canvas, RectTransform, anchors, Image, Text, Button, Slider, ScrollRect, layout groups, EventSystem
   ([uGUI](https://docs.unity3d.com/Manual/com.unity.ugui.html),
   [UI comparison](https://docs.unity3d.com/Manual/UI-system-compare.html))
-- ☐ Text rendering: SDF fonts (TextMeshPro equivalent), rich text
+- ◐ Text rendering (TextMeshPro): `.fontasset` Font Assets from `.ttf`/`.otf` (SDF atlas, Dynamic/Static population, multi-page atlases, fallback fonts, bold/italic/tab settings) ☑, rich text (`b i u s color alpha size cspace mark sub sup uppercase lowercase smallcaps br noparse`) ☑, layout (wrapping, alignment incl. Justified/Flush, Overflow/Ellipsis/Truncate, spacing, auto size, kerning) ☑, SDF material (face dilate, softness, centred outline, underlay) ☑, TextMeshPro (3D) and TextMeshPro - Text (UI) components ☑, GameObject menu entries, Create Font Asset from font files, Font Asset previews ☑; sprite assets (`<sprite>`), links, vertical/horizontal mapping gradients, material presets as assets, Font Asset Creator window ☐
 - ☐ Accessibility: screen reader hierarchy
   ([Accessibility](https://docs.unity3d.com/Manual/accessibility/_index.html))
 - ◐ Particle System (Shuriken-style modules: emission, shape, velocity/size/color over lifetime, noise, collision, sub-emitters, trails, texture sheet) + editor

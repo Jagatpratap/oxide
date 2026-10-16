@@ -7,6 +7,7 @@ use oxide_input::{Input, InputActionAsset};
 use oxide_scene::{PlayerInput, World};
 
 pub fn register(assets: &mut AssetServer) {
+    oxide_text::register_assets(assets);
     assets.register_data_asset::<oxide_scene::CurvePresetLibrary>(
         AssetTypeInfo::new("CurvePresetLibrary", &["curves"])
             .menu("Presets/Curve Preset Library", "New Curves", 300)

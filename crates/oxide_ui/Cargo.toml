@@ -11,6 +11,10 @@ oxide_core.workspace = true
 oxide_assets.workspace = true
 oxide_scene.workspace = true
 egui.workspace = true
+egui-wgpu.workspace = true
+oxide_text.workspace = true
+oxide_render.workspace = true
+bytemuck.workspace = true
 
 [lints]
 workspace = true

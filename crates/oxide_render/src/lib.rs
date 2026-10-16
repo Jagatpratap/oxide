@@ -27,6 +27,7 @@ pub mod sky;
 pub mod sprites;
 pub mod ssao;
 pub mod terrain;
+pub mod text;
 
 pub use capture::{CapturedImage, capture_frame};
 pub use flares::{
@@ -36,4 +37,5 @@ pub use flares::{
 pub use frame::*;
 pub use gpu::{Gpu, GpuError, WindowSurface};
 pub use renderer::SceneRenderer;
+pub use text::{SDF_WGSL, SdfMaterial, TextDraw, TextInstance};
 pub use wgpu;

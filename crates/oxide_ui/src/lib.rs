@@ -17,6 +17,9 @@ use std::collections::HashMap;
 
 pub use egui;
 
+pub mod tmp;
+pub use tmp::{TextMeshProUGUI, UiTargetFormat};
+
 /// Unity anchor presets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
 pub enum Anchor {
@@ -307,7 +310,7 @@ impl GuiExt for Ctx<'_> {
     }
 }
 
-fn canvas_scale(world: &World, id: GameObjectId, screen: egui::Vec2) -> f32 {
+pub(crate) fn canvas_scale(world: &World, id: GameObjectId, screen: egui::Vec2) -> f32 {
     let mut cur = Some(id);
     while let Some(c) = cur {
         if let Some(cv) = world.get_component::<Canvas>(c) {
@@ -451,6 +454,9 @@ impl System for UiSystem {
                         let _ = rt;
                     });
             }
+            if world.get_component::<TextMeshProUGUI>(id).is_some() {
+                tmp::draw(world, id, &ctx, screen_rect);
+            }
             if let Some(b) = world.get_component::<UIButton>(id).cloned() {
                 let mut clicked = false;
                 area(3, b.anchor, b.position).show(&ctx, |ui| {
@@ -507,6 +513,7 @@ pub fn install(world: &mut World) -> Box<dyn System> {
     let r = &mut world.registry;
     r.register::<Canvas>("UI/Canvas");
     r.register::<UIText>("UI/Text");
+    r.register::<TextMeshProUGUI>("UI/Text - TextMeshPro");
     r.register::<UIImage>("UI/Image");
     r.register::<UIButton>("UI/Button");
     r.register::<UISlider>("UI/Slider");

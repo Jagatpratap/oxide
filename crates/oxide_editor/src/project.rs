@@ -351,6 +351,8 @@ enum Op {
     NewAsset(&'static str, String),
     /// A Prefab Variant of a prefab asset, next to it.
     PrefabVariant(String),
+    /// A Font Asset from a font file, next to it (TMP's Create > TextMeshPro > Font Asset).
+    FontAsset(String),
 }
 
 /// A Create menu entry: (menu path, asset type name, sort order).
@@ -537,6 +539,13 @@ fn item_menu(ui: &mut egui::Ui, path: &str, dir: bool, ops: &mut Vec<Op>, ps: &m
     }
     if path.ends_with(".prefab") && ui.button("Create Prefab Variant").clicked() {
         ops.push(Op::PrefabVariant(path.to_owned()));
+        ui.close();
+    }
+    let lower = path.to_ascii_lowercase();
+    if (lower.ends_with(".ttf") || lower.ends_with(".otf"))
+        && ui.button("Create Font Asset").clicked()
+    {
+        ops.push(Op::FontAsset(path.to_owned()));
         ui.close();
     }
 }
@@ -1183,6 +1192,13 @@ fn run(st: &mut EditorState, engine: &mut Engine, root: &Path, op: Op) -> Result
             st.project.start_rename();
             st.project.invalidate();
         }
+        Op::FontAsset(font) => {
+            let path = create_font_asset(engine, root, &font)?;
+            st.project.selected = Some(path);
+            st.project.inspecting = true;
+            st.project.start_rename();
+            st.project.invalidate();
+        }
         Op::NewAsset(type_name, folder) => {
             let path = new_asset(engine, root, type_name, &folder)?;
             st.project.selected = Some(path);
@@ -1260,6 +1276,21 @@ pub fn new_asset(
 
 /// Unity's Create → Prefab Variant on a prefab asset: `<Name> Variant.prefab` beside it,
 /// based on it with no overrides yet.
+/// `<font> SDF.fontasset` next to a font file, using it as the source.
+pub fn create_font_asset(engine: &mut Engine, root: &Path, font: &str) -> Result<String, String> {
+    let stem = font.rsplit_once('.').map_or(font, |(s, _)| s);
+    let path = asset_ops::unique_path(root, &format!("{stem} SDF.fontasset"));
+    let asset = oxide_engine::text::FontAsset {
+        source_font_file: Some(oxide_assets::Handle::from_path(font.to_owned())),
+        ..Default::default()
+    };
+    engine
+        .world
+        .resource_mut::<oxide_assets::AssetServer>()
+        .save_data(&path, Box::new(asset))?;
+    Ok(path)
+}
+
 pub fn create_prefab_variant(
     engine: &mut Engine,
     root: &Path,

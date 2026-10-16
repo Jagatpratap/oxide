@@ -215,6 +215,7 @@ pub struct SceneRenderer {
     grass: crate::grass::GrassGpu,
     sprites: crate::sprites::SpriteGpu,
     flares: crate::flares::FlareGpu,
+    text: crate::text::TextGpu,
     /// MSAA sample counts the GPU supports for the HDR and depth formats.
     supported_samples: Vec<u32>,
     frame_layout: wgpu::BindGroupLayout,
@@ -619,6 +620,16 @@ impl SceneRenderer {
             &ssao.screen_layout,
             grass_module,
         );
+        let text_module = shader(
+            device,
+            "text.wgsl",
+            &format!(
+                "{}\n{}",
+                crate::text::SDF_WGSL,
+                include_str!("shaders/text.wgsl")
+            ),
+        );
+        let text = crate::text::TextGpu::new(device, &frame_layout, text_module);
         let sprite_module = shader(device, "sprites.wgsl", include_str!("shaders/sprites.wgsl"));
         let sprites =
             crate::sprites::SpriteGpu::new(device, &gpu.queue, &frame_layout, sprite_module);
@@ -631,6 +642,7 @@ impl SceneRenderer {
             grass,
             sprites,
             flares: crate::flares::FlareGpu::new(device, &gpu.queue),
+            text,
             gpu_assets,
             supported_samples,
             frame_layout,
@@ -1765,6 +1777,7 @@ impl SceneRenderer {
         self.particles.ensure_pipelines(device, samples);
         self.grass.ensure_pipelines(device, samples);
         self.sprites.ensure_pipelines(device, samples);
+        self.text.ensure_pipelines(device, samples);
         if capture.is_none() {
             self.last_samples = samples;
             self.motion.advance(frame);
@@ -2681,6 +2694,14 @@ impl SceneRenderer {
             &frame.sprites,
             cam0,
         );
+        let text_ranges = self.text.prepare(
+            device,
+            queue,
+            &mut self.gpu_assets,
+            assets,
+            &frame.texts,
+            cam0,
+        );
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("scene"),
         });
@@ -2963,6 +2984,9 @@ impl SceneRenderer {
                 }
                 if !sprite_ranges.is_empty() {
                     stats.draw_calls += self.sprites.draw(&mut pass, &sprite_ranges, samples);
+                }
+                if !text_ranges.is_empty() {
+                    stats.draw_calls += self.text.draw(&mut pass, &text_ranges, samples);
                 }
                 for list in features_at(RenderPassEvent::AfterRenderingTransparents) {
                     draw_batches(&mut pass, list, &mut stats);

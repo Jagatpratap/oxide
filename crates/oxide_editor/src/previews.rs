@@ -28,6 +28,7 @@ pub enum PreviewKind {
     Model,
     Prefab,
     LensFlare,
+    FontAsset,
 }
 
 /// What kind of preview an asset gets, if any.
@@ -39,6 +40,7 @@ pub fn preview_kind(path: &str) -> Option<PreviewKind> {
         "glb" | "gltf" => Some(PreviewKind::Model),
         "prefab" => Some(PreviewKind::Prefab),
         "lensflare" => Some(PreviewKind::LensFlare),
+        "fontasset" => Some(PreviewKind::FontAsset),
         _ => None,
     }
 }
@@ -199,6 +201,8 @@ impl Previews {
         let kind = preview_kind(path).ok_or("no preview for this type")?;
         let frame = if kind == PreviewKind::LensFlare {
             lens_flare_frame(engine, path)?
+        } else if kind == PreviewKind::FontAsset {
+            font_asset_frame(engine, path)?
         } else {
             self.scene_frame(engine, kind, path)?
         };
@@ -259,6 +263,47 @@ impl Previews {
             Ok::<_, String>(frame)
         })
     }
+}
+
+/// A Font Asset's sample text ("Abg") on a dark background.
+fn font_asset_frame(engine: &mut Engine, path: &str) -> Result<oxide_render::RenderFrame, String> {
+    with_scratch_world(&mut engine.world, |w| {
+        let id = w.create("Preview");
+        w.add_component(
+            id,
+            oxide_engine::text::TextMeshPro {
+                text: "Abg".into(),
+                font_asset: Some(oxide_assets::Handle::from_path(path.to_owned())),
+                font_size: 26.0,
+                rect_size: oxide_math::Vector2::ZERO,
+                horizontal_alignment: oxide_engine::text::HorizontalAlignment::Center,
+                vertical_alignment: oxide_engine::text::VerticalAlignment::Middle,
+                wrapping: false,
+                ..Default::default()
+            },
+        );
+        oxide_engine::text::components::update(w);
+        let bg = Color::rgb(
+            BACKGROUND[0] as f32 / 255.0,
+            BACKGROUND[1] as f32 / 255.0,
+            BACKGROUND[2] as f32 / 255.0,
+        );
+        let cam = CameraView {
+            position: Vector3::new(0.0, 0.0, -10.0),
+            rotation: Quaternion::IDENTITY,
+            projection: ProjectionKind::Orthographic { size: 3.0 },
+            near: 0.1,
+            far: 100.0,
+            viewport: [0.0, 0.0, 1.0, 1.0],
+            clear: ClearMode::Color(bg.linear()),
+            culling_mask: u32::MAX,
+            occlusion_culling: false,
+            antialiasing: Default::default(),
+        };
+        let mut frame = oxide_engine::extract::extract(w, Some(vec![cam]));
+        frame.environment.post.vignette.intensity = 0.0;
+        Ok(frame)
+    })
 }
 
 /// A Lens Flare asset drawn on a dark background, its source up and to the left so the
@@ -377,6 +422,7 @@ fn build_preview_scene(w: &mut World, kind: PreviewKind, path: &str) -> Result<(
         }
         PreviewKind::Texture => return Err("textures are decoded, not rendered".into()),
         PreviewKind::LensFlare => return Err("lens flares are drawn without a scene".into()),
+        PreviewKind::FontAsset => return Err("font assets are drawn as text".into()),
     }
     Ok(())
 }
@@ -391,11 +437,21 @@ fn with_scratch_world<R>(main: &mut World, f: impl FnOnce(&mut World) -> R) -> R
     if let Some(a) = main.resources.remove::<AssetServer>() {
         scratch.resources.insert(a);
     }
+    // Font atlases too: they write textures into the shared AssetServer.
+    if let Some(f) = main.resources.remove::<oxide_engine::text::FontLibrary>() {
+        scratch.resources.insert(f);
+    }
     scratch.resources.insert(oxide_core::Time::default());
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&mut scratch)));
     std::mem::swap(&mut main.registry, &mut scratch.registry);
     if let Some(a) = scratch.resources.remove::<AssetServer>() {
         main.resources.insert(a);
+    }
+    if let Some(f) = scratch
+        .resources
+        .remove::<oxide_engine::text::FontLibrary>()
+    {
+        main.resources.insert(f);
     }
     match result {
         Ok(r) => r,

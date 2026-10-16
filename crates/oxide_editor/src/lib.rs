@@ -176,6 +176,10 @@ pub enum Create {
     NavMeshLink,
     /// GameObject → 3D Object → Terrain (with a new `.terraindata` file).
     Terrain,
+    /// GameObject → 3D Object → Text - TextMeshPro.
+    Text3D,
+    /// GameObject → UI → Text - TextMeshPro (under a Canvas, made if there is none).
+    TextUI,
 }
 
 impl Create {
@@ -199,6 +203,8 @@ impl Create {
             Create::Terrain => "Terrain",
             Create::NavMeshModifierVolume => "NavMesh Modifier Volume",
             Create::NavMeshLink => "NavMesh Link",
+            Create::Text3D => "Text (TMP)",
+            Create::TextUI => "Text (TMP)",
         }
     }
 }
@@ -1571,6 +1577,26 @@ fn create(w: &mut World, kind: Create, active: Option<GameObjectId>) -> GameObje
             w.add_component(id, oxide_engine::nav::NavMeshModifierVolume::default());
             id
         }
+        Create::Text3D => {
+            let id = w.create("Text (TMP)");
+            w.add_component(id, oxide_engine::text::TextMeshPro::default());
+            id
+        }
+        Create::TextUI => {
+            let existing = w
+                .query::<oxide_engine::ui::Canvas>()
+                .map(|(id, _)| id)
+                .next();
+            let canvas = existing.unwrap_or_else(|| {
+                let c = w.create("Canvas");
+                w.add_component(c, oxide_engine::ui::Canvas::default());
+                c
+            });
+            let id = w.create("Text (TMP)");
+            let _ = w.set_parent(id, Some(canvas), false);
+            w.add_component(id, oxide_engine::ui::TextMeshProUGUI::default());
+            id
+        }
         Create::NavMeshLink => {
             let id = w.create("NavMesh Link");
             w.add_component(id, oxide_engine::nav::NavMeshLink::default());
@@ -1683,6 +1709,7 @@ impl Shell for Editor {
         // Sprite Resolvers show their sprite in Edit mode too.
         oxide_scene::sprite_library::resolve_all(&mut engine.world);
         oxide_engine::lens_flares::preload(&mut engine.world);
+        oxide_engine::text::components::update(&mut engine.world);
         let animation_open = self.dock.iter_all_tabs().any(|(_, t)| *t == Tab::Animation);
         self.st.tile_palette_open = self
             .dock

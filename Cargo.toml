@@ -23,6 +23,7 @@ oxide_audio = { path = "crates/oxide_audio" }
 oxide_animation = { path = "crates/oxide_animation" }
 oxide_ui = { path = "crates/oxide_ui" }
 oxide_terrain = { path = "crates/oxide_terrain" }
+oxide_text = { path = "crates/oxide_text" }
 oxide_lightmapper = { path = "crates/oxide_lightmapper" }
 oxide_particles = { path = "crates/oxide_particles" }
 oxide_navigation = { path = "crates/oxide_navigation" }
@@ -59,6 +60,10 @@ egui-wgpu = "0.36"
 egui-winit = { version = "0.36", default-features = false, features = ["clipboard", "links"] }
 egui_dock = { version = "0.21", features = ["serde"] }
 libloading = "0.9"
+
+# SDF glyph generation runs in the editor; keep it fast in debug builds.
+[profile.dev.package.oxide_text]
+opt-level = 2
 
 [profile.dev.package."*"]
 opt-level = 2

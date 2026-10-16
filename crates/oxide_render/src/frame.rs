@@ -747,6 +747,8 @@ pub struct RenderFrame {
     /// Lens flares (Unity Lens Flare (SRP)), drawn over the first camera's view before
     /// bloom.
     pub lens_flares: Vec<crate::flares::LensFlareSource>,
+    /// 3D text (TextMeshPro), one entry per text object and atlas page.
+    pub texts: Vec<crate::text::TextDraw>,
     pub reflection_probes: Vec<ReflectionProbeView>,
     /// Cameras rendering into Render Textures (Unity `Camera.targetTexture`), drawn before
     /// the main cameras, at most once per frame each.

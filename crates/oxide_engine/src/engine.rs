@@ -208,6 +208,7 @@ impl Engine {
         crate::builtin_assets::update_input_actions(w, unscaled);
         oxide_scene::sprite_library::resolve_all(w);
         crate::lens_flares::preload(w);
+        oxide_text::components::update(w);
         w.run_start();
         while w.resource_mut::<Time>().next_fixed_step() {
             w.run_phase(Phase::FixedUpdate);

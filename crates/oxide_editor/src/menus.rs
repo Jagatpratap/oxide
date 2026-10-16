@@ -66,6 +66,14 @@ fn create_items(prefix: &str) -> Vec<MenuItem> {
         &format!("{prefix}3D Object/Ragdoll..."),
         Action::CreateRagdoll,
     ));
+    v.push(item(
+        &format!("{prefix}3D Object/Text - TextMeshPro"),
+        Action::Create(Create::Text3D),
+    ));
+    v.push(item(
+        &format!("{prefix}UI/Text - TextMeshPro"),
+        Action::Create(Create::TextUI),
+    ));
     for s in ["Square", "Circle"] {
         v.push(item(
             &format!("{prefix}2D Object/Sprites/{s}"),
