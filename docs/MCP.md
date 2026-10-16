@@ -37,7 +37,7 @@ If the engine isn't running, the bridge returns an error that says how to start 
 
 ## Tools
 
-61 tools (generated from the running editor's `tools/list`). Tools named `editor_*` exist
+62 tools (generated from the running editor's `tools/list`). Tools named `editor_*` exist
 only when the editor is running (not with `--player`).
 
 | Tool | What it does | Changes state |
@@ -103,6 +103,7 @@ only when the editor is running (not with `--player`).
 | `texture_import_settings` | Gets a texture's import settings (its `.meta` file, Unity's Texture Importer) and what the import produced (size, mips, GPU format). | yes |
 | `editor_scripts` | The project's Rust scripts: `status` (compile state, errors, script component types), `recompile`, or `create` a new script component named `name` (Unity Create > Script). | yes |
 | `editor_build` | Unity Build Settings: `status` (default), `settings` (read; or change with `scenes`, `product_name`, `width`, `height`, `fullscreen`, `output`), `build` or `build_and_run` (starts in the background; poll `status`). | yes |
+| `bake_lighting` | Unity's Lighting window: `start` bakes lightmaps and light probes in the background, `status` (progress, last result), `cancel`, `clear` | yes |
 
 ## Try it with curl
 
