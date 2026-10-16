@@ -203,7 +203,7 @@ pub struct EditorState {
     /// Requested from inside window code; applied after the UI pass.
     pub actions: Vec<Action>,
     hierarchy: hierarchy::HierarchyState,
-    inspector: inspector::InspectorState,
+    pub(crate) inspector: inspector::InspectorState,
     console: console::ConsoleState,
     project: project::ProjectState,
     scene_ui: scene_view::SceneViewState,

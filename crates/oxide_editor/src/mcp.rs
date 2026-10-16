@@ -340,6 +340,43 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
         s,
         bus,
         ToolDef::new(
+            "editor_inspector",
+            "Inspector lock and Debug mode",
+            "Locks the Inspector to the current selection (`lock`: true) or unlocks it, toggles Debug mode, and \
+             returns which objects the Inspector shows. With several objects selected the Inspector edits them all.",
+            schema(
+                json!({ "lock": { "type": "boolean" }, "debug": { "type": "boolean" } }),
+                &[],
+            ),
+        ),
+        |args, e| {
+            with_editor(e, |ed, e| {
+                let ins = &mut ed.st.inspector;
+                if let Some(l) = args.get("lock").and_then(Json::as_bool) {
+                    ins.locked = l.then(|| ed.st.selection.clone());
+                }
+                if let Some(d) = args.get("debug").and_then(Json::as_bool) {
+                    ins.debug = d;
+                }
+                let shown = ins
+                    .locked
+                    .clone()
+                    .unwrap_or_else(|| ed.st.selection.clone());
+                let names: Vec<_> = shown
+                    .iter()
+                    .filter_map(|&id| e.world.get(id).map(|o| o.name.clone()))
+                    .collect();
+                ToolResult::json(
+                    json!({ "locked": ins.locked.is_some(), "debug": ins.debug, "inspecting": names }),
+                )
+            })
+        },
+    );
+
+    tool(
+        s,
+        bus,
+        ToolDef::new(
             "editor_preferences",
             "Editor Preferences",
             "Reads the per-user editor Preferences; `values` changes some (e.g. {\"move_snap\": 0.5, \

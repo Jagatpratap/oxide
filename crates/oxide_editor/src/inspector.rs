@@ -23,6 +23,10 @@ pub struct InspectorState {
     clipboard: Option<(String, BTreeMap<String, Value>)>,
     /// Overrides of the selected object's prefab instance: (instance root, when computed).
     overrides: Option<(GameObjectId, f64, Vec<PrefabOverride>)>,
+    /// Debug mode (Unity's Inspector ⋮ → Debug): ids, lifecycle and raw values.
+    pub debug: bool,
+    /// Locked Inspector: keeps showing these objects whatever is selected.
+    pub locked: Option<Vec<GameObjectId>>,
 }
 
 impl InspectorState {
@@ -60,29 +64,80 @@ pub fn nicify(name: &str) -> String {
     out
 }
 
-/// An edit to apply after the UI pass (so the world isn't borrowed while drawing).
+/// A component on every inspected object: the `nth` component of this type (so multi-object
+/// edits reach the matching component on each object).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Slot {
+    type_name: &'static str,
+    nth: usize,
+}
+
+impl Slot {
+    fn resolve(self, w: &World, id: GameObjectId) -> Option<ComponentId> {
+        w.get(id)?
+            .component_list()
+            .into_iter()
+            .filter(|c| c.1 == self.type_name)
+            .nth(self.nth)
+            .map(|c| c.0)
+    }
+}
+
+/// An edit to apply after the UI pass (so the world isn't borrowed while drawing). Applied
+/// to every inspected object.
 enum Edit {
-    Field(ComponentId, String, Value),
-    Enabled(ComponentId, bool),
-    Remove(ComponentId),
-    Move(ComponentId, i32),
-    Paste(ComponentId, BTreeMap<String, Value>),
-    Reset(ComponentId),
+    Field(Slot, String, Value),
+    Enabled(Slot, bool),
+    Remove(Slot),
+    Move(Slot, i32),
+    Paste(Slot, BTreeMap<String, Value>),
+    Reset(Slot),
     Name(String),
     Active(bool),
     Static(oxide_scene::StaticEditorFlags),
     Tag(String),
     Layer(u8),
-    Position(Vector3),
-    Rotation(Quaternion),
-    Scale(Vector3),
+    /// New values for the axes set in the mask (other axes keep each object's own value).
+    Position(Vector3, [bool; 3]),
+    /// Euler angles (degrees) for the masked axes.
+    Rotation(Vector3, [bool; 3]),
+    Scale(Vector3, [bool; 3]),
+    /// Debug mode: the raw local rotation.
+    RotationQuat(Quaternion),
     ResetTransform,
 }
 
 pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
-    let Some(id) = st.active().filter(|&id| engine.world.is_alive(id)) else {
+    // Lock and Debug (Unity's padlock and ⋮ → Normal / Debug).
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let mut locked = st.inspector.locked.is_some();
+            let icon = if locked { "🔒" } else { "🔓" };
+            if ui
+                .toggle_value(&mut locked, icon)
+                .on_hover_text("Lock: keep inspecting these objects when the selection changes")
+                .changed()
+            {
+                st.inspector.locked = locked.then(|| st.selection.clone());
+            }
+            ui.toggle_value(&mut st.inspector.debug, "Debug")
+                .on_hover_text("Debug mode: ids, lifecycle and raw values");
+        });
+    });
+    let w = &engine.world;
+    let source = st
+        .inspector
+        .locked
+        .clone()
+        .unwrap_or_else(|| st.selection.clone());
+    let targets: Vec<GameObjectId> = source.into_iter().filter(|&id| w.is_alive(id)).collect();
+    let Some(&id) = targets.last() else {
         ui.add_space(8.0);
-        ui.weak("Select a GameObject to inspect it.");
+        ui.weak(if st.inspector.locked.is_some() {
+            "The locked objects were destroyed. Unlock to follow the selection."
+        } else {
+            "Select a GameObject to inspect it."
+        });
         return;
     };
     refresh_overrides(st, &mut engine.world, id);
@@ -91,26 +146,78 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
         .auto_shrink([false, false])
         .show(ui, |ui| {
             let w = &engine.world;
-            if st.selection.len() > 1 {
-                ui.weak(format!(
-                    "{} objects selected; showing the active one.",
-                    st.selection.len()
-                ));
+            if targets.len() > 1 {
+                ui.weak(format!("{} objects selected", targets.len()));
             }
-            if header(ui, w, id, &mut edits) {
+            if header(ui, w, &targets, &mut edits) {
                 st.actions.push(Action::OpenProjectSettings(
                     crate::settings_window::Page::TagsAndLayers,
                 ));
             }
-            prefab_header(ui, st, w, id);
+            if st.inspector.debug {
+                debug_info(ui, w, id);
+            }
+            if targets.len() == 1 {
+                prefab_header(ui, st, w, id);
+            }
             ui.separator();
-            transform(ui, st, w, id, &mut edits);
-            components(ui, st, w, id, &mut edits);
+            transform(ui, st, w, &targets, &mut edits);
+            components(ui, st, w, &targets, &mut edits);
             ui.add_space(8.0);
             add_component(ui, st, w);
             ui.add_space(24.0);
         });
-    apply(st, &mut engine.world, id, edits);
+    apply(st, &mut engine.world, &targets, edits);
+}
+
+/// Debug mode: what Unity's Debug Inspector shows beyond the fields.
+fn debug_info(ui: &mut egui::Ui, w: &World, id: GameObjectId) {
+    let Some(o) = w.get(id) else { return };
+    egui::CollapsingHeader::new(RichText::new("Debug").strong())
+        .default_open(true)
+        .show(ui, |ui| {
+            egui::Grid::new("inspector-debug")
+                .num_columns(2)
+                .spacing([12.0, 2.0])
+                .show(ui, |ui| {
+                    let mut row = |k: &str, v: String| {
+                        ui.label(k);
+                        ui.label(RichText::new(v).monospace());
+                        ui.end_row();
+                    };
+                    row("Instance ID", format!("{}", id.to_bits()));
+                    let scene = w.scene_info(o.scene());
+                    row(
+                        "Scene",
+                        scene.map_or_else(|| format!("#{}", o.scene().0), |s| s.name),
+                    );
+                    row("Active In Hierarchy", o.active_in_hierarchy().to_string());
+                    row("Children", o.children().len().to_string());
+                    row(
+                        "Prefab Source",
+                        o.prefab_source.clone().unwrap_or_else(|| "—".into()),
+                    );
+                    row(
+                        "Prefab Link",
+                        o.prefab_link.map_or_else(|| "—".into(), |l| l.to_string()),
+                    );
+                    let p = w.position(id);
+                    row(
+                        "World Position",
+                        format!("({:.3}, {:.3}, {:.3})", p.x, p.y, p.z),
+                    );
+                    let e = w.rotation(id).euler_angles();
+                    row(
+                        "World Rotation",
+                        format!("({:.2}, {:.2}, {:.2})", e.x, e.y, e.z),
+                    );
+                    let sc = w.lossy_scale(id);
+                    row(
+                        "Lossy Scale",
+                        format!("({:.3}, {:.3}, {:.3})", sc.x, sc.y, sc.z),
+                    );
+                });
+        });
 }
 
 fn key(id: GameObjectId, part: &str) -> u64 {
@@ -118,27 +225,49 @@ fn key(id: GameObjectId, part: &str) -> u64 {
 }
 
 /// Returns true when "Add Tag..." / "Add Layer..." was clicked (opens Tags and Layers).
-fn header(ui: &mut egui::Ui, w: &World, id: GameObjectId, edits: &mut Vec<(Edit, u64)>) -> bool {
+/// With several objects, a mixed value shows as indeterminate or "—" and an edit sets it on all.
+fn header(
+    ui: &mut egui::Ui,
+    w: &World,
+    targets: &[GameObjectId],
+    edits: &mut Vec<(Edit, u64)>,
+) -> bool {
+    let id = *targets.last().expect("a target");
     let o = w.get(id).expect("alive");
+    let objs: Vec<_> = targets.iter().filter_map(|&t| w.get(t)).collect();
+    let mixed = |f: &dyn Fn(&oxide_scene::GameObject) -> String| objs.iter().any(|x| f(x) != f(o));
     let mut open_tags = false;
     ui.horizontal(|ui| {
         let mut active = o.active_self();
-        if ui.checkbox(&mut active, "").changed() {
+        let mixed_active = objs.iter().any(|x| x.active_self() != active);
+        if ui
+            .add(egui::Checkbox::without_text(&mut active).indeterminate(mixed_active))
+            .changed()
+        {
             edits.push((Edit::Active(active), key(id, "active")));
         }
-        let mut name = o.name.clone();
-        let r = ui
-            .add(egui::TextEdit::singleline(&mut name).desired_width(ui.available_width() - 70.0));
+        let mixed_name = mixed(&|x| x.name.clone());
+        let mut name = if mixed_name {
+            String::new()
+        } else {
+            o.name.clone()
+        };
+        let r = ui.add(
+            egui::TextEdit::singleline(&mut name)
+                .hint_text(if mixed_name { "—" } else { "" })
+                .desired_width(ui.available_width() - 70.0),
+        );
         if r.changed() {
             edits.push((Edit::Name(name), key(id, "name")));
         }
         // Unity's Static checkbox (all flags) plus the per-system flags dropdown.
         use oxide_scene::StaticEditorFlags as F;
         let flags = o.static_flags;
-        let mut all = flags == F::EVERYTHING;
+        let same_flags = objs.iter().all(|x| x.static_flags == flags);
+        let mut all = same_flags && flags == F::EVERYTHING;
         let r = ui.add(
             egui::Checkbox::new(&mut all, "Static")
-                .indeterminate(flags != F::NOTHING && flags != F::EVERYTHING),
+                .indeterminate(!same_flags || (flags != F::NOTHING && flags != F::EVERYTHING)),
         );
         if r.changed() {
             let f = if all { F::EVERYTHING } else { F::NOTHING };
@@ -159,9 +288,15 @@ fn header(ui: &mut egui::Ui, w: &World, id: GameObjectId, edits: &mut Vec<(Edit,
     });
     ui.horizontal(|ui| {
         ui.label("Tag");
-        let mut tag = o.tag.clone();
+        let mixed_tag = mixed(&|x| x.tag.clone());
+        let orig = if mixed_tag {
+            String::new()
+        } else {
+            o.tag.clone()
+        };
+        let mut tag = orig.clone();
         egui::ComboBox::from_id_salt(("tag", id.to_bits()))
-            .selected_text(&tag)
+            .selected_text(if mixed_tag { "—" } else { tag.as_str() })
             .width(110.0)
             .show_ui(ui, |ui| {
                 for t in w.all_tags() {
@@ -172,16 +307,20 @@ fn header(ui: &mut egui::Ui, w: &World, id: GameObjectId, edits: &mut Vec<(Edit,
                     open_tags = true;
                 }
             });
-        if tag != o.tag {
+        if tag != orig {
             edits.push((Edit::Tag(tag), key(id, "tag")));
         }
         ui.label("Layer");
-        let mut layer = o.layer;
+        let mixed_layer = objs.iter().any(|x| x.layer != o.layer);
+        let orig = (!mixed_layer).then_some(o.layer);
+        let mut layer = orig;
         let names = &w.layers.0;
-        let current = &names[layer as usize];
+        let current = &names[o.layer as usize];
         egui::ComboBox::from_id_salt(("layer", id.to_bits()))
-            .selected_text(if current.is_empty() {
-                format!("{layer}")
+            .selected_text(if mixed_layer {
+                "—".to_owned()
+            } else if current.is_empty() {
+                format!("{}", o.layer)
             } else {
                 current.clone()
             })
@@ -189,7 +328,7 @@ fn header(ui: &mut egui::Ui, w: &World, id: GameObjectId, edits: &mut Vec<(Edit,
             .show_ui(ui, |ui| {
                 for (i, n) in names.iter().enumerate() {
                     if !n.is_empty() {
-                        ui.selectable_value(&mut layer, i as u8, format!("{i}: {n}"));
+                        ui.selectable_value(&mut layer, Some(i as u8), format!("{i}: {n}"));
                     }
                 }
                 ui.separator();
@@ -197,8 +336,10 @@ fn header(ui: &mut egui::Ui, w: &World, id: GameObjectId, edits: &mut Vec<(Edit,
                     open_tags = true;
                 }
             });
-        if layer != o.layer {
-            edits.push((Edit::Layer(layer), key(id, "layer")));
+        if layer != orig
+            && let Some(l) = layer
+        {
+            edits.push((Edit::Layer(l), key(id, "layer")));
         }
     });
     open_tags
@@ -343,8 +484,16 @@ fn prefab_header(ui: &mut egui::Ui, st: &mut EditorState, w: &World, id: GameObj
     });
 }
 
-fn vec3_row(ui: &mut egui::Ui, label: &str, v: &mut Vector3, speed: f64, bold: bool) -> bool {
-    let mut changed = false;
+/// Label + X/Y/Z fields. `mixed` axes show "—". Returns which axes were edited.
+fn vec3_row(
+    ui: &mut egui::Ui,
+    label: &str,
+    v: &mut Vector3,
+    mixed: [bool; 3],
+    speed: f64,
+    bold: bool,
+) -> [bool; 3] {
+    let mut changed = [false; 3];
     ui.horizontal(|ui| {
         let text = if bold {
             RichText::new(label).strong().color(Color32::WHITE)
@@ -357,24 +506,50 @@ fn vec3_row(ui: &mut egui::Ui, label: &str, v: &mut Vector3, speed: f64, bold: b
         let wdt = ((ui.available_width() - 3.0 * (10.0 + 2.0 * gap)) / 3.0).max(30.0);
         for (i, axis) in ["X", "Y", "Z"].iter().enumerate() {
             ui.label(RichText::new(*axis).color(crate::scene_view::AXIS_COLORS[i]));
-            let r = ui.add_sized(
-                [wdt, 18.0],
-                egui::DragValue::new(&mut v[i]).speed(speed).max_decimals(4),
-            );
-            changed |= r.changed();
+            let mut d = egui::DragValue::new(&mut v[i]).speed(speed).max_decimals(4);
+            if mixed[i] {
+                d = d.custom_formatter(|_, _| "—".into());
+            }
+            changed[i] = ui.add_sized([wdt, 18.0], d).changed();
         }
     });
     changed
+}
+
+/// The Euler angles shown for an object (kept while its rotation is unchanged, so typing
+/// 190 doesn't jump to -170).
+fn shown_euler(st: &mut EditorState, id: GameObjectId, q: Quaternion) -> Vector3 {
+    match st.inspector.euler.get(&id) {
+        Some((cq, e)) if cq.abs_diff_eq(q, 1e-6) => *e,
+        _ => {
+            let e = q.euler_angles();
+            // Show -10 rather than 350, like Unity does for fresh values.
+            let e = Vector3::new(wrap180(e.x), wrap180(e.y), wrap180(e.z));
+            st.inspector.euler.insert(id, (q, e));
+            e
+        }
+    }
+}
+
+/// Axes where any target differs from the first.
+fn mixed_axes(values: &[Vector3]) -> [bool; 3] {
+    let first = values.first().copied().unwrap_or_default();
+    std::array::from_fn(|i| values.iter().any(|v| (v[i] - first[i]).abs() > 1e-5))
 }
 
 fn transform(
     ui: &mut egui::Ui,
     st: &mut EditorState,
     w: &World,
-    id: GameObjectId,
+    targets: &[GameObjectId],
     edits: &mut Vec<(Edit, u64)>,
 ) {
+    let id = *targets.last().expect("a target");
     let t = *w.transform(id).expect("alive");
+    let ts: Vec<_> = targets
+        .iter()
+        .filter_map(|&x| w.transform(x).copied())
+        .collect();
     let link = w.get(id).and_then(|o| o.prefab_link);
     let has = |want: fn(&ObjectProperty) -> bool| {
         st.inspector.overrides().iter().any(|o| {
@@ -386,33 +561,58 @@ fn transform(
         has(|p| matches!(p, ObjectProperty::Rotation(_))),
         has(|p| matches!(p, ObjectProperty::Scale(_))),
     ];
+    let eulers: Vec<Vector3> = targets
+        .iter()
+        .zip(&ts)
+        .map(|(&x, tr)| shown_euler(st, x, tr.local_rotation))
+        .collect();
+    let debug = st.inspector.debug;
     let resp = egui::CollapsingHeader::new(RichText::new("Transform").strong())
         .id_salt("transform")
         .default_open(true)
         .show(ui, |ui| {
             let mut p = t.local_position;
-            if vec3_row(ui, "Position", &mut p, 0.05, bold[0]) {
-                edits.push((Edit::Position(p), key(id, "position")));
+            let positions: Vec<_> = ts.iter().map(|x| x.local_position).collect();
+            let m = vec3_row(
+                ui,
+                "Position",
+                &mut p,
+                mixed_axes(&positions),
+                0.05,
+                bold[0],
+            );
+            if m.contains(&true) {
+                edits.push((Edit::Position(p, m), key(id, "position")));
             }
-            let euler = match st.inspector.euler.get(&id) {
-                Some((q, e)) if q.abs_diff_eq(t.local_rotation, 1e-6) => *e,
-                _ => {
-                    let e = t.local_rotation.euler_angles();
-                    // Show -10 rather than 350, like Unity does for fresh values.
-                    let e = Vector3::new(wrap180(e.x), wrap180(e.y), wrap180(e.z));
-                    st.inspector.euler.insert(id, (t.local_rotation, e));
-                    e
+            if debug {
+                // Unity's Debug Inspector shows the stored quaternion.
+                let mut q = t.local_rotation.to_array();
+                ui.horizontal(|ui| {
+                    ui.add_sized([62.0, 18.0], egui::Label::new("Rotation"));
+                    let mut changed = false;
+                    for (axis, c) in ["X", "Y", "Z", "W"].iter().zip(q.iter_mut()) {
+                        ui.label(*axis);
+                        changed |= ui
+                            .add(egui::DragValue::new(c).speed(0.005).max_decimals(5))
+                            .changed();
+                    }
+                    if changed {
+                        let nq = Quaternion::from_array(q).normalize();
+                        edits.push((Edit::RotationQuat(nq), key(id, "rotation")));
+                    }
+                });
+            } else {
+                let mut e = *eulers.last().expect("a target");
+                let m = vec3_row(ui, "Rotation", &mut e, mixed_axes(&eulers), 0.5, bold[1]);
+                if m.contains(&true) {
+                    edits.push((Edit::Rotation(e, m), key(id, "rotation")));
                 }
-            };
-            let mut e = euler;
-            if vec3_row(ui, "Rotation", &mut e, 0.5, bold[1]) {
-                let q = Quaternion::euler_v(e);
-                st.inspector.euler.insert(id, (q, e));
-                edits.push((Edit::Rotation(q), key(id, "rotation")));
             }
-            let mut s = t.local_scale;
-            if vec3_row(ui, "Scale", &mut s, 0.02, bold[2]) {
-                edits.push((Edit::Scale(s), key(id, "scale")));
+            let mut sc = t.local_scale;
+            let scales: Vec<_> = ts.iter().map(|x| x.local_scale).collect();
+            let m = vec3_row(ui, "Scale", &mut sc, mixed_axes(&scales), 0.02, bold[2]);
+            if m.contains(&true) {
+                edits.push((Edit::Scale(sc, m), key(id, "scale")));
             }
         });
     resp.header_response.context_menu(|ui| {
@@ -429,17 +629,22 @@ fn wrap180(a: f32) -> f32 {
     (a * 1e4).round() / 1e4
 }
 
+/// Components of the active object that every target has (Unity shows only the shared ones
+/// when several objects are selected); edits go to the matching component on each target.
 fn components(
     ui: &mut egui::Ui,
     st: &mut EditorState,
     w: &World,
-    id: GameObjectId,
+    targets: &[GameObjectId],
     edits: &mut Vec<(Edit, u64)>,
 ) {
+    let id = *targets.last().expect("a target");
     let o = w.get(id).expect("alive");
     let link = o.prefab_link;
     let list = o.component_list();
     let count = list.len();
+    let debug = st.inspector.debug;
+    let mut hidden = 0;
     let mut per_type: HashMap<&str, usize> = HashMap::new();
     for (index, (cid, type_name, enabled)) in list.into_iter().enumerate() {
         let nth = {
@@ -447,6 +652,25 @@ fn components(
             *n += 1;
             *n - 1
         };
+        let slot = Slot { type_name, nth };
+        let on_targets: Option<Vec<ComponentId>> =
+            targets.iter().map(|&t| slot.resolve(w, t)).collect();
+        let Some(on_targets) = on_targets else {
+            hidden += 1;
+            continue;
+        };
+        let target_comps: Vec<_> = targets
+            .iter()
+            .zip(&on_targets)
+            .filter_map(|(&t, &c)| w.component_dyn(t, c))
+            .collect();
+        let mixed_enabled = targets.iter().zip(&on_targets).any(|(&t, &c)| {
+            w.get(t).is_some_and(|x| {
+                x.component_list()
+                    .iter()
+                    .any(|e| e.0 == c && e.2 != enabled)
+            })
+        });
         let overridden: Vec<String> = st
             .inspector
             .overrides()
@@ -468,10 +692,16 @@ fn components(
             continue;
         };
         let info = comp.type_info();
-        let values: Vec<(FieldInfo, Value)> = info
+        let values: Vec<(FieldInfo, Value, bool)> = info
             .fields
             .iter()
-            .filter_map(|f| comp.get_field(f.name).map(|v| (*f, v)))
+            .filter_map(|f| {
+                let v = comp.get_field(f.name)?;
+                let mixed = target_comps
+                    .iter()
+                    .any(|c| c.get_field(f.name).as_ref() != Some(&v));
+                Some((*f, v, mixed))
+            })
             .collect();
         ui.separator();
         let state = egui::collapsing_header::CollapsingState::load_with_default_open(
@@ -484,8 +714,11 @@ fn components(
             .map(|m| m.script.clone());
         let header = state.show_header(ui, |ui| {
             let mut en = enabled;
-            if ui.checkbox(&mut en, "").changed() {
-                edits.push((Edit::Enabled(cid, en), key(id, &format!("en{}", cid.0))));
+            if ui
+                .add(egui::Checkbox::without_text(&mut en).indeterminate(mixed_enabled))
+                .changed()
+            {
+                edits.push((Edit::Enabled(slot, en), key(id, &format!("en{}", cid.0))));
             }
             match &missing {
                 Some(script) => ui.label(
@@ -495,6 +728,9 @@ fn components(
                 ),
                 None => ui.label(RichText::new(nicify(type_name)).strong()),
             };
+            if debug {
+                ui.weak(format!("id {}", cid.0));
+            }
         });
         let (_, header_resp, _) = header.body(|ui| {
             if let Some(script) = &missing {
@@ -502,16 +738,26 @@ fn components(
                     "The script `{script}` is not loaded (still compiling, renamed or deleted). Its saved values are kept."
                 ));
             }
-            if type_name == "LODGroup" {
-                lod_group_editor(ui, w, id, cid, &st.selection, edits);
+            if type_name == "LODGroup" && !debug {
+                if targets.len() > 1 {
+                    ui.weak("Multi-object editing of LOD Groups is not supported.");
+                } else {
+                    lod_group_editor(ui, w, id, cid, &st.selection, edits);
+                }
                 return;
             }
             if values.is_empty() {
                 ui.weak("No editable fields.");
             }
-            for (f, v) in values {
+            for (f, v, mixed) in values {
                 let mut v2 = v.clone();
-                let label = nicify(f.name);
+                // Numbers and checkboxes show "—" themselves; other mixed fields mark the label.
+                let marks_itself = matches!(v, Value::Bool(_) | Value::Int(_) | Value::Float(_));
+                let label = if mixed && !marks_itself {
+                    format!("{} —", nicify(f.name))
+                } else {
+                    nicify(f.name)
+                };
                 let is_override = overridden.iter().any(|x| x == f.name);
                 let changed = ui
                     .horizontal(|ui| {
@@ -543,13 +789,14 @@ fn components(
                             f.kind,
                             f.type_name,
                             &mut v2,
+                            mixed,
                             &format!("{}{}", cid.0, f.name),
                         )
                     })
                     .inner;
                 if changed && v2 != v {
                     edits.push((
-                        Edit::Field(cid, f.name.to_owned(), v2),
+                        Edit::Field(slot, f.name.to_owned(), v2),
                         key(id, &format!("{}.{}", cid.0, f.name)),
                     ));
                 }
@@ -557,25 +804,25 @@ fn components(
         });
         header_resp.response.context_menu(|ui| {
             if ui.button("Reset").clicked() {
-                edits.push((Edit::Reset(cid), 0));
+                edits.push((Edit::Reset(slot), 0));
                 ui.close();
             }
             if ui.button("Remove Component").clicked() {
-                edits.push((Edit::Remove(cid), 0));
+                edits.push((Edit::Remove(slot), 0));
                 ui.close();
             }
             if ui
                 .add_enabled(index > 0, egui::Button::new("Move Up"))
                 .clicked()
             {
-                edits.push((Edit::Move(cid, -1), 0));
+                edits.push((Edit::Move(slot, -1), 0));
                 ui.close();
             }
             if ui
                 .add_enabled(index + 1 < count, egui::Button::new("Move Down"))
                 .clicked()
             {
-                edits.push((Edit::Move(cid, 1), 0));
+                edits.push((Edit::Move(slot, 1), 0));
                 ui.close();
             }
             ui.separator();
@@ -600,10 +847,16 @@ fn components(
                 .clicked()
                 && let Some((_, f)) = &st.inspector.clipboard
             {
-                edits.push((Edit::Paste(cid, f.clone()), 0));
+                edits.push((Edit::Paste(slot, f.clone()), 0));
                 ui.close();
             }
         });
+    }
+    if hidden > 0 {
+        ui.separator();
+        ui.weak(format!(
+            "{hidden} component(s) not on every selected object are hidden."
+        ));
     }
 }
 
@@ -688,6 +941,7 @@ pub fn reflect_grid(
                     f.kind,
                     f.type_name,
                     &mut v2,
+                    false,
                     &format!("{salt}{}", f.name),
                 ) && v2 != v
                     && obj.set_field(f.name, v2).is_ok()
@@ -700,6 +954,7 @@ pub fn reflect_grid(
     changed
 }
 
+#[allow(clippy::too_many_arguments)]
 fn value_ui(
     ui: &mut egui::Ui,
     w: &World,
@@ -707,24 +962,37 @@ fn value_ui(
     kind: ValueKind,
     type_name: Option<&str>,
     v: &mut Value,
+    mixed: bool,
     salt: &str,
 ) -> bool {
+    fn dash(d: egui::DragValue<'_>, mixed: bool) -> egui::DragValue<'_> {
+        if mixed {
+            d.custom_formatter(|_, _| "—".into())
+        } else {
+            d
+        }
+    }
     match v {
-        Value::Bool(b) => ui.checkbox(b, "").changed(),
+        Value::Bool(b) => ui
+            .add(egui::Checkbox::without_text(b).indeterminate(mixed))
+            .changed(),
         Value::Int(i) => match f.range {
-            Some((lo, hi)) if kind == ValueKind::Int => ui
+            Some((lo, hi)) if kind == ValueKind::Int && !mixed => ui
                 .add(egui::Slider::new(i, lo as i64..=hi as i64))
                 .changed(),
-            _ => ui.add(egui::DragValue::new(i)).changed(),
+            _ => ui.add(dash(egui::DragValue::new(i), mixed)).changed(),
         },
         Value::Float(x) => match f.range {
-            Some((lo, hi)) if kind == ValueKind::Float => {
+            Some((lo, hi)) if kind == ValueKind::Float && !mixed => {
                 ui.add(egui::Slider::new(x, lo..=hi)).changed()
             }
             _ => {
                 let speed = (x.abs() * 0.01).clamp(0.001, 10.0);
-                ui.add(egui::DragValue::new(x).speed(speed).max_decimals(4))
-                    .changed()
+                ui.add(dash(
+                    egui::DragValue::new(x).speed(speed).max_decimals(4),
+                    mixed,
+                ))
+                .changed()
             }
         },
         Value::String(s) => ui
@@ -790,8 +1058,16 @@ fn value_ui(
                 for (n, item) in items.iter_mut().enumerate() {
                     ui.horizontal(|ui| {
                         ui.weak(format!("{n}"));
-                        changed |=
-                            value_ui(ui, w, f, elem, type_name, item, &format!("{salt}[{n}]"));
+                        changed |= value_ui(
+                            ui,
+                            w,
+                            f,
+                            elem,
+                            type_name,
+                            item,
+                            false,
+                            &format!("{salt}[{n}]"),
+                        );
                     });
                 }
             });
@@ -816,7 +1092,8 @@ fn value_ui(
                 if let Some(inner) = map.get_mut("value") {
                     let k = inner.kind();
                     ui.add_enabled_ui(on, |ui| {
-                        changed |= value_ui(ui, w, f, k, type_name, inner, &format!("{salt}.v"));
+                        changed |=
+                            value_ui(ui, w, f, k, type_name, inner, false, &format!("{salt}.v"));
                     });
                 }
             });
@@ -838,7 +1115,8 @@ fn value_ui(
                             range: None,
                             tooltip: None,
                         };
-                        changed |= value_ui(ui, w, &sub, k2, None, item, &format!("{salt}.{k}"));
+                        changed |=
+                            value_ui(ui, w, &sub, k2, None, item, false, &format!("{salt}.{k}"));
                     });
                 }
             });
@@ -1016,7 +1294,7 @@ fn add_component(ui: &mut egui::Ui, st: &mut EditorState, w: &World) {
     });
 }
 
-fn apply(st: &mut EditorState, w: &mut World, id: GameObjectId, edits: Vec<(Edit, u64)>) {
+fn apply(st: &mut EditorState, w: &mut World, targets: &[GameObjectId], edits: Vec<(Edit, u64)>) {
     if edits.is_empty() {
         return;
     }
@@ -1026,86 +1304,132 @@ fn apply(st: &mut EditorState, w: &mut World, id: GameObjectId, edits: Vec<(Edit
             Edit::Field(_, f, _) => format!("Modify {}", nicify(f)),
             Edit::Remove(_) => "Remove Component".into(),
             Edit::Name(_) => "Rename".into(),
-            Edit::Position(_) | Edit::Rotation(_) | Edit::Scale(_) | Edit::ResetTransform => {
-                "Transform".into()
-            }
+            Edit::Position(..)
+            | Edit::Rotation(..)
+            | Edit::Scale(..)
+            | Edit::RotationQuat(_)
+            | Edit::ResetTransform => "Transform".into(),
             _ => "Inspector".into(),
         };
         st.record(w, &label, (k != 0).then_some(k), now);
-        match edit {
-            Edit::Field(cid, name, value) => {
-                if let Some(c) = w.component_dyn_mut(id, cid)
-                    && let Err(e) = c.set_field(&name, value)
-                {
-                    st.status = format!("{name}: {e}");
+        for &id in targets {
+            apply_one(st, w, id, &edit);
+        }
+    }
+}
+
+/// One edit on one object.
+fn apply_one(st: &mut EditorState, w: &mut World, id: GameObjectId, edit: &Edit) {
+    let set_axes = |cur: Vector3, v: Vector3, mask: [bool; 3]| {
+        Vector3::new(
+            if mask[0] { v.x } else { cur.x },
+            if mask[1] { v.y } else { cur.y },
+            if mask[2] { v.z } else { cur.z },
+        )
+    };
+    let slot_id = |w: &World, s: &Slot| s.resolve(w, id);
+    match edit {
+        Edit::Field(slot, name, value) => {
+            if let Some(cid) = slot_id(w, slot)
+                && let Some(c) = w.component_dyn_mut(id, cid)
+                && let Err(e) = c.set_field(name, value.clone())
+            {
+                st.status = format!("{name}: {e}");
+            }
+        }
+        Edit::Enabled(slot, en) => {
+            if let Some(cid) = slot_id(w, slot) {
+                w.set_component_enabled(id, cid, *en);
+            }
+        }
+        Edit::Remove(slot) => {
+            if let Some(cid) = slot_id(w, slot) {
+                w.remove_component_now(id, cid);
+            }
+        }
+        Edit::Move(slot, d) => {
+            if let Some(cid) = slot_id(w, slot) {
+                w.move_component(id, cid, *d);
+            }
+        }
+        Edit::Paste(slot, fields) => {
+            if let Some(cid) = slot_id(w, slot)
+                && let Some(c) = w.component_dyn_mut(id, cid)
+            {
+                for (k, v) in fields {
+                    let _ = c.set_field(k, v.clone());
                 }
             }
-            Edit::Enabled(cid, en) => w.set_component_enabled(id, cid, en),
-            Edit::Remove(cid) => w.remove_component_now(id, cid),
-            Edit::Move(cid, d) => w.move_component(id, cid, d),
-            Edit::Paste(cid, fields) => {
-                if let Some(c) = w.component_dyn_mut(id, cid) {
-                    for (k, v) in fields {
-                        let _ = c.set_field(&k, v);
-                    }
+        }
+        Edit::Reset(slot) => {
+            let fresh = w.registry.create(slot.type_name);
+            if let (Some(fresh), Some(cid)) = (fresh, slot_id(w, slot))
+                && let Some(c) = w.component_dyn_mut(id, cid)
+            {
+                for (k, v) in fresh.fields() {
+                    let _ = c.set_field(k, v);
                 }
             }
-            Edit::Reset(cid) => {
-                let type_name = w
-                    .get(id)
-                    .and_then(|o| o.component_list().into_iter().find(|c| c.0 == cid))
-                    .map(|c| c.1);
-                let fresh = type_name.and_then(|t| w.registry.create(t));
-                if let (Some(fresh), Some(c)) = (fresh, w.component_dyn_mut(id, cid)) {
-                    for (k, v) in fresh.fields() {
-                        let _ = c.set_field(k, v);
-                    }
-                }
+        }
+        Edit::Name(n) => {
+            if let Some(o) = w.get_mut(id) {
+                o.name = n.clone();
             }
-            Edit::Name(n) => {
-                if let Some(o) = w.get_mut(id) {
-                    o.name = n;
-                }
+        }
+        Edit::Active(a) => w.set_active(id, *a),
+        Edit::Static(s) => {
+            if let Some(o) = w.get_mut(id) {
+                o.static_flags = *s;
             }
-            Edit::Active(a) => w.set_active(id, a),
-            Edit::Static(s) => {
-                if let Some(o) = w.get_mut(id) {
-                    o.static_flags = s;
-                }
+        }
+        Edit::Tag(t) => {
+            if let Some(o) = w.get_mut(id) {
+                o.tag = t.clone();
             }
-            Edit::Tag(t) => {
-                if let Some(o) = w.get_mut(id) {
-                    o.tag = t;
-                }
+        }
+        Edit::Layer(l) => {
+            if let Some(o) = w.get_mut(id) {
+                o.layer = *l;
             }
-            Edit::Layer(l) => {
-                if let Some(o) = w.get_mut(id) {
-                    o.layer = l;
-                }
+        }
+        Edit::Position(p, mask) => {
+            if let Some(t) = w.transform_mut(id) {
+                t.local_position = set_axes(t.local_position, *p, *mask);
             }
-            Edit::Position(p) => {
-                if let Some(t) = w.transform_mut(id) {
-                    t.local_position = p;
-                }
+        }
+        Edit::Rotation(e, mask) => {
+            let Some(q0) = w.transform(id).map(|t| t.local_rotation) else {
+                return;
+            };
+            let shown = set_axes(shown_euler(st, id, q0), *e, *mask);
+            let q = Quaternion::euler_v(shown);
+            st.inspector.euler.insert(id, (q, shown));
+            if let Some(t) = w.transform_mut(id) {
+                t.local_rotation = q;
             }
-            Edit::Rotation(q) => {
-                if let Some(t) = w.transform_mut(id) {
-                    t.local_rotation = q;
-                }
+        }
+        Edit::RotationQuat(q) => {
+            if let Some(t) = w.transform_mut(id) {
+                t.local_rotation = *q;
             }
-            Edit::Scale(s) => {
-                if let Some(t) = w.transform_mut(id) {
-                    t.local_scale = s;
-                }
+        }
+        Edit::Scale(sc, mask) => {
+            if let Some(t) = w.transform_mut(id) {
+                t.local_scale = set_axes(t.local_scale, *sc, *mask);
             }
-            Edit::ResetTransform => {
-                if let Some(t) = w.transform_mut(id) {
-                    *t = oxide_scene::Transform::default();
-                }
+        }
+        Edit::ResetTransform => {
+            if let Some(t) = w.transform_mut(id) {
+                *t = oxide_scene::Transform::default();
             }
         }
     }
 }
+
+const LOD_SLOT: Slot = Slot {
+    type_name: "LODGroup",
+    nth: 0,
+};
 
 const LOD_COLORS: [Color32; 6] = [
     Color32::from_rgb(60, 140, 60),
@@ -1270,7 +1594,7 @@ fn lod_group_editor(
             .on_hover_text("Object size for the screen-height test (0 = from LOD 0's bounds)");
         if r.changed() {
             edits.push((
-                Edit::Field(cid, "size".into(), Value::Float(size as f64)),
+                Edit::Field(LOD_SLOT, "size".into(), Value::Float(size as f64)),
                 key(id, "lod-size"),
             ));
         }
@@ -1301,13 +1625,89 @@ fn lod_group_editor(
                 })
                 .collect(),
         );
-        edits.push((Edit::Field(cid, "lods".into(), value), key(id, "lods")));
+        edits.push((Edit::Field(LOD_SLOT, "lods".into(), value), key(id, "lods")));
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::nicify;
+    use super::*;
+
+    #[test]
+    fn multi_object_edits_reach_every_target() {
+        let mut w = World::new();
+        oxide_scene::register_builtin(&mut w.registry);
+        let a = w.create_at("A", Vector3::new(1.0, 2.0, 3.0), Quaternion::IDENTITY);
+        let b = w.create_at(
+            "B",
+            Vector3::new(4.0, 5.0, 6.0),
+            Quaternion::euler(0.0, 90.0, 0.0),
+        );
+        w.add_component(a, oxide_scene::Light::default());
+        w.add_component(b, oxide_scene::Light::default());
+        let mut st = EditorState::new();
+        let targets = [a, b];
+        let light = Slot {
+            type_name: "Light",
+            nth: 0,
+        };
+        apply(
+            &mut st,
+            &mut w,
+            &targets,
+            vec![
+                // Only X changes; each object keeps its own Y and Z.
+                (
+                    Edit::Position(Vector3::new(9.0, 0.0, 0.0), [true, false, false]),
+                    0,
+                ),
+                // Only the X angle; B keeps its 90° yaw.
+                (
+                    Edit::Rotation(Vector3::new(30.0, 0.0, 0.0), [true, false, false]),
+                    0,
+                ),
+                (Edit::Field(light, "intensity".into(), Value::Float(3.0)), 0),
+                (Edit::Tag("Player".into()), 0),
+            ],
+        );
+        assert_eq!(
+            w.transform(a).unwrap().local_position,
+            Vector3::new(9.0, 2.0, 3.0)
+        );
+        assert_eq!(
+            w.transform(b).unwrap().local_position,
+            Vector3::new(9.0, 5.0, 6.0)
+        );
+        let eb = w.transform(b).unwrap().local_rotation.euler_angles();
+        assert!(
+            (eb.x - 30.0).abs() < 1e-3 && (eb.y - 90.0).abs() < 1e-3,
+            "{eb:?}"
+        );
+        for id in targets {
+            assert_eq!(
+                w.get_component::<oxide_scene::Light>(id).unwrap().intensity,
+                3.0
+            );
+            assert_eq!(w.get(id).unwrap().tag, "Player");
+        }
+        // Undo restores both objects (each edit is one step; undo recreates the objects).
+        let mut sel = targets.to_vec();
+        for _ in 0..4 {
+            sel = st.undo.undo(&mut w, &sel).expect("an undo step").1;
+        }
+        let b = w.find("B").expect("B restored");
+        assert_eq!(
+            w.transform(b).unwrap().local_position,
+            Vector3::new(4.0, 5.0, 6.0)
+        );
+        assert_eq!(w.get(b).unwrap().tag, "Untagged");
+    }
+
+    #[test]
+    fn mixed_axes_flags_differences() {
+        let m = mixed_axes(&[Vector3::new(1.0, 2.0, 3.0), Vector3::new(1.0, 2.5, 3.0)]);
+        assert_eq!(m, [false, true, false]);
+    }
 
     #[test]
     fn nicify_names() {
