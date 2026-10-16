@@ -37,6 +37,8 @@ fn floor_frame() -> RenderFrame {
             occluder: false,
             occludee: false,
             reflection_probe_static: false,
+            lightmap: None,
+            light_probe: None,
         }],
         environment: Environment {
             sky_exposure: 0.0,

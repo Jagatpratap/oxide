@@ -213,8 +213,19 @@ impl Engine {
     }
 
     fn end_frame(&mut self) {
+        if let Some(result) = crate::lighting::poll(&mut self.world) {
+            match result {
+                Ok(msg) => oxide_core::debug_log!("{msg}"),
+                Err(e) => oxide_core::debug_log_error!("Lighting bake failed: {e}"),
+            }
+        }
         // Pick up asset files edited outside the engine (twice a second).
-        if self.world.resource::<Time>().frame_count().is_multiple_of(30) {
+        if self
+            .world
+            .resource::<Time>()
+            .frame_count()
+            .is_multiple_of(30)
+        {
             let reloaded = self.world.resource_mut::<AssetServer>().reload_changed();
             for p in reloaded {
                 oxide_core::debug_log!("Reloaded {p}");

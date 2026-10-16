@@ -13,6 +13,40 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
         s,
         bus,
         ToolDef::new(
+            "bake_lighting",
+            "Bake lighting",
+            "Unity's Lighting window. `start`: bakes lightmaps and light probes in the background for Static \
+             (Contribute GI) renderers, Mixed lights (their bounce) and Baked lights (direct + bounce), Light Probe \
+             Groups and the sky, using RenderSettings lightmap_resolution / max_lightmap_size / bake_samples / \
+             bake_bounces; the lightmaps go into a folder named after the scene. `status` (default): progress and \
+             the last result. `cancel`. `clear`: removes baked data. Save the scene to keep the result.",
+            schema(
+                json!({ "action": { "type": "string", "enum": ["start", "status", "cancel", "clear"] } }),
+                &[],
+            ),
+        ),
+        |args, e| {
+            match args
+                .get("action")
+                .and_then(Json::as_str)
+                .unwrap_or("status")
+            {
+                "start" => {
+                    if let Err(err) = crate::lighting::start(&mut e.world) {
+                        return ToolResult::error(err);
+                    }
+                }
+                "cancel" => crate::lighting::cancel(&mut e.world),
+                "clear" => crate::lighting::clear(&mut e.world),
+                _ => {}
+            }
+            ToolResult::json(json!(crate::lighting::status(&e.world)))
+        },
+    );
+    tool(
+        s,
+        bus,
+        ToolDef::new(
             "texture_import_settings",
             "Texture import settings",
             "Gets a texture's import settings (its `.meta` file, Unity's Texture Importer) and what the import \

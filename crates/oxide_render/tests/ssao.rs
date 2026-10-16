@@ -22,6 +22,8 @@ fn draw(mesh: PrimitiveType, pos: Vector3, scale: Vector3) -> DrawItem {
         occluder: false,
         occludee: false,
         reflection_probe_static: false,
+        lightmap: None,
+        light_probe: None,
     }
 }
 

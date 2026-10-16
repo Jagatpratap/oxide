@@ -296,10 +296,16 @@ editing, Undo History window, Preferences/Project Settings windows, project laun
   objects only; captured at load, not saved to disk), importance, blend distance, box
   projection, up to 15 + sky, GGX-prefiltered cube array ☑; custom cubemap probes ☐
   ([Reflections](https://docs.unity3d.com/Manual/reflections-landing.html))
-- ◐ SSAO (depth prepass, normals from depth, blur, Direct Lighting Strength) ☑; lightmapper
-  (lightmaps + light probes), Adaptive Probe Volumes ☐
+- ◐ Global illumination ☑: CPU path-traced lightmapper (`oxide_lightmapper`): Baked / Mixed
+  (Baked Indirect) / Realtime light modes, Contribute GI static objects, generated lightmap UVs
+  (planar charts), atlas packing by surface area × Lightmap Resolution, shadows, bounces, sky,
+  emission, edge-aware denoise, RGBM lightmaps saved next to the scene; Light Probe Groups baked
+  to L2 SH and interpolated for dynamic objects; background bake with progress (Window →
+  Rendering → Lighting, MCP `bake_lighting`); SSAO. ☐: GPU baking, shadowmask / subtractive
+  modes, directional lightmaps, probe tetrahedralization, Adaptive Probe Volumes
   ([Direct and indirect lighting](https://docs.unity3d.com/Manual/direct-and-indirect-lighting.html))
-- ☐ Lighting window + Light Explorer
+- ◐ Lighting window: Generate Lighting / Clear Baked Data menu items, settings in
+  RenderSettings (Inspector), progress in the status bar; a dedicated window and Light Explorer ☐
   ([Light Explorer](https://docs.unity3d.com/Manual/LightingExplorer-landing.html))
 - ☑ Volume framework: global and local (collider) Volumes, weight, priority, blend distance,
   per-parameter override checkboxes; the overrides on the Volume's object are its profile

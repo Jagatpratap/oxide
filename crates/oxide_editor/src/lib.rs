@@ -103,6 +103,7 @@ pub enum Create {
     PointLight,
     SpotLight,
     ReflectionProbe,
+    LightProbeGroup,
     GlobalVolume,
     BoxVolume,
     SphereVolume,
@@ -152,6 +153,9 @@ pub enum Action {
     SplitIntoCells(f32),
     /// Ragdoll Wizard on the active (humanoid) object.
     CreateRagdoll,
+    /// Lighting window: bake lightmaps and light probes in the background.
+    GenerateLighting,
+    ClearBakedLighting,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -612,6 +616,15 @@ impl Editor {
                     opts.folder
                 )
             }
+            Action::GenerateLighting => {
+                let n = oxide_engine::lighting::start(w)?;
+                format!("Baking lighting for {n} static objects…")
+            }
+            Action::ClearBakedLighting => {
+                st.record(w, "Clear Baked Data", None, now);
+                oxide_engine::lighting::clear(w);
+                "Cleared baked lighting".into()
+            }
             Action::CreateRagdoll => {
                 let id = st.active().ok_or("select a humanoid character first")?;
                 st.record(w, "Create Ragdoll", None, now);
@@ -1052,6 +1065,11 @@ fn create(w: &mut World, kind: Create, active: Option<GameObjectId>) -> GameObje
         Create::ReflectionProbe => {
             let id = w.create("Reflection Probe");
             w.add_component(id, oxide_scene::ReflectionProbe::default());
+            id
+        }
+        Create::LightProbeGroup => {
+            let id = w.create("Light Probe Group");
+            w.add_component(id, oxide_scene::LightProbeGroup::default());
             id
         }
         Create::GlobalVolume => {

@@ -7,6 +7,7 @@ pub mod engine;
 pub mod extract;
 pub mod gui;
 pub mod input_map;
+pub mod lighting;
 pub mod mcp_animation;
 pub mod mcp_audio;
 pub mod mcp_network;

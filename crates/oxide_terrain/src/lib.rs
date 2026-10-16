@@ -378,6 +378,8 @@ pub fn extract(
                     occluder: false,
                     occludee: false,
                     reflection_probe_static: true,
+                    lightmap: None,
+                    light_probe: None,
                 });
             }
         }
@@ -430,6 +432,8 @@ pub fn extract(
                     occluder: false,
                     occludee: true,
                     reflection_probe_static: true,
+                    lightmap: None,
+                    light_probe: None,
                 });
             }
         }

@@ -21,6 +21,8 @@ fn draw(material: AssetId, pos: Vector3, scale: Vector3, layer: u8) -> DrawItem 
         occluder: false,
         occludee: false,
         reflection_probe_static: false,
+        lightmap: None,
+        light_probe: None,
     }
 }
 

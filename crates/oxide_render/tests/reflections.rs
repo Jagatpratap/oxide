@@ -21,6 +21,8 @@ fn draw(mesh: PrimitiveType, material: AssetId, pos: Vector3, scale: Vector3) ->
         occluder: false,
         occludee: false,
         reflection_probe_static: true,
+        lightmap: None,
+        light_probe: None,
     }
 }
 

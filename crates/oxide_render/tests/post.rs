@@ -47,6 +47,8 @@ fn frame(assets: &mut AssetServer, post: PostSettings) -> RenderFrame {
             occluder: false,
             occludee: false,
             reflection_probe_static: false,
+            lightmap: None,
+            light_probe: None,
         }],
         environment: Environment {
             post,

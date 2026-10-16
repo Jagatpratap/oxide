@@ -63,7 +63,10 @@ impl AssetServer {
             mtimes: Default::default(),
         };
         for p in PrimitiveType::ALL {
-            s.meshes.insert(p.mesh_path(), p.mesh());
+            // Built-in primitives have lightmap UVs, like Unity's.
+            let mut m = p.mesh();
+            m.generate_lightmap_uvs();
+            s.meshes.insert(p.mesh_path(), m);
         }
         s.materials.insert(
             DEFAULT_MATERIAL,

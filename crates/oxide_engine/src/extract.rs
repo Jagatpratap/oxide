@@ -195,6 +195,7 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
         time: world.resource::<oxide_core::Time>().time(),
         frame_index: world.resource::<oxide_core::Time>().frame_count(),
         texture_cameras: texture_cameras(world),
+        lightmaps: settings.lightmaps.iter().map(|h| h.id()).collect(),
         renderer_features: renderer_features(world),
         ..Default::default()
     };
@@ -202,6 +203,10 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
     // Lights: the sun is RenderSettings.sun or the brightest directional light.
     let mut sun: Option<(f32, SunLight)> = None;
     for (id, l) in world.query::<Light>() {
+        // Baked lights only exist in lightmaps and light probes.
+        if l.lightmap_bake_type == oxide_scene::LightmapBakeType::Baked {
+            continue;
+        }
         let c = l.color.linear();
         let color = [c.r * l.intensity, c.g * l.intensity, c.b * l.intensity];
         match l.light_type {
@@ -304,6 +309,15 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
             .meshes
             .get(mesh)
             .map_or(1, |m| m.submeshes.len().max(1));
+        // Baked lighting: the lightmap of a static (Contribute GI) renderer, else probes.
+        let lightmap = (flags_of(id).contains(StaticEditorFlags::CONTRIBUTE_GI)
+            && r.receive_gi == oxide_scene::ReceiveGI::Lightmaps
+            && r.lightmap_index >= 0)
+            .then_some((r.lightmap_index as u32, r.lightmap_scale_offset));
+        let light_probe = lightmap
+            .is_none()
+            .then(|| crate::lighting::probe_sh(&settings, model.w_axis.truncate()))
+            .flatten();
         for s in 0..submeshes {
             let material = r
                 .materials
@@ -324,6 +338,8 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
                 occluder: flags_of(id).contains(StaticEditorFlags::OCCLUDER_STATIC),
                 occludee: occludee(id, r.allow_occlusion_when_dynamic),
                 reflection_probe_static: probe_static(id),
+                lightmap,
+                light_probe,
             });
         }
     }
@@ -332,6 +348,7 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
         if hidden.contains(&id) {
             continue;
         }
+        let light_probe = crate::lighting::probe_sh(&settings, world.position(id));
         let Some(mesh_h) = &r.mesh else { continue };
         let Some(mesh) = assets.meshes.get(mesh_h) else {
             continue;
@@ -361,6 +378,8 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
                     occluder: false,
                     occludee: occludee(id, r.allow_occlusion_when_dynamic),
                     reflection_probe_static: probe_static(id),
+                    lightmap: None,
+                    light_probe,
                 });
             }
             continue;
@@ -392,6 +411,8 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
                 occluder: false,
                 occludee: false,
                 reflection_probe_static: probe_static(id),
+                lightmap: None,
+                light_probe,
             });
         }
     }

@@ -11,6 +11,8 @@ oxide_core.workspace = true
 oxide_render.workspace = true
 oxide_mcp.workspace = true
 oxide_assets.workspace = true
+oxide_lightmapper.workspace = true
+png.workspace = true
 oxide_scene.workspace = true
 oxide_input.workspace = true
 oxide_physics.workspace = true
@@ -32,6 +34,9 @@ log.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 gilrs.workspace = true
+
+[dev-dependencies]
+pollster.workspace = true
 
 [lints]
 workspace = true

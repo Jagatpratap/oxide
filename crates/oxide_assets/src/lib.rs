@@ -14,6 +14,7 @@ pub mod animation;
 pub mod gltf_import;
 pub mod handle;
 pub mod ktx2_import;
+pub mod lightmap_uv;
 pub mod material;
 pub mod mesh;
 pub mod model;

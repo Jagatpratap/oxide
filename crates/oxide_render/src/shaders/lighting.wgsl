@@ -68,6 +68,44 @@ fn punctual_shadow(L: PunctualLight, world_pos: vec3f, n: vec3f, dist: f32) -> f
     return mix(1.0, lit, L.spot.w);
 }
 
+// Baked lighting (lightmaps and light probes) per draw, indexed by the instance.
+struct InstanceGi {
+    lightmap_st: vec4f,     // Unity lightmapScaleOffset
+    info: vec4f,            // x lightmap index (-1 none), y 1 when `sh` holds light probe data
+    sh: array<vec4f, 9>,
+};
+
+@group(0) @binding(13) var lightmaps: texture_2d_array<f32>;
+@group(0) @binding(14) var<storage, read> instance_gi: array<InstanceGi>;
+
+const NO_GI: u32 = 0xffffffffu;
+
+// Diffuse light from a lightmap (gamma-space RGBM, range 8) or light probe SH, else the sky.
+fn diffuse_light(n: vec3f, gi: u32, lm_uv: vec2f) -> vec3f {
+    if (gi != NO_GI) {
+        let g = instance_gi[gi];
+        if (g.info.x >= 0.0) {
+            let p = textureSampleLevel(lightmaps, probe_sampler, vec2f(lm_uv.x, 1.0 - lm_uv.y), i32(g.info.x), 0.0);
+            let s = p.rgb * p.a * 2.828427;
+            return s * s;
+        }
+        if (g.info.y > 0.5) {
+            let c = g.sh;
+            let e = c[0].rgb * 0.282095
+                + c[1].rgb * (0.488603 * n.y)
+                + c[2].rgb * (0.488603 * n.z)
+                + c[3].rgb * (0.488603 * n.x)
+                + c[4].rgb * (1.092548 * n.x * n.y)
+                + c[5].rgb * (1.092548 * n.y * n.z)
+                + c[6].rgb * (0.315392 * (3.0 * n.z * n.z - 1.0))
+                + c[7].rgb * (1.092548 * n.x * n.z)
+                + c[8].rgb * (0.546274 * (n.x * n.x - n.y * n.y));
+            return max(e, vec3f(0.0));
+        }
+    }
+    return ambient_diffuse(n);
+}
+
 // Screen-space ambient occlusion of this camera (white when off).
 @group(2) @binding(0) var ssao_tex: texture_2d<f32>;
 
@@ -225,7 +263,7 @@ fn env_specular(r: vec3f, pos: vec3f, rough: f32, sel: vec2u) -> vec3f {
 }
 
 // Full surface shading: sun (with shadows), punctual lights, sky ambient and reflections.
-fn shade(world_pos: vec3f, n: vec3f, geo_n: vec3f, albedo: vec3f, metallic: f32, rough: f32, ao_in: f32, receive_shadows: bool, probe_sel: vec2u, frag_xy: vec2f) -> vec3f {
+fn shade(world_pos: vec3f, n: vec3f, geo_n: vec3f, albedo: vec3f, metallic: f32, rough: f32, ao_in: f32, receive_shadows: bool, probe_sel: vec2u, frag_xy: vec2f, gi: u32, lm_uv: vec2f) -> vec3f {
     let f0 = mix(vec3f(0.04), albedo, metallic);
     let ssao = screen_ao(frag_xy);
     let ao = min(ao_in, ssao);
@@ -268,7 +306,7 @@ fn shade(world_pos: vec3f, n: vec3f, geo_n: vec3f, albedo: vec3f, metallic: f32,
         color += brdf(n, v, l, albedo, f0, rough, metallic) * L.color.rgb * atten * direct_ao;
     }
     // Environment: SH diffuse ambient + prefiltered reflection probes / sky.
-    let diffuse_amb = ambient_diffuse(n) * albedo * (1.0 - metallic);
+    let diffuse_amb = diffuse_light(n, gi, lm_uv) * albedo * (1.0 - metallic);
     let r = reflect(-v, n);
     let spec_env = env_specular(r, world_pos, rough, probe_sel);
     let horizon_occ = clamp(1.0 + dot(r, geo_n), 0.0, 1.0);

@@ -50,6 +50,8 @@ fn frame(assets: &mut AssetServer, mode: AntiAliasing, msaa: u32, x: f32) -> Ren
             occluder: false,
             occludee: false,
             reflection_probe_static: false,
+            lightmap: None,
+            light_probe: None,
         }],
         environment: Environment {
             post: PostSettings::neutral(),

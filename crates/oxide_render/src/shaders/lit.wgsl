@@ -48,6 +48,8 @@ struct VertexOut {
     @location(4) color: vec4f,
     @location(5) @interpolate(flat) receive_shadows: u32,
     @location(6) @interpolate(flat) probes: vec2u,
+    @location(7) lm_uv: vec2f,
+    @location(8) @interpolate(flat) gi: u32,
 };
 
 fn finish_vertex(v: VertexIn, world: vec4f, n: vec3f, t: vec3f) -> VertexOut {
@@ -60,6 +62,13 @@ fn finish_vertex(v: VertexIn, world: vec4f, n: vec3f, t: vec3f) -> VertexOut {
     o.color = v.color;
     o.receive_shadows = v.extra.y;
     o.probes = v.extra.zw;
+    // Baked lighting entry of this draw (stored in the normal matrix's spare float).
+    let gi = i32(v.n1.w);
+    o.gi = select(NO_GI, u32(gi), gi >= 0);
+    if (gi >= 0) {
+        let st = instance_gi[gi].lightmap_st;
+        o.lm_uv = v.uv2 * st.xy + st.zw;
+    }
     return o;
 }
 
@@ -139,7 +148,7 @@ fn fs_main(in: VertexOut, @builtin(front_facing) front: bool) -> FragOut {
     let ao = mix(1.0, textureSample(occlusion_map, mat_sampler, uv).r, material.pbr.w);
 
     let albedo = base.rgb;
-    var color = shade(in.world_pos, n, normalize(in.normal), albedo, metallic, rough, ao, in.receive_shadows != 0u, in.probes, in.clip.xy);
+    var color = shade(in.world_pos, n, normalize(in.normal), albedo, metallic, rough, ao, in.receive_shadows != 0u, in.probes, in.clip.xy, in.gi, in.lm_uv);
     color += emission;
 
     color = apply_fog(color, in.world_pos);

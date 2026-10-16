@@ -1,0 +1,15 @@
+[package]
+name = "oxide_lightmapper"
+description = "Oxide's lightmapper: baked direct + indirect lighting into lightmaps and light probes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+oxide_math.workspace = true
+oxide_assets.workspace = true
+oxide_render.workspace = true
+rapier3d.workspace = true
+
+[lints]
+workspace = true

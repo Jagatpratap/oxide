@@ -14,7 +14,7 @@ use crate::gpu_assets::{GpuAssets, SkinVertex, Vertex};
 use crate::post::PostProcessor;
 use crate::reflection::{PROBE_SIZE, ReflectionProbes};
 use crate::render_graph::TextureDesc;
-use oxide_assets::{AssetId, AssetServer};
+use oxide_assets::{AssetId, AssetServer, Texture2D};
 use oxide_math::{Matrix4x4, Matrix4x4Ext, Vector3, Vector4};
 use std::collections::HashMap;
 
@@ -80,6 +80,16 @@ struct ShadowTiles {
     first: usize,
     matrices: Vec<Matrix4x4>,
     texel: f32,
+}
+
+/// Baked lighting of one draw (indexed from `Instance::normal[1][3]`).
+#[repr(C)]
+#[derive(Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
+struct InstanceGi {
+    lightmap_st: [f32; 4],
+    /// x lightmap index (-1 none), y 1 when `sh` holds light probe data.
+    info: [f32; 4],
+    sh: [[f32; 4]; 9],
 }
 
 #[repr(C)]
@@ -230,6 +240,11 @@ pub struct SceneRenderer {
     view_prev: HashMap<(u64, u32, u32), (u64, Matrix4x4, Matrix4x4)>,
     /// Frame each Render Texture was last rendered in.
     rt_frames: HashMap<AssetId, u64>,
+    /// Baked lightmaps as one texture array, and which assets (and versions) it holds.
+    lightmap_array: wgpu::TextureView,
+    lightmap_sources: Vec<(AssetId, u64)>,
+    lightmap_count: usize,
+    gi_buffer: wgpu::Buffer,
     fullscreen: crate::fullscreen::FullscreenGpu,
     graph_pool: crate::render_graph::TexturePool,
     frame_buffers: Vec<wgpu::Buffer>,
@@ -398,6 +413,17 @@ impl SceneRenderer {
                 storage_entry(9, wgpu::ShaderStages::FRAGMENT),
                 storage_entry(10, wgpu::ShaderStages::FRAGMENT),
                 storage_entry(11, wgpu::ShaderStages::FRAGMENT),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 13,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                storage_entry(14, wgpu::ShaderStages::VERTEX_FRAGMENT),
                 wgpu::BindGroupLayoutEntry {
                     binding: 12,
                     visibility: wgpu::ShaderStages::FRAGMENT,
@@ -601,6 +627,10 @@ impl SceneRenderer {
             terrain_prepass,
             view_prev: HashMap::new(),
             rt_frames: HashMap::new(),
+            lightmap_array: lightmap_array(device, &gpu.queue, &[], 1),
+            lightmap_sources: Vec::new(),
+            lightmap_count: 0,
+            gi_buffer: buf("baked lighting", 176 * 64, wgpu::BufferUsages::STORAGE),
             fullscreen: crate::fullscreen::FullscreenGpu::new(device, &gpu.queue),
             graph_pool: Default::default(),
             frame_buffers: Vec::new(),
@@ -1115,6 +1145,14 @@ impl SceneRenderer {
                         wgpu::BindGroupEntry {
                             binding: 12,
                             resource: wgpu::BindingResource::TextureView(&self.atlas),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 13,
+                            resource: wgpu::BindingResource::TextureView(&self.lightmap_array),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 14,
+                            resource: self.gi_buffer.as_entire_binding(),
                         },
                     ],
                 })
@@ -1650,8 +1688,12 @@ impl SceneRenderer {
             priority: i32,
             /// Reflection probes chosen for this object (instance `extra.zw`).
             probes: [u32; 2],
+            /// Index into the baked-lighting table, or -1.
+            gi: f32,
         }
+        let mut gis: Vec<InstanceGi> = Vec::new();
         let exclude = capture.and_then(|c| c.exclude);
+        self.update_lightmaps(gpu, assets, &frame.lightmaps);
         let mut resolved = Vec::with_capacity(frame.draws.len());
         for d in &frame.draws {
             if !self.gpu_assets.ensure_mesh(device, assets, d.mesh) {
@@ -1686,7 +1728,27 @@ impl SceneRenderer {
                     .map_or(center, |m| m.w_axis.truncate()),
                 None => center,
             };
+            let gi = match (d.lightmap, &d.light_probe) {
+                (Some((index, st)), _) if (index as usize) < self.lightmap_count => {
+                    gis.push(InstanceGi {
+                        lightmap_st: st.to_array(),
+                        info: [index as f32, 0.0, 0.0, 0.0],
+                        sh: [[0.0; 4]; 9],
+                    });
+                    gis.len() as f32 - 1.0
+                }
+                (_, Some(sh)) => {
+                    gis.push(InstanceGi {
+                        lightmap_st: [0.0; 4],
+                        info: [-1.0, 1.0, 0.0, 0.0],
+                        sh: sh.map(|c| c.extend(0.0).to_array()),
+                    });
+                    gis.len() as f32 - 1.0
+                }
+                _ => -1.0,
+            };
             resolved.push(Resolved {
+                gi,
                 probes: self.reflections.select(probe_pos, exclude),
                 item: d,
                 material: mat,
@@ -1699,6 +1761,20 @@ impl SceneRenderer {
                 cast: gm.cast_shadows && (d.cast_shadows || d.shadows_only),
                 priority: gm.priority,
             });
+        }
+
+        let gi_bytes = (gis.len().max(1) * std::mem::size_of::<InstanceGi>()) as u64;
+        if grow_buffer(
+            device,
+            &mut self.gi_buffer,
+            gi_bytes,
+            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            "baked lighting",
+        ) {
+            self.groups_dirty = true;
+        }
+        if !gis.is_empty() {
+            queue.write_buffer(&self.gi_buffer, 0, bytemuck::cast_slice(&gis));
         }
 
         // Terrain chunks: (draw, center, radius, local bounds).
@@ -1884,13 +1960,11 @@ impl SceneRenderer {
             let m = d.model;
             let n =
                 Matrix4x4::from_mat3(oxide_math::glam::Mat3::from_mat4(m).inverse().transpose());
+            let mut n1 = n.y_axis.to_array();
+            n1[3] = r.gi;
             Instance {
                 model: m.to_cols_array(),
-                normal: [
-                    n.x_axis.to_array(),
-                    n.y_axis.to_array(),
-                    n.z_axis.to_array(),
-                ],
+                normal: [n.x_axis.to_array(), n1, n.z_axis.to_array()],
                 extra: [
                     d.joint_offset.unwrap_or(0),
                     d.receive_shadows as u32,
@@ -2300,7 +2374,7 @@ impl SceneRenderer {
                     model: t.model.to_cols_array(),
                     normal: [
                         [1.0, 0.0, 0.0, 0.0],
-                        [0.0, 1.0, 0.0, 0.0],
+                        [0.0, 1.0, 0.0, -1.0],
                         [0.0, 0.0, 1.0, 0.0],
                     ],
                     extra: [0, t.receive_shadows as u32, probes[0], probes[1]],
@@ -2804,6 +2878,81 @@ impl SceneRenderer {
                 fx,
             },
         )
+    }
+}
+
+/// Lightmaps (RGBM RGBA8, top row first, all `size`×`size`) as a texture array; a 1×1 black
+/// layer when there are none.
+fn lightmap_array(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    layers: &[&[u8]],
+    size: u32,
+) -> wgpu::TextureView {
+    use wgpu::util::DeviceExt;
+    let (data, size, count) = if layers.is_empty() {
+        (vec![0u8; 4], 1, 1)
+    } else {
+        (layers.concat(), size, layers.len() as u32)
+    };
+    device
+        .create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("lightmaps"),
+                size: wgpu::Extent3d {
+                    width: size,
+                    height: size,
+                    depth_or_array_layers: count,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &data,
+        )
+        .create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        })
+}
+
+impl SceneRenderer {
+    /// Rebuilds the lightmap array when the scene's lightmaps (or their files) change.
+    fn update_lightmaps(&mut self, gpu: &Gpu, assets: &AssetServer, ids: &[AssetId]) {
+        let sources: Vec<(AssetId, u64)> = ids
+            .iter()
+            .map(|id| (*id, assets.textures.version(*id).unwrap_or(0)))
+            .collect();
+        if sources == self.lightmap_sources {
+            return;
+        }
+        self.lightmap_sources = sources;
+        let textures: Vec<&Texture2D> = ids
+            .iter()
+            .filter_map(|id| assets.textures.get_by_id(*id))
+            .filter(|t| !t.mips.is_empty())
+            .collect();
+        let size = textures.first().map_or(1, |t| t.width);
+        let layers: Vec<&[u8]> = textures
+            .iter()
+            .take_while(|t| t.width == size && t.height == size)
+            .map(|t| &t.mips[0][..])
+            .collect();
+        if layers.len() < ids.len() {
+            oxide_core::debug_log_warning!(
+                "{} of {} lightmaps are missing or differ in size; those objects use ambient light",
+                ids.len() - layers.len(),
+                ids.len()
+            );
+        }
+        self.lightmap_count = layers.len();
+        self.lightmap_array = lightmap_array(&gpu.device, &gpu.queue, &layers, size);
+        self.groups_dirty = true;
     }
 }
 

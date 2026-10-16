@@ -172,6 +172,11 @@ pub struct DrawItem {
     pub occludee: bool,
     /// Drawn into Baked reflection probes (Reflection Probe Static).
     pub reflection_probe_static: bool,
+    /// Baked lightmap: index into [`RenderFrame::lightmaps`] and Unity `lightmapScaleOffset`.
+    pub lightmap: Option<(u32, oxide_math::Vector4)>,
+    /// Light from baked light probes (L2 SH, cosine-convolved, ÷π) for objects without a
+    /// lightmap.
+    pub light_probe: Option<[Vector3; 9]>,
 }
 
 /// One terrain chunk drawn with the terrain (splat) shader.
@@ -569,6 +574,8 @@ pub struct RenderFrame {
     pub texture_cameras: Vec<(AssetId, CameraView)>,
     /// Renderer features, in order (Unity's Renderer Features list).
     pub renderer_features: Vec<RendererFeature>,
+    /// Baked lightmaps (RGBM textures of one size; Unity `LightmapSettings.lightmaps`).
+    pub lightmaps: Vec<AssetId>,
 
     /// World-space skinning matrices (bone local-to-world × bind pose).
     pub joints: Vec<Matrix4x4>,

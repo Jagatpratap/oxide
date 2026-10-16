@@ -126,6 +126,11 @@ fn create_items(prefix: &str) -> Vec<MenuItem> {
         "",
         Action::Create(Create::ReflectionProbe),
     ));
+    v.push(item(
+        &format!("{prefix}Light/Light Probe Group"),
+        "",
+        Action::Create(Create::LightProbeGroup),
+    ));
     for (name, kind) in [
         ("Global Volume", Create::GlobalVolume),
         ("Box Volume", Create::BoxVolume),
@@ -232,6 +237,16 @@ pub fn menu_items(world: &World) -> Vec<MenuItem> {
             Action::SplitIntoCells(size),
         ));
     }
+    v.push(item(
+        "Window/Rendering/Lighting/Generate Lighting",
+        "",
+        Action::GenerateLighting,
+    ));
+    v.push(item(
+        "Window/Rendering/Lighting/Clear Baked Data",
+        "",
+        Action::ClearBakedLighting,
+    ));
     v.push(sep("Window"));
     v.push(item("Window/Layouts/Default", "", Action::ResetLayout));
     v
@@ -409,6 +424,15 @@ pub fn status_bar(
             };
             ui.weak(mode);
             ui.separator();
+            let bake = oxide_engine::lighting::status(&engine.world);
+            if bake.running {
+                ui.add(
+                    egui::ProgressBar::new(bake.progress)
+                        .desired_width(120.0)
+                        .text(format!("Baking lighting {:.0}%", bake.progress * 100.0)),
+                );
+                ui.separator();
+            }
             if st.builder.is_building() {
                 ui.spinner();
                 ui.label(

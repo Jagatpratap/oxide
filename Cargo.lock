@@ -2638,6 +2638,7 @@ dependencies = [
  "oxide_audio",
  "oxide_core",
  "oxide_input",
+ "oxide_lightmapper",
  "oxide_math",
  "oxide_mcp",
  "oxide_network",
@@ -2648,6 +2649,8 @@ dependencies = [
  "oxide_standard",
  "oxide_terrain",
  "oxide_ui",
+ "png",
+ "pollster",
  "serde",
  "serde_json",
  "winit",
@@ -2659,6 +2662,16 @@ version = "0.1.0"
 dependencies = [
  "oxide_math",
  "serde",
+]
+
+[[package]]
+name = "oxide_lightmapper"
+version = "0.1.0"
+dependencies = [
+ "oxide_assets",
+ "oxide_math",
+ "oxide_render",
+ "rapier3d",
 ]
 
 [[package]]

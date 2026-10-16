@@ -124,6 +124,27 @@ pub enum LightShadows {
     Soft,
 }
 
+/// How a light takes part in baked lighting (Unity `LightmapBakeType`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
+pub enum LightmapBakeType {
+    /// Lit in real time only; not in lightmaps or probes.
+    #[default]
+    Realtime,
+    /// Direct light in real time, its bounced (indirect) light baked (Baked Indirect).
+    Mixed,
+    /// Direct and indirect light baked; not rendered in real time (dynamic objects get it
+    /// from light probes).
+    Baked,
+}
+
+/// Where a static renderer gets its baked light (Unity `ReceiveGI`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
+pub enum ReceiveGI {
+    #[default]
+    Lightmaps,
+    LightProbes,
+}
+
 /// Unity `Light`. <https://docs.unity3d.com/Manual/class-Light.html>
 #[derive(Clone, Debug, Reflect)]
 pub struct Light {
@@ -143,6 +164,8 @@ pub struct Light {
     pub shadow_bias: f32,
     pub shadow_normal_bias: f32,
     pub culling_mask: u32,
+    /// Realtime, Mixed or Baked (Light "Mode").
+    pub lightmap_bake_type: LightmapBakeType,
 }
 
 impl Default for Light {
@@ -159,6 +182,7 @@ impl Default for Light {
             shadow_bias: 0.05,
             shadow_normal_bias: 0.4,
             culling_mask: u32::MAX,
+            lightmap_bake_type: LightmapBakeType::Realtime,
         }
     }
 }
@@ -171,6 +195,7 @@ impl Light {
             color: Color::rgb(1.0, 0.957, 0.839),
             intensity: 1.0,
             shadows: LightShadows::Soft,
+            lightmap_bake_type: LightmapBakeType::Mixed,
             ..Default::default()
         }
     }
@@ -212,6 +237,13 @@ pub struct MeshRenderer {
     /// Occluders may hide this renderer even when its object isn't Occludee Static
     /// (Unity `Renderer.allowOcclusionWhenDynamic`).
     pub allow_occlusion_when_dynamic: bool,
+    /// Static (Contribute GI) renderers: lightmaps or light probes.
+    pub receive_gi: ReceiveGI,
+    /// Relative lightmap resolution (Unity "Scale In Lightmap").
+    pub scale_in_lightmap: f32,
+    /// Set by baking: which lightmap (-1 = none) and where in it.
+    pub lightmap_index: i32,
+    pub lightmap_scale_offset: Vector4,
 }
 
 impl Default for MeshRenderer {
@@ -221,6 +253,10 @@ impl Default for MeshRenderer {
             cast_shadows: ShadowCastingMode::On,
             receive_shadows: true,
             allow_occlusion_when_dynamic: true,
+            receive_gi: ReceiveGI::Lightmaps,
+            scale_in_lightmap: 1.0,
+            lightmap_index: -1,
+            lightmap_scale_offset: Vector4::new(1.0, 1.0, 0.0, 0.0),
         }
     }
 }
@@ -326,6 +362,19 @@ pub struct RenderSettings {
     pub lod_bias: f32,
     /// Multisample anti-aliasing for all cameras that allow it (URP asset MSAA).
     pub msaa: MsaaQuality,
+    /// Baked lightmaps (Unity `LightmapSettings.lightmaps`), written by Generate Lighting.
+    pub lightmaps: Vec<Handle<oxide_assets::Texture2D>>,
+    /// Baked light probes: world positions and 27 SH floats (9 RGB coefficients) each.
+    pub light_probe_positions: Vec<Vector3>,
+    pub light_probe_coefficients: Vec<f32>,
+    /// Lightmapping settings (Lighting window): texels per unit.
+    pub lightmap_resolution: f32,
+    pub max_lightmap_size: u32,
+    /// Indirect samples per texel.
+    pub bake_samples: u32,
+    #[reflect(range(0, 4))]
+    pub bake_bounces: u32,
+    pub lightmap_padding: u32,
     /// Screen Space Ambient Occlusion (URP renderer feature).
     pub ssao: bool,
     #[reflect(range(0, 4))]
@@ -368,6 +417,14 @@ impl Default for RenderSettings {
             vignette: 0.15,
             lod_bias: 1.0,
             msaa: MsaaQuality::Msaa4x,
+            lightmaps: Vec::new(),
+            light_probe_positions: Vec::new(),
+            light_probe_coefficients: Vec::new(),
+            lightmap_resolution: 10.0,
+            max_lightmap_size: 1024,
+            bake_samples: 64,
+            bake_bounces: 2,
+            lightmap_padding: 2,
             ssao: false,
             ssao_intensity: 1.5,
             ssao_radius: 0.35,
@@ -715,3 +772,52 @@ impl Default for RenderObjectsRendererFeature {
 }
 
 impl Component for RenderObjectsRendererFeature {}
+
+/// Unity `LightProbeGroup`: where light probes are baked (positions local to the object).
+/// Dynamic objects take their light from the probes around them.
+/// <https://docs.unity3d.com/Manual/class-LightProbeGroup.html>
+#[derive(Clone, Debug, Reflect)]
+pub struct LightProbeGroup {
+    pub probe_positions: Vec<Vector3>,
+}
+
+impl Default for LightProbeGroup {
+    fn default() -> Self {
+        // Unity's default: the corners of a 1 m cube.
+        let p = |x: f32, y: f32, z: f32| Vector3::new(x, y, z) * 0.5;
+        Self {
+            probe_positions: vec![
+                p(-1.0, -1.0, -1.0),
+                p(1.0, -1.0, -1.0),
+                p(-1.0, 1.0, -1.0),
+                p(1.0, 1.0, -1.0),
+                p(-1.0, -1.0, 1.0),
+                p(1.0, -1.0, 1.0),
+                p(-1.0, 1.0, 1.0),
+                p(1.0, 1.0, 1.0),
+            ],
+        }
+    }
+}
+
+impl Component for LightProbeGroup {
+    fn on_draw_gizmos(
+        &self,
+        world: &crate::World,
+        id: GameObjectId,
+        gizmos: &mut crate::component::Gizmos,
+    ) {
+        gizmos.color = Color::rgb(1.0, 0.9, 0.3);
+        let m = world.local_to_world(id);
+        for p in &self.probe_positions {
+            let c = m.transform_point3(*p);
+            for axis in [Vector3::X, Vector3::Y, Vector3::Z] {
+                gizmos.draw_line(c - axis * 0.1, c + axis * 0.1);
+            }
+        }
+    }
+
+    fn allow_multiple(&self) -> bool {
+        false
+    }
+}

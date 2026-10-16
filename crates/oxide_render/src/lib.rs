@@ -21,6 +21,7 @@ pub mod postfx;
 pub mod reflection;
 pub mod render_graph;
 pub mod renderer;
+pub mod sky;
 pub mod ssao;
 pub mod terrain;
 
