@@ -362,7 +362,7 @@ fn key_list(ui: &mut egui::Ui, keys: &mut Vec<KeyCode>, salt: &str) {
         let mut remove = None;
         for (i, k) in keys.iter().enumerate() {
             if ui
-                .small_button(format!("{k:?} ✕"))
+                .small_button(format!("{k:?} ×"))
                 .on_hover_text("Remove")
                 .clicked()
             {
@@ -395,7 +395,7 @@ fn enum_list<T: Copy + PartialEq + std::fmt::Debug>(
     ui.horizontal_wrapped(|ui| {
         let mut remove = None;
         for (i, k) in items.iter().enumerate() {
-            if ui.small_button(format!("{k:?} ✕")).clicked() {
+            if ui.small_button(format!("{k:?} ×")).clicked() {
                 remove = Some(i);
             }
         }
@@ -561,7 +561,7 @@ fn axis_ui(ui: &mut egui::Ui, a: &mut InputAxis, i: usize) {
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     if ui
-                        .small_button("✕")
+                        .small_button("×")
                         .on_hover_text("Remove source")
                         .clicked()
                     {

@@ -156,6 +156,8 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
+            // Narrow number boxes are allowed (egui's default minimum is 40 px).
+            ui.spacing_mut().interact_size.x = 24.0;
             let w = &engine.world;
             if targets.len() > 1 {
                 ui.weak(format!("{} objects selected", targets.len()));
@@ -271,6 +273,60 @@ fn debug_info(ui: &mut egui::Ui, w: &World, id: GameObjectId) {
         });
 }
 
+/// Width left on this row, up to the visible right edge of the Inspector (less room for
+/// the scroll bar). Unlike `available_width`, it never grows when an earlier row overflowed,
+/// so one wide widget cannot push every row below it off the panel.
+pub fn avail(ui: &egui::Ui) -> f32 {
+    let edge = ui.clip_rect().right() - SCROLL_BAR_ROOM;
+    ui.available_width().min(edge - ui.cursor().left()).max(0.0)
+}
+
+/// Space kept free at the right for the floating scroll bar.
+const SCROLL_BAR_ROOM: f32 = 10.0;
+
+/// Height of one Inspector row.
+const ROW_H: f32 = 20.0;
+
+/// Width of the label column for a row of `width` (Unity's `EditorGUIUtility.labelWidth`:
+/// about 45% of the Inspector, never narrower than the longest common label needs).
+pub fn label_width(width: f32) -> f32 {
+    (width * 0.42).clamp(72.0, 190.0)
+}
+
+/// A left-aligned property label in the label column; long labels are cut with "…" and
+/// show in full on hover.
+pub fn prop_label(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>) -> egui::Response {
+    let w = label_width(avail(ui));
+    prop_label_w(ui, text, w)
+}
+
+/// [`prop_label`] with an explicit column width (rows whose values need more room).
+fn prop_label_w(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>, w: f32) -> egui::Response {
+    let text: egui::WidgetText = text.into();
+    let full = text.text().to_owned();
+    let r = ui
+        .allocate_ui_with_layout(
+            egui::vec2(w, ROW_H),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.set_min_size(egui::vec2(w, ROW_H));
+                ui.add(egui::Label::new(text).truncate())
+            },
+        )
+        .inner;
+    if r.hovered()
+        && ui.fonts_mut(|f| {
+            f.layout_no_wrap(full.clone(), egui::FontId::default(), Color32::WHITE)
+                .size()
+                .x
+        }) > w
+    {
+        r.clone().on_hover_text(full)
+    } else {
+        r
+    }
+}
+
 fn key(id: GameObjectId, part: &str) -> u64 {
     egui::Id::new((id.to_bits(), part)).value()
 }
@@ -297,47 +353,59 @@ fn header(
         {
             edits.push((Edit::Active(active), key(id, "active")));
         }
-        let mixed_name = mixed(&|x| x.name.clone());
-        let mut name = if mixed_name {
-            String::new()
-        } else {
-            o.name.clone()
-        };
-        let r = ui.add(
-            egui::TextEdit::singleline(&mut name)
-                .hint_text(if mixed_name { "—" } else { "" })
-                .desired_width(ui.available_width() - 70.0),
-        );
-        if r.changed() {
-            edits.push((Edit::Name(name), key(id, "name")));
-        }
-        // Unity's Static checkbox (all flags) plus the per-system flags dropdown.
-        use oxide_scene::StaticEditorFlags as F;
-        let flags = o.static_flags;
-        let same_flags = objs.iter().all(|x| x.static_flags == flags);
-        let mut all = same_flags && flags == F::EVERYTHING;
-        let r = ui.add(
-            egui::Checkbox::new(&mut all, "Static")
-                .indeterminate(!same_flags || (flags != F::NOTHING && flags != F::EVERYTHING)),
-        );
-        if r.changed() {
-            let f = if all { F::EVERYTHING } else { F::NOTHING };
-            edits.push((Edit::Static(f), key(id, "static")));
-        }
-        ui.menu_button("▾", |ui| {
-            for (flag, name) in F::ALL {
-                let mut on = flags.contains(flag);
-                if ui.checkbox(&mut on, name).changed() {
-                    let mut f = flags;
-                    f.set(flag, on);
-                    edits.push((Edit::Static(f), key(id, "static")));
+        // Static and its flags dropdown sit at the right; the name takes what is left.
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            use oxide_scene::StaticEditorFlags as F;
+            let flags = o.static_flags;
+            let same_flags = objs.iter().all(|x| x.static_flags == flags);
+            ui.menu_button("⏷", |ui| {
+                for (flag, name) in F::ALL {
+                    let mut on = flags.contains(flag);
+                    if ui.checkbox(&mut on, name).changed() {
+                        let mut f = flags;
+                        f.set(flag, on);
+                        edits.push((Edit::Static(f), key(id, "static")));
+                    }
                 }
+            })
+            .response
+            .on_hover_text("Static flags");
+            // Unity's Static checkbox (all flags).
+            let mut all = same_flags && flags == F::EVERYTHING;
+            let r = ui.add(
+                egui::Checkbox::new(&mut all, "Static")
+                    .indeterminate(!same_flags || (flags != F::NOTHING && flags != F::EVERYTHING)),
+            );
+            if r.changed() {
+                let f = if all { F::EVERYTHING } else { F::NOTHING };
+                edits.push((Edit::Static(f), key(id, "static")));
             }
-        })
-        .response
-        .on_hover_text("Static flags");
+            let mixed_name = mixed(&|x| x.name.clone());
+            let mut name = if mixed_name {
+                String::new()
+            } else {
+                o.name.clone()
+            };
+            let r = ui.add(
+                egui::TextEdit::singleline(&mut name)
+                    .hint_text(if mixed_name { "—" } else { "" })
+                    .desired_width(avail(ui)),
+            );
+            if r.changed() {
+                edits.push((Edit::Name(name), key(id, "name")));
+            }
+        });
     });
     ui.horizontal(|ui| {
+        let gap = ui.spacing().item_spacing.x;
+        let label_w = ui.fonts_mut(|f| {
+            ["Tag", "Layer"].map(|t| {
+                f.layout_no_wrap(t.into(), egui::FontId::default(), Color32::WHITE)
+                    .size()
+                    .x
+            })
+        });
+        let combo_w = ((avail(ui) - label_w[0] - label_w[1] - 3.0 * gap) / 2.0).max(50.0);
         ui.label("Tag");
         let mixed_tag = mixed(&|x| x.tag.clone());
         let orig = if mixed_tag {
@@ -348,7 +416,7 @@ fn header(
         let mut tag = orig.clone();
         egui::ComboBox::from_id_salt(("tag", id.to_bits()))
             .selected_text(if mixed_tag { "—" } else { tag.as_str() })
-            .width(110.0)
+            .width(combo_w)
             .show_ui(ui, |ui| {
                 for t in w.all_tags() {
                     ui.selectable_value(&mut tag, t.clone(), t);
@@ -375,7 +443,7 @@ fn header(
             } else {
                 current.clone()
             })
-            .width(110.0)
+            .width(combo_w)
             .show_ui(ui, |ui| {
                 for (i, n) in names.iter().enumerate() {
                     if !n.is_empty() {
@@ -549,17 +617,24 @@ fn vec3_row(
         } else {
             RichText::new(label)
         };
-        ui.add_sized([62.0, 18.0], egui::Label::new(text));
-        // Each axis: letter + spacing + field + spacing.
+        // Each axis: letter, field; `gap` between every widget. On a narrow Inspector the
+        // label column gives up width so three readable fields still fit.
         let gap = ui.spacing().item_spacing.x;
-        let wdt = ((ui.available_width() - 3.0 * (10.0 + 2.0 * gap)) / 3.0).max(30.0);
+        let letter = 9.0;
+        let fields = 3.0 * (letter + 34.0) + 6.0 * gap;
+        let row = avail(ui);
+        prop_label_w(ui, text, label_width(row).min(row - fields).max(36.0));
+        let wdt = ((avail(ui) - 3.0 * letter - 5.0 * gap) / 3.0).max(24.0);
         for (i, axis) in ["X", "Y", "Z"].iter().enumerate() {
-            ui.label(RichText::new(*axis).color(crate::scene_view::AXIS_COLORS[i]));
+            ui.add_sized(
+                [letter, ROW_H],
+                egui::Label::new(RichText::new(*axis).color(crate::scene_view::AXIS_COLORS[i])),
+            );
             let mut d = egui::DragValue::new(&mut v[i]).speed(speed).max_decimals(4);
             if mixed[i] {
                 d = d.custom_formatter(|_, _| "—".into());
             }
-            changed[i] = ui.add_sized([wdt, 18.0], d).changed();
+            changed[i] = ui.add_sized([wdt, ROW_H], d).changed();
         }
     });
     changed
@@ -637,12 +712,17 @@ fn transform(
                 // Unity's Debug Inspector shows the stored quaternion.
                 let mut q = t.local_rotation.to_array();
                 ui.horizontal(|ui| {
-                    ui.add_sized([62.0, 18.0], egui::Label::new("Rotation"));
+                    prop_label(ui, "Rotation");
+                    let gap = ui.spacing().item_spacing.x;
+                    let wdt = ((avail(ui) - 4.0 * 9.0 - 7.0 * gap) / 4.0).max(24.0);
                     let mut changed = false;
                     for (axis, c) in ["X", "Y", "Z", "W"].iter().zip(q.iter_mut()) {
-                        ui.label(*axis);
+                        ui.add_sized([9.0, ROW_H], egui::Label::new(*axis));
                         changed |= ui
-                            .add(egui::DragValue::new(c).speed(0.005).max_decimals(5))
+                            .add_sized(
+                                [wdt, ROW_H],
+                                egui::DragValue::new(c).speed(0.005).max_decimals(5),
+                            )
                             .changed();
                     }
                     if changed {
@@ -827,7 +907,7 @@ fn components(
                         } else {
                             RichText::new(&label)
                         };
-                        let lr = ui.add_sized([130.0, 18.0], egui::Label::new(text).truncate());
+                        let lr = prop_label(ui, text);
                         if is_override {
                             // Unity marks overridden properties with a blue bar.
                             let r = lr.rect;
@@ -981,37 +1061,35 @@ pub fn reflect_grid(
 ) -> bool {
     let info = obj.type_info();
     let mut changed = false;
-    egui::Grid::new(salt)
-        .num_columns(2)
-        .spacing([16.0, 6.0])
-        .min_col_width(150.0)
-        .show(ui, |ui| {
-            for f in &info.fields {
-                let Some(v) = obj.get_field(f.name) else {
-                    continue;
-                };
-                let lr = ui.label(nicify(f.name));
-                if let Some(t) = f.tooltip {
-                    lr.on_hover_text(t);
-                }
-                let mut v2 = v.clone();
-                if value_ui(
-                    ui,
-                    w,
-                    f,
-                    f.kind,
-                    f.type_name,
-                    &mut v2,
-                    false,
-                    &format!("{salt}{}", f.name),
-                ) && v2 != v
-                    && obj.set_field(f.name, v2).is_ok()
-                {
-                    changed = true;
-                }
-                ui.end_row();
+    ui.push_id(salt, |ui| {
+        for f in &info.fields {
+            let Some(v) = obj.get_field(f.name) else {
+                continue;
+            };
+            let mut v2 = v.clone();
+            let edited = ui
+                .horizontal(|ui| {
+                    let lr = prop_label(ui, nicify(f.name));
+                    if let Some(t) = f.tooltip {
+                        lr.on_hover_text(t);
+                    }
+                    value_ui(
+                        ui,
+                        w,
+                        f,
+                        f.kind,
+                        f.type_name,
+                        &mut v2,
+                        false,
+                        &format!("{salt}{}", f.name),
+                    )
+                })
+                .inner;
+            if edited && v2 != v && obj.set_field(f.name, v2).is_ok() {
+                changed = true;
             }
-        });
+        }
+    });
     changed
 }
 
@@ -1038,21 +1116,26 @@ fn value_ui(
             .add(egui::Checkbox::without_text(b).indeterminate(mixed))
             .changed(),
         Value::Int(i) => match f.range {
-            Some((lo, hi)) if kind == ValueKind::Int && !mixed => ui
-                .add(egui::Slider::new(i, lo as i64..=hi as i64))
+            Some((lo, hi)) if kind == ValueKind::Int && !mixed => {
+                fit_slider(ui);
+                ui.add(egui::Slider::new(i, lo as i64..=hi as i64))
+                    .changed()
+            }
+            _ => ui
+                .add_sized([avail(ui), ROW_H], dash(egui::DragValue::new(i), mixed))
                 .changed(),
-            _ => ui.add(dash(egui::DragValue::new(i), mixed)).changed(),
         },
         Value::Float(x) => match f.range {
             Some((lo, hi)) if kind == ValueKind::Float && !mixed => {
+                fit_slider(ui);
                 ui.add(egui::Slider::new(x, lo..=hi)).changed()
             }
             _ => {
                 let speed = (x.abs() * 0.01).clamp(0.001, 10.0);
-                ui.add(dash(
-                    egui::DragValue::new(x).speed(speed).max_decimals(4),
-                    mixed,
-                ))
+                ui.add_sized(
+                    [avail(ui), ROW_H],
+                    dash(egui::DragValue::new(x).speed(speed).max_decimals(4), mixed),
+                )
                 .changed()
             }
         },
@@ -1078,6 +1161,7 @@ fn value_ui(
             let mut changed = false;
             egui::ComboBox::from_id_salt(("enum", salt))
                 .selected_text(nicify(e))
+                .width(avail(ui))
                 .show_ui(ui, |ui| {
                     for o in f.options {
                         if ui.selectable_label(e == o, nicify(o)).clicked() {
@@ -1165,7 +1249,7 @@ fn value_ui(
             ui.vertical(|ui| {
                 for (k, item) in map.iter_mut() {
                     ui.horizontal(|ui| {
-                        ui.add_sized([110.0, 18.0], egui::Label::new(nicify(k)).truncate());
+                        prop_label(ui, nicify(k));
                         let k2 = item.kind();
                         let sub = FieldInfo {
                             name: "",
@@ -1192,14 +1276,21 @@ fn value_ui(
     }
 }
 
+/// Makes the next slider fill the row, leaving room for its number box.
+fn fit_slider(ui: &mut egui::Ui) {
+    // The number box grows with its text ("0.000"), so keep room for about six digits.
+    let number = ui.spacing().interact_size.x.max(52.0) + ui.spacing().item_spacing.x;
+    ui.spacing_mut().slider_width = (avail(ui) - number).max(40.0);
+}
+
 fn drag_array<const N: usize>(ui: &mut egui::Ui, a: &mut [f32; N]) -> bool {
     let mut changed = false;
     let gap = ui.spacing().item_spacing.x;
-    let wdt = ((ui.available_width() - N as f32 * gap) / N as f32).max(30.0);
+    let wdt = ((avail(ui) - (N - 1) as f32 * gap) / N as f32).max(24.0);
     for x in a.iter_mut() {
         changed |= ui
             .add_sized(
-                [wdt, 18.0],
+                [wdt, ROW_H],
                 egui::DragValue::new(x).speed(0.02).max_decimals(4),
             )
             .changed();
@@ -1222,7 +1313,7 @@ fn asset_field(
     let mut changed = false;
     let r = egui::ComboBox::from_id_salt(("asset", salt))
         .selected_text(current)
-        .width(ui.available_width().max(60.0))
+        .width(avail(ui).max(40.0))
         .show_ui(ui, |ui| {
             if ui
                 .selectable_label(matches!(v, Value::Null), "None")
@@ -1262,7 +1353,7 @@ fn object_field(ui: &mut egui::Ui, w: &World, v: &mut Value, salt: &str) -> bool
     let mut changed = false;
     let r = egui::ComboBox::from_id_salt(("object", salt))
         .selected_text(current)
-        .width(ui.available_width().max(60.0))
+        .width(avail(ui).max(40.0))
         .show_ui(ui, |ui| {
             if ui
                 .selectable_label(matches!(v, Value::Null), "None")
@@ -1519,8 +1610,7 @@ fn lod_group_editor(
     let mut changed = false;
 
     // Bar: each level's share of screen heights 100% → its transition, then Culled.
-    let (bar, _) =
-        ui.allocate_exact_size(egui::vec2(ui.available_width(), 26.0), egui::Sense::hover());
+    let (bar, _) = ui.allocate_exact_size(egui::vec2(avail(ui), 26.0), egui::Sense::hover());
     let p = ui.painter();
     let mut top = 1.0f32;
     for (i, l) in lods.iter().enumerate() {
@@ -1587,7 +1677,7 @@ fn lod_group_editor(
             .fill(Color32::from_gray(44))
             .inner_margin(4)
             .show(ui, |ui| {
-                ui.set_min_width(ui.available_width());
+                ui.set_min_width(avail(ui));
                 if l.renderers.is_empty() {
                     ui.weak("Drop objects here");
                 }

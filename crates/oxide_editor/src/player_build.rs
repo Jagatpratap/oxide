@@ -106,7 +106,7 @@ impl PlayerBuilder {
         }
         if settings.scenes.is_empty() {
             return Err(
-                "add at least one scene to the build (Build Settings → Add Open Scene)".into(),
+                "add at least one scene to the build (Build Settings › Add Open Scene)".into(),
             );
         }
         let engine = engine_root(&project)?;

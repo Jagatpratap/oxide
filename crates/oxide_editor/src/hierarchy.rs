@@ -13,6 +13,24 @@ const INDENT: f32 = 14.0;
 /// Left column with the visibility (eye) and pickability (hand) toggles.
 const GUTTER: f32 = 32.0;
 
+/// GameObject icon: a small cube outline (hexagon with the three front edges).
+fn cube_icon(p: &egui::Painter, c: egui::Pos2, col: Color32) {
+    let (rx, ry) = (4.5, 5.0);
+    let hex: Vec<egui::Pos2> = (0..6)
+        .map(|k| {
+            let a = std::f32::consts::FRAC_PI_3 * k as f32 + std::f32::consts::FRAC_PI_6;
+            c + vec2(rx * a.cos(), ry * a.sin())
+        })
+        .collect();
+    let stroke = Stroke::new(1.1, col);
+    p.add(egui::Shape::closed_line(hex.clone(), stroke));
+    // Front corner to the three visible outer corners (top-left, top-right, bottom).
+    let front = c + vec2(0.0, 0.5);
+    p.line_segment([front, hex[1]], stroke);
+    p.line_segment([front, hex[3]], stroke);
+    p.line_segment([front, hex[5]], stroke);
+}
+
 /// Eye icon; slashed when hidden.
 fn eye_icon(p: &egui::Painter, c: egui::Pos2, off: bool, col: Color32) {
     let pts: Vec<_> = (0..=12)
@@ -188,6 +206,14 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
                 } else if resp.hovered() {
                     p.rect_filled(rect, 0.0, Color32::from_gray(69));
                 }
+                // The toggle column is a darker strip, as in Unity.
+                if !selected {
+                    p.rect_filled(
+                        egui::Rect::from_min_size(rect.min, vec2(GUTTER, ROW_H)),
+                        0.0,
+                        Color32::from_gray(46),
+                    );
+                }
                 // Visibility and pickability toggles (shown on hover or when set).
                 let eye_c = pos2(rect.left() + 9.0, rect.center().y);
                 let hand_c = pos2(rect.left() + 24.0, rect.center().y);
@@ -247,15 +273,7 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
                     (false, true) => Color32::from_rgb(90, 110, 150),
                     (false, false) => Color32::from_gray(120),
                 };
-                // Cube icon.
-                let icon =
-                    egui::Rect::from_center_size(pos2(x0 + 19.0, rect.center().y), vec2(9.0, 9.0));
-                p.rect_stroke(
-                    icon,
-                    1.0,
-                    Stroke::new(1.2, text_col),
-                    egui::StrokeKind::Inside,
-                );
+                cube_icon(p, pos2(x0 + 19.0, rect.center().y), text_col);
                 let text_pos = pos2(x0 + 28.0, rect.center().y);
 
                 let renaming = st

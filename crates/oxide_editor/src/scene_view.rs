@@ -1794,12 +1794,21 @@ fn orientation_gizmo(st: &mut EditorState, ui: &egui::Ui, rect: egui::Rect) {
     } else {
         "Persp"
     };
-    painter.text(
-        center + vec2(0.0, 42.0),
-        egui::Align2::CENTER_CENTER,
-        label,
+    // Below the disc on a dark pill, so it reads on a bright sky too.
+    let galley = painter.layout_no_wrap(
+        label.to_owned(),
         egui::FontId::proportional(11.0),
-        Color32::from_gray(220),
+        Color32::from_gray(225),
+    );
+    let pill = egui::Rect::from_center_size(
+        center + vec2(0.0, 40.0 + 4.0 + galley.size().y / 2.0),
+        galley.size() + vec2(10.0, 2.0),
+    );
+    painter.rect_filled(pill, 3.0, Color32::from_black_alpha(110));
+    painter.galley(
+        pill.center() - galley.size() / 2.0,
+        galley,
+        Color32::from_gray(225),
     );
     if clicked && mouse.is_some_and(|m| m.distance(center) < 6.0) {
         st.scene_cam.orthographic = !st.scene_cam.orthographic;

@@ -71,6 +71,7 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: &s
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
+            ui.spacing_mut().interact_size.x = 24.0;
             match type_name {
                 "Texture" => texture(st, engine, ui, path),
                 "Material" => material(st, engine, ui, path),
@@ -459,7 +460,7 @@ fn preview(st: &mut EditorState, ui: &mut egui::Ui, root: &Path, path: &str) {
     };
     ui.separator();
     ui.weak("Preview");
-    let side = ui.available_width().min(256.0);
+    let side = crate::inspector::avail(ui).min(256.0);
     let tex_size = ui
         .ctx()
         .tex_manager()
