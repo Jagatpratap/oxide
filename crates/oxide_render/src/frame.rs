@@ -466,6 +466,63 @@ pub struct PostSettings {
     pub depth_of_field: DofSettings,
     /// `(intensity, clamp)`: blur length scale and longest blur as a fraction of the screen.
     pub motion_blur: [f32; 2],
+    pub screen_space_lens_flare: ScreenSpaceLensFlareSettings,
+}
+
+/// URP's Screen Space Lens Flare: ghosts, a halo and streaks built from a bloom mip.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScreenSpaceLensFlareSettings {
+    /// 0 turns it off.
+    pub intensity: f32,
+    /// Linear tint.
+    pub tint: [f32; 3],
+    /// Bloom mip the flares sample (0 = half resolution).
+    pub bloom_mip: u32,
+    pub first_flare_intensity: f32,
+    pub secondary_flare_intensity: f32,
+    pub warped_flare_intensity: f32,
+    pub warped_flare_scale: [f32; 2],
+    /// Ghost repetitions (1..3).
+    pub samples: u32,
+    /// Each repetition is this much dimmer.
+    pub sample_dimmer: f32,
+    /// Fades ghosts sampled near the screen edge.
+    pub vignette_effect: f32,
+    pub starting_position: f32,
+    pub scale: f32,
+    pub streaks_intensity: f32,
+    pub streaks_length: f32,
+    /// Degrees.
+    pub streaks_orientation: f32,
+    pub streaks_threshold: f32,
+    /// Output size as a bloom mip index (0 = half, 1 = quarter, 2 = eighth).
+    pub resolution_mip: u32,
+    pub chromatic_aberration: f32,
+}
+
+impl Default for ScreenSpaceLensFlareSettings {
+    fn default() -> Self {
+        Self {
+            intensity: 0.0,
+            tint: [1.0; 3],
+            bloom_mip: 1,
+            first_flare_intensity: 1.0,
+            secondary_flare_intensity: 1.0,
+            warped_flare_intensity: 1.0,
+            warped_flare_scale: [1.0, 1.0],
+            samples: 1,
+            sample_dimmer: 0.5,
+            vignette_effect: 1.0,
+            starting_position: 1.25,
+            scale: 1.5,
+            streaks_intensity: 0.0,
+            streaks_length: 0.5,
+            streaks_orientation: 0.0,
+            streaks_threshold: 0.25,
+            resolution_mip: 1,
+            chromatic_aberration: 0.5,
+        }
+    }
 }
 
 impl Default for PostSettings {
@@ -515,6 +572,7 @@ impl Default for PostSettings {
             },
             depth_of_field: DofSettings::default(),
             motion_blur: [0.0, 0.05],
+            screen_space_lens_flare: ScreenSpaceLensFlareSettings::default(),
         }
     }
 }
@@ -686,6 +744,9 @@ pub struct RenderFrame {
     /// Terrain grass and detail billboards.
     pub grass: Vec<GrassBatch>,
     pub sprites: Vec<SpriteDraw>,
+    /// Lens flares (Unity Lens Flare (SRP)), drawn over the first camera's view before
+    /// bloom.
+    pub lens_flares: Vec<crate::flares::LensFlareSource>,
     pub reflection_probes: Vec<ReflectionProbeView>,
     /// Cameras rendering into Render Textures (Unity `Camera.targetTexture`), drawn before
     /// the main cameras, at most once per frame each.

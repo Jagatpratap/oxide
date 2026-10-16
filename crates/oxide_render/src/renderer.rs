@@ -214,6 +214,7 @@ pub struct SceneRenderer {
     particles: crate::particles::ParticleGpu,
     grass: crate::grass::GrassGpu,
     sprites: crate::sprites::SpriteGpu,
+    flares: crate::flares::FlareGpu,
     /// MSAA sample counts the GPU supports for the HDR and depth formats.
     supported_samples: Vec<u32>,
     frame_layout: wgpu::BindGroupLayout,
@@ -629,6 +630,7 @@ impl SceneRenderer {
             particles,
             grass,
             sprites,
+            flares: crate::flares::FlareGpu::new(device, &gpu.queue),
             gpu_assets,
             supported_samples,
             frame_layout,
@@ -1363,6 +1365,40 @@ impl SceneRenderer {
                 },
             );
         }
+        // Lens flares for the first camera; occlusion needs the resolved depth.
+        let flare_ranges = match frame.cameras.first() {
+            Some(cam) if !frame.lens_flares.is_empty() => {
+                let aspect = (w as f32 * cam.viewport[2]) / (h as f32 * cam.viewport[3]).max(1.0);
+                let tex_aspect = |id: AssetId| {
+                    assets
+                        .textures
+                        .get_by_id(id)
+                        .map(|t| t.width as f32 / t.height.max(1) as f32)
+                };
+                let quads = crate::flares::layout(&frame.lens_flares, cam, aspect, &tex_aspect);
+                if !out.fx && crate::flares::needs_depth(&frame.lens_flares) {
+                    let t = self.targets.get_mut(&key).expect("targets");
+                    t.fx.get_or_insert_with(|| crate::postfx::PostFx::targets(&gpu.device, w, h));
+                    let t = &self.targets[&key];
+                    self.postfx.resolve_depth(
+                        &gpu.device,
+                        &mut encoder,
+                        &t.depth,
+                        out.samples,
+                        t.fx.as_ref().expect("made above"),
+                    );
+                }
+                let r = self.flares.prepare(
+                    &gpu.device,
+                    &gpu.queue,
+                    &mut self.gpu_assets,
+                    assets,
+                    &quads,
+                );
+                (!r.is_empty()).then_some(r)
+            }
+            _ => None,
+        };
         let env = &frame.environment;
         let targets = &self.targets[&key];
         let hdr = match (fx_out, out.taa) {
@@ -1429,6 +1465,28 @@ impl SceneRenderer {
             );
             cur = dst;
             slot += 1;
+        }
+        if let Some(ranges) = &flare_ranges {
+            let (src, dst) = (cur, graph.create(TextureDesc::color(w, h, HDR_FORMAT)));
+            let flares = &self.flares;
+            let needs_depth = crate::flares::needs_depth(&frame.lens_flares);
+            graph.add_pass(
+                "Lens Flares",
+                |b| {
+                    b.read(src).write(dst);
+                },
+                move |ctx| {
+                    flares.draw(
+                        ctx.device,
+                        ctx.encoder,
+                        &ctx.view(src),
+                        depth_copy.filter(|_| needs_depth),
+                        &ctx.view(dst),
+                        ranges,
+                    )
+                },
+            );
+            cur = dst;
         }
         let final_target = graph.import(target);
         let (post_out, post_format) = if out.fxaa {
@@ -1685,6 +1743,7 @@ impl SceneRenderer {
         }
         let taa = mode == AntiAliasing::Taa;
         // Depth is copied for depth-based post effects and Full Screen Pass shaders.
+        let flare_depth = capture.is_none() && crate::flares::needs_depth(&frame.lens_flares);
         let fx = capture.is_none()
             && (crate::postfx::PostFx::wanted(&frame.environment.post)
                 || frame
@@ -2811,8 +2870,9 @@ impl SceneRenderer {
                     view: &targets.depth,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(0.0),
-                        // TAA and depth-based post effects read depth afterwards.
-                        store: if taa || fx {
+                        // TAA, depth-based post effects and lens flare occlusion read
+                        // depth afterwards.
+                        store: if taa || fx || flare_depth {
                             wgpu::StoreOp::Store
                         } else {
                             wgpu::StoreOp::Discard

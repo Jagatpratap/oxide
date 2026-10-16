@@ -46,6 +46,19 @@ impl InspectorState {
 }
 
 /// `field_of_view` / `fieldOfView` → `Field Of View` (Unity `ObjectNames.NicifyVariableName`).
+/// A component's header: its Add Component menu name (Unity's titles, like "Lens Flare
+/// (SRP)"), or the nicified type name.
+pub fn component_title(w: &oxide_scene::World, type_name: &str) -> String {
+    match w
+        .registry
+        .get(type_name)
+        .and_then(|r| r.menu.rsplit('/').next())
+    {
+        Some(leaf) if !leaf.is_empty() && leaf != type_name => leaf.to_owned(),
+        _ => nicify(type_name),
+    }
+}
+
 pub fn nicify(name: &str) -> String {
     let mut out = String::new();
     let mut prev_lower = false;
@@ -895,7 +908,7 @@ fn components(
                         .strong()
                         .color(Color32::from_rgb(255, 170, 60)),
                 ),
-                None => ui.label(RichText::new(nicify(type_name)).strong()),
+                None => ui.label(RichText::new(component_title(w, type_name)).strong()),
             };
             if debug {
                 ui.weak(format!("id {}", cid.0));

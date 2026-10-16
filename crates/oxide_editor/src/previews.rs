@@ -27,6 +27,7 @@ pub enum PreviewKind {
     Material,
     Model,
     Prefab,
+    LensFlare,
 }
 
 /// What kind of preview an asset gets, if any.
@@ -37,6 +38,7 @@ pub fn preview_kind(path: &str) -> Option<PreviewKind> {
         "mat" => Some(PreviewKind::Material),
         "glb" | "gltf" => Some(PreviewKind::Model),
         "prefab" => Some(PreviewKind::Prefab),
+        "lensflare" => Some(PreviewKind::LensFlare),
         _ => None,
     }
 }
@@ -195,7 +197,31 @@ impl Previews {
     /// Renders a material, model or prefab preview.
     fn render(&mut self, engine: &mut Engine, path: &str) -> Result<egui::ColorImage, String> {
         let kind = preview_kind(path).ok_or("no preview for this type")?;
-        let frame = with_scratch_world(&mut engine.world, |w| {
+        let frame = if kind == PreviewKind::LensFlare {
+            lens_flare_frame(engine, path)?
+        } else {
+            self.scene_frame(engine, kind, path)?
+        };
+        let gpu = &engine.gpu;
+        let renderer = self.renderer.get_or_insert_with(|| SceneRenderer::new(gpu));
+        let assets = engine.world.resource::<AssetServer>();
+        let fmt = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let img = oxide_render::capture_frame(gpu, fmt, SIZE, SIZE, |view, _| {
+            renderer.render(gpu, assets, &frame, view, fmt, SIZE, SIZE);
+        })?;
+        Ok(egui::ColorImage::from_rgba_unmultiplied(
+            [img.width as usize, img.height as usize],
+            &img.rgba,
+        ))
+    }
+
+    fn scene_frame(
+        &mut self,
+        engine: &mut Engine,
+        kind: PreviewKind,
+        path: &str,
+    ) -> Result<oxide_render::RenderFrame, String> {
+        with_scratch_world(&mut engine.world, |w| {
             build_preview_scene(w, kind, path)?;
             // Unity previews use a key light from the upper left.
             oxide_engine::objects::create_directional_light(w);
@@ -231,19 +257,54 @@ impl Previews {
             // Plain colors: no vignette or grain from the defaults.
             frame.environment.post.vignette.intensity = 0.0;
             Ok::<_, String>(frame)
-        })?;
-        let gpu = &engine.gpu;
-        let renderer = self.renderer.get_or_insert_with(|| SceneRenderer::new(gpu));
-        let assets = engine.world.resource::<AssetServer>();
-        let fmt = wgpu::TextureFormat::Rgba8UnormSrgb;
-        let img = oxide_render::capture_frame(gpu, fmt, SIZE, SIZE, |view, _| {
-            renderer.render(gpu, assets, &frame, view, fmt, SIZE, SIZE);
-        })?;
-        Ok(egui::ColorImage::from_rgba_unmultiplied(
-            [img.width as usize, img.height as usize],
-            &img.rgba,
-        ))
+        })
     }
+}
+
+/// A Lens Flare asset drawn on a dark background, its source up and to the left so the
+/// ghosts spread across the preview.
+pub fn lens_flare_frame(
+    engine: &mut Engine,
+    path: &str,
+) -> Result<oxide_render::RenderFrame, String> {
+    let assets = engine.world.resource_mut::<AssetServer>();
+    let h = oxide_assets::Handle::<oxide_scene::LensFlareData>::from_path(path.to_owned());
+    let data = assets
+        .data_asset(&h)
+        .cloned()
+        .ok_or("the lens flare can't be loaded")?;
+    let comp = oxide_scene::LensFlareComponent {
+        use_occlusion: false,
+        allow_off_screen: true,
+        ..Default::default()
+    };
+    let source = oxide_engine::lens_flares::to_source(
+        &comp,
+        &data,
+        Vector3::new(-2.0, 2.0, 10.0),
+        false,
+        [1.0; 3],
+        None,
+    );
+    let bg = Color::rgb(0.02, 0.02, 0.03);
+    let mut frame = oxide_render::RenderFrame {
+        cameras: vec![CameraView {
+            position: Vector3::ZERO,
+            rotation: Quaternion::IDENTITY,
+            projection: ProjectionKind::Perspective { fov: 40.0 },
+            near: 0.1,
+            far: 100.0,
+            viewport: [0.0, 0.0, 1.0, 1.0],
+            clear: ClearMode::Color(bg),
+            culling_mask: u32::MAX,
+            occlusion_culling: false,
+            antialiasing: Default::default(),
+        }],
+        lens_flares: vec![source],
+        ..Default::default()
+    };
+    frame.environment.post.vignette.intensity = 0.0;
+    Ok(frame)
 }
 
 /// Bounding sphere of everything drawn in `frame`.
@@ -315,6 +376,7 @@ fn build_preview_scene(w: &mut World, kind: PreviewKind, path: &str) -> Result<(
             w.instantiate_prefab(path, None)?;
         }
         PreviewKind::Texture => return Err("textures are decoded, not rendered".into()),
+        PreviewKind::LensFlare => return Err("lens flares are drawn without a scene".into()),
     }
     Ok(())
 }

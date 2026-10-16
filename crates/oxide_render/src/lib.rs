@@ -10,6 +10,7 @@
 pub mod aa;
 pub mod capture;
 pub mod clusters;
+pub mod flares;
 pub mod frame;
 pub mod fullscreen;
 pub mod gpu;
@@ -28,6 +29,10 @@ pub mod ssao;
 pub mod terrain;
 
 pub use capture::{CapturedImage, capture_frame};
+pub use flares::{
+    FLARE_LUT, FlareBlend, FlareDistortion, FlareElement, FlareLut, FlareOcclusion, FlareShape,
+    LensFlareSource,
+};
 pub use frame::*;
 pub use gpu::{Gpu, GpuError, WindowSurface};
 pub use renderer::SceneRenderer;

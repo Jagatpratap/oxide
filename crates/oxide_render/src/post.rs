@@ -35,7 +35,9 @@ struct PostUniform {
     mixer_b: [f32; 4],
     distortion_amount: [f32; 4],
     distortion_center_scale: [f32; 4],
-    _pad: [[f32; 4]; 8],
+    /// Screen Space Lens Flare (see `Post.sslf*` in post.wgsl).
+    sslf: [[f32; 4]; 5],
+    _pad: [[f32; 4]; 3],
 }
 
 fn gamma_to_linear(x: f32) -> f32 {
@@ -107,6 +109,9 @@ pub struct PostProcessor {
     prefilter: wgpu::RenderPipeline,
     down: wgpu::RenderPipeline,
     up: wgpu::RenderPipeline,
+    sslf: wgpu::RenderPipeline,
+    /// Screen Space Lens Flare output per size.
+    sslf_targets: HashMap<(u32, u32), wgpu::TextureView>,
     composite: HashMap<wgpu::TextureFormat, wgpu::RenderPipeline>,
     uniforms: wgpu::Buffer,
     sampler: wgpu::Sampler,
@@ -146,6 +151,7 @@ impl PostProcessor {
                     count: None,
                 },
                 tex(3),
+                tex(4),
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -197,6 +203,7 @@ impl PostProcessor {
         let prefilter = make("fs_prefilter", HDR_FORMAT, None);
         let down = make("fs_down", HDR_FORMAT, None);
         let up = make("fs_up", HDR_FORMAT, Some(scatter));
+        let sslf = make("fs_sslf", HDR_FORMAT, None);
         let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("post uniforms"),
             size: SLOT * SLOTS,
@@ -232,6 +239,8 @@ impl PostProcessor {
             prefilter,
             down,
             up,
+            sslf,
+            sslf_targets: HashMap::new(),
             composite: HashMap::new(),
             uniforms,
             sampler,
@@ -277,6 +286,7 @@ impl PostProcessor {
         device: &wgpu::Device,
         src: &wgpu::TextureView,
         bloom: &wgpu::TextureView,
+        flare: &wgpu::TextureView,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("post bind group"),
@@ -301,6 +311,10 @@ impl PostProcessor {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: wgpu::BindingResource::TextureView(bloom),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(flare),
                 },
             ],
         })
@@ -467,7 +481,43 @@ impl PostProcessor {
             mixer_b: row(post.channel_mixer[2]),
             distortion_amount: amount,
             distortion_center_scale: center_scale,
-            _pad: [[0.0; 4]; 8],
+            sslf: {
+                let f = &post.screen_space_lens_flare;
+                let on = post.enabled && f.intensity > 0.0;
+                [
+                    [
+                        if on { f.intensity } else { 0.0 },
+                        f.first_flare_intensity,
+                        f.secondary_flare_intensity,
+                        f.warped_flare_intensity,
+                    ],
+                    [
+                        f.tint[0],
+                        f.tint[1],
+                        f.tint[2],
+                        f.samples.clamp(1, 3) as f32,
+                    ],
+                    [
+                        f.warped_flare_scale[0],
+                        f.warped_flare_scale[1],
+                        f.sample_dimmer,
+                        f.vignette_effect,
+                    ],
+                    [
+                        f.starting_position,
+                        f.scale,
+                        f.chromatic_aberration,
+                        f.streaks_intensity,
+                    ],
+                    [
+                        f.streaks_length,
+                        f.streaks_orientation.to_radians(),
+                        f.streaks_threshold,
+                        aspect,
+                    ],
+                ]
+            },
+            _pad: [[0.0; 4]; 3],
         }
     }
 
@@ -516,6 +566,12 @@ impl PostProcessor {
         }
         let composite = Self::composite_uniform(post, !format.is_srgb(), aspect, time);
         let bloom_on = composite.params2[2] > 0.5 && !chain.is_empty();
+        let sslf_on = composite.sslf[0][0] > 0.0 && !chain.is_empty();
+        let sslf = &post.screen_space_lens_flare;
+        let sslf_src = (sslf.bloom_mip as usize).min(chain.len().saturating_sub(1));
+        let sslf_size = chain
+            .get((sslf.resolution_mip as usize).min(chain.len().saturating_sub(1)))
+            .map(|c| (c.1, c.2));
         let mut slots: Vec<PostUniform> = vec![composite];
         let mut u = |texel: (u32, u32)| {
             let mut p = composite;
@@ -525,8 +581,10 @@ impl PostProcessor {
             slots.len() as u32 - 1
         };
         // Slot plan: composite first, then bloom passes (slot, dst, src (None = hdr), up).
+        // Screen Space Lens Flare needs the bright mips too, before upsampling changes them.
         let mut plan: Vec<(u32, usize, Option<usize>, bool)> = Vec::new();
-        if bloom_on {
+        let sslf_slot = sslf_on.then(|| u((chain[sslf_src].1, chain[sslf_src].2)));
+        if bloom_on || sslf_on {
             let first = chain[0].clone();
             let s = u((first.1 * 2, first.2 * 2));
             plan.push((s, 0, None, false));
@@ -535,21 +593,59 @@ impl PostProcessor {
                 let s = u((*sw, *sh));
                 plan.push((s, i, Some(i - 1), false));
             }
-            for i in (0..chain.len() - 1).rev() {
+            for i in (0..chain.len() - 1).rev().filter(|_| bloom_on) {
                 let (_, sw, sh) = &chain[i + 1];
                 let s = u((*sw, *sh));
                 plan.push((s, i, Some(i + 1), true));
             }
         }
+        if let (true, Some(size)) = (sslf_on, sslf_size)
+            && !self.sslf_targets.contains_key(&size)
+        {
+            let view = device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("screen space lens flare"),
+                    size: wgpu::Extent3d {
+                        width: size.0,
+                        height: size.1,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: HDR_FORMAT,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                })
+                .create_view(&Default::default());
+            if self.sslf_targets.len() > 4 {
+                self.sslf_targets.clear();
+            }
+            self.sslf_targets.insert(size, view);
+        }
         queue.write_buffer(&self.uniforms, 0, bytemuck::cast_slice(&slots));
         // URP maps scatter 0..1 to a blend of 0.05..0.95.
         let scatter = 0.05 + 0.9 * post.bloom.scatter.clamp(0.0, 1.0) as f64;
+        let mut sslf_done = false;
+        let sslf_view = sslf_size
+            .filter(|_| sslf_on)
+            .and_then(|s| self.sslf_targets.get(&s));
         for (slot, dst, src, up) in plan {
+            // Lens flare ghosts from the bright mips, between down- and upsampling.
+            if up
+                && !sslf_done
+                && let (Some(view), Some(s)) = (sslf_view, sslf_slot)
+            {
+                let g = self.group(device, &chain[sslf_src].0, &self.dummy, &self.dummy);
+                Self::pass(encoder, view, None, &self.sslf, &g, s);
+                sslf_done = true;
+            }
             let src_view = match src {
                 None => hdr,
                 Some(i) => &chain[i].0,
             };
-            let g = self.group(device, src_view, &self.dummy);
+            let g = self.group(device, src_view, &self.dummy, &self.dummy);
             let pipeline = match (src, up) {
                 (None, _) => &self.prefilter,
                 (Some(_), false) => &self.down,
@@ -564,8 +660,12 @@ impl PostProcessor {
                 slot,
             );
         }
+        if !sslf_done && let (Some(view), Some(s)) = (sslf_view, sslf_slot) {
+            let g = self.group(device, &chain[sslf_src].0, &self.dummy, &self.dummy);
+            Self::pass(encoder, view, None, &self.sslf, &g, s);
+        }
         let bloom_view = if bloom_on { &chain[0].0 } else { &self.dummy };
-        let g = self.group(device, hdr, bloom_view);
+        let g = self.group(device, hdr, bloom_view, sslf_view.unwrap_or(&self.dummy));
         Self::pass(encoder, target, None, &self.composite[&format], &g, 0);
     }
 }

@@ -415,8 +415,9 @@ runner, native plugins.
   ([Particle effects](https://docs.unity3d.com/Manual/ParticleSystems.html))
 - ☐ GPU VFX graph (node-based, compute) — later
   ([Visual Effect Graph](https://docs.unity3d.com/Manual/VFXGraph.html))
-- ☐ Decals, lens flares, Line/Trail renderers, billboards
-  ([Decals](https://docs.unity3d.com/Manual/visual-effects-decals.html),
+- ◐ Decals, lens flares, Line/Trail renderers, billboards: Lens Flare (SRP) ☑ (`.lensflare` data assets with Image/Circle/Polygon/Ring elements, blend modes, multiple elements with Uniform/Curve/Random distribution, radial distortion; Lens Flare component following Lights with distance, screen and spot-cone attenuation and GPU depth occlusion; previews in the Project window and Inspector), Screen Space Lens Flare Volume override ☑ (ghosts, warped halo, streaks, chromatic aberration from the bloom mips); decals, lines, trails, billboards ☐
+  ([Lens flares](https://docs.unity3d.com/Manual/urp/shared/lens-flare/lens-flare.html),
+  [Decals](https://docs.unity3d.com/Manual/visual-effects-decals.html),
   [Lines and trails](https://docs.unity3d.com/Manual/visual-effects-lines-trails-billboards.html))
 - ◐ Terrain: `.terraindata` files (16-bit heights, control maps, holes, trees, details) ☑, up to 16 layers with normal maps ☑, holes (render + collider) ☑, chunked LOD with partial rebuilds ☑, Terrain tools in the Inspector (Raise/Lower, Paint Holes, Paint Texture, Set Height, Smooth, Stamp; brushes with shapes/textures; Paint Trees with density/size/colour variation and Mass Place; Paint Details; Terrain Settings: wind, sizes, resolutions, RAW import/export) ☑, neighbour terrains with Auto Connect and cross-tile brushes ☑, grass and detail meshes with wind ☑, Undo for strokes ☑, MCP `terrain_edit` ☑; tree billboards/LOD, wind zones affecting trees, terrain streaming ☐
   ([Terrain](https://docs.unity3d.com/Manual/script-Terrain.html))

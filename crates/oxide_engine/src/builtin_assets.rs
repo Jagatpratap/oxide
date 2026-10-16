@@ -52,6 +52,11 @@ pub fn register(assets: &mut AssetServer) {
             .menu("Rendering/Volume Profile", "New Volume Profile", 61)
             .color(150, 190, 240),
     );
+    assets.register_data_asset::<oxide_scene::LensFlareData>(
+        AssetTypeInfo::new("LensFlareData", &["lensflare"])
+            .menu("Rendering/Lens Flare (SRP)", "New Lens Flare", 64)
+            .color(250, 200, 110),
+    );
     assets.register_data_asset::<oxide_scene::LightingSettings>(
         AssetTypeInfo::new("LightingSettings", &["lighting"])
             .menu("Rendering/Lighting Settings", "New Lighting Settings", 62)

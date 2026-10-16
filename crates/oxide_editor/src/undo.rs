@@ -290,17 +290,28 @@ mod tests {
         let mut u = UndoStack::default();
         u.record_terrain(&w, "Raise", &[], std::slice::from_ref(&h));
         let brush = oxide_assets::Brush::default();
-        let d = w.resource_mut::<AssetServer>().terrains.get_mut(&h).unwrap();
+        let d = w
+            .resource_mut::<AssetServer>()
+            .terrains
+            .get_mut(&h)
+            .unwrap();
         d.paint_height(0.5, 0.5, &brush, oxide_assets::HeightOp::Raise(10.0));
         let raised = d.interpolated_height(0.5, 0.5);
         assert!(raised > 1.0);
         assert_eq!(u.top_terrains(), vec![h.path().to_owned()]);
         u.undo(&mut w, &[]).unwrap();
         let d = w.resource::<AssetServer>().terrains.get(&h).unwrap();
-        assert_eq!(d.interpolated_height(0.5, 0.5), 0.0, "undo restores the heights");
+        assert_eq!(
+            d.interpolated_height(0.5, 0.5),
+            0.0,
+            "undo restores the heights"
+        );
         u.redo(&mut w, &[]).unwrap();
         let d = w.resource::<AssetServer>().terrains.get(&h).unwrap();
-        assert!((d.interpolated_height(0.5, 0.5) - raised).abs() < 1e-4, "redo brings the stroke back");
+        assert!(
+            (d.interpolated_height(0.5, 0.5) - raised).abs() < 1e-4,
+            "redo brings the stroke back"
+        );
     }
 
     #[test]

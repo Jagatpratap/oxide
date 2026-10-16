@@ -28,12 +28,19 @@ struct Post {
     mixer_b: vec4f,
     distortion_amount: vec4f,
     distortion_center_scale: vec4f,
+    // Screen Space Lens Flare.
+    sslf0: vec4f,           // x intensity (0 = off), y first, z secondary, w warped flare intensity
+    sslf1: vec4f,           // rgb tint, w samples
+    sslf2: vec4f,           // xy warped scale, z sample dimmer, w vignette effect
+    sslf3: vec4f,           // x starting position, y scale, z chromatic aberration, w streaks intensity
+    sslf4: vec4f,           // x streaks length, y orientation (rad), z streaks threshold, w aspect
 };
 
 @group(0) @binding(0) var<uniform> post: Post;
 @group(0) @binding(1) var src: texture_2d<f32>;
 @group(0) @binding(2) var src_sampler: sampler;
 @group(0) @binding(3) var bloom_tex: texture_2d<f32>;
+@group(0) @binding(4) var flare_tex: texture_2d<f32>;
 
 struct VsOut {
     @builtin(position) clip: vec4f,
@@ -98,6 +105,70 @@ fn fs_up(in: VsOut) -> @location(0) vec4f {
     c += (s(in.uv + vec2f(-t.x, 0.0)) + s(in.uv + vec2f(t.x, 0.0)) + s(in.uv + vec2f(0.0, -t.y)) + s(in.uv + vec2f(0.0, t.y))) * 2.0;
     c += s(in.uv + vec2f(-t.x, -t.y)) + s(in.uv + vec2f(t.x, -t.y)) + s(in.uv + vec2f(-t.x, t.y)) + s(in.uv + vec2f(t.x, t.y));
     return vec4f(c / 16.0, 1.0);
+}
+
+// ---- Screen Space Lens Flare (reads a bright bloom mip) ----------------------------------
+
+fn sslf_tap(uv: vec2f) -> vec3f {
+    if any(uv < vec2f(0.0)) || any(uv > vec2f(1.0)) {
+        return vec3f(0.0);
+    }
+    return textureSampleLevel(src, src_sampler, uv, 0.0).rgb;
+}
+
+// Red, green and blue sampled at slightly different distances from the centre.
+fn sslf_ca(uv: vec2f) -> vec3f {
+    let d = (uv - 0.5) * post.sslf3.z * 0.04;
+    return vec3f(sslf_tap(uv - d).r, sslf_tap(uv).g, sslf_tap(uv + d).b);
+}
+
+// Fades ghosts whose source is near the screen edge.
+fn sslf_vignette(uv: vec2f) -> f32 {
+    let r = length(uv - 0.5) * 1.41421356;
+    return mix(1.0, 1.0 - smoothstep(0.15, 1.0, r), clamp(post.sslf2.w, 0.0, 1.0));
+}
+
+@fragment
+fn fs_sslf(in: VsOut) -> @location(0) vec4f {
+    let uv = in.uv;
+    let aspect = post.sslf4.w;
+    var col = vec3f(0.0);
+    var dim = 1.0;
+    var k = post.sslf3.x;
+    let n = u32(clamp(post.sslf1.w, 1.0, 3.0));
+    for (var i = 0u; i < n; i++) {
+        // First flare: bright spots mirrored through the screen centre.
+        let p1 = 0.5 - (uv - 0.5) * k;
+        col += sslf_ca(p1) * sslf_vignette(p1) * post.sslf0.y * dim;
+        // Secondary flare: smaller ghosts between the source and the centre.
+        let p2 = 0.5 + (uv - 0.5) * k;
+        col += sslf_ca(p2) * sslf_vignette(p2) * post.sslf0.z * dim;
+        // Warped flare: a halo around the centre (polar warp of the image).
+        var dir = uv - 0.5;
+        dir.x *= aspect;
+        let len = max(length(dir), 1e-4);
+        var hv = dir / len * (0.5 - len) * post.sslf2.xy / k;
+        hv.x /= aspect;
+        let p3 = 0.5 - hv;
+        col += sslf_ca(p3) * sslf_vignette(p3) * post.sslf0.w * dim * 0.5;
+        dim *= post.sslf2.z;
+        k *= post.sslf3.y;
+    }
+    // Streaks: the brightest parts smeared along one direction.
+    if post.sslf3.w > 0.0 {
+        let o = post.sslf4.y;
+        let d = vec2f(cos(o) / aspect, sin(o)) * post.sslf4.x * 0.5;
+        var st = vec3f(0.0);
+        var ws = 0.0;
+        for (var j = 0; j < 24; j++) {
+            let t = f32(j) / 23.0 * 2.0 - 1.0;
+            let w = 1.0 - abs(t);
+            st += max(sslf_tap(uv + d * t) - vec3f(post.sslf4.z), vec3f(0.0)) * w;
+            ws += w;
+        }
+        col += st / ws * post.sslf3.w * 4.0;
+    }
+    return vec4f(col * post.sslf1.rgb, 1.0);
 }
 
 fn aces(x: vec3f) -> vec3f {
@@ -256,6 +327,9 @@ fn fs_composite(in: VsOut) -> @location(0) vec4f {
     c *= post.params.w;
     if (post.params2.z > 0.5) {
         c += textureSampleLevel(bloom_tex, src_sampler, uv, 0.0).rgb * post.params.z * post.bloom_tint.rgb;
+    }
+    if (post.sslf0.x > 0.0) {
+        c += textureSampleLevel(flare_tex, src_sampler, uv, 0.0).rgb * post.sslf0.x;
     }
     // Vignette.
     if (post.vignette_color.w > 0.0) {

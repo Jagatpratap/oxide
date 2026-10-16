@@ -539,11 +539,92 @@ impl Default for MotionBlur {
 }
 volume_override!(MotionBlur);
 
+/// URP `ScreenSpaceLensFlareResolution`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
+pub enum ScreenSpaceLensFlareResolution {
+    /// Rendered at half resolution (Oxide's bloom chain starts there).
+    Full,
+    Half,
+    #[default]
+    Quarter,
+    Eighth,
+}
+impl Interp for ScreenSpaceLensFlareResolution {}
+impl Interp for u32 {}
+
+/// URP Screen Space Lens Flare override: lens flares from everything bright on screen,
+/// built from Bloom's image (Bloom must be on).
+/// <https://docs.unity3d.com/Packages/com.unity.render-pipelines.universal@17.0/manual/shared/lens-flare/post-processing-screen-space-lens-flare.html>
+#[derive(Clone, Debug, Reflect)]
+pub struct ScreenSpaceLensFlare {
+    /// 0 turns the effect off.
+    pub intensity: VolumeParameter<f32>,
+    pub tint_color: VolumeParameter<Color>,
+    /// Bloom mip the flares come from: lower is sharper, higher is softer.
+    #[reflect(range(0, 5))]
+    pub bloom_mip: VolumeParameter<u32>,
+    /// Mirrored ghosts.
+    pub first_flare_intensity: VolumeParameter<f32>,
+    /// Smaller ghosts on the source's side.
+    pub secondary_flare_intensity: VolumeParameter<f32>,
+    /// A halo warped around the screen centre.
+    pub warped_flare_intensity: VolumeParameter<f32>,
+    pub warped_flare_scale: VolumeParameter<Vector2>,
+    /// How many times the ghosts repeat.
+    #[reflect(range(1, 3))]
+    pub samples: VolumeParameter<u32>,
+    #[reflect(range(0, 1))]
+    pub sample_dimmer: VolumeParameter<f32>,
+    /// Fades ghosts that come from near the screen edge.
+    #[reflect(range(0, 1))]
+    pub vignette_effect: VolumeParameter<f32>,
+    pub starting_position: VolumeParameter<f32>,
+    pub scale: VolumeParameter<f32>,
+    pub streaks_intensity: VolumeParameter<f32>,
+    #[reflect(range(0, 1))]
+    pub streaks_length: VolumeParameter<f32>,
+    /// Degrees.
+    #[reflect(range(-180, 180))]
+    pub streaks_orientation: VolumeParameter<f32>,
+    #[reflect(range(0, 1))]
+    pub streaks_threshold: VolumeParameter<f32>,
+    pub resolution: VolumeParameter<ScreenSpaceLensFlareResolution>,
+    #[reflect(range(0, 1))]
+    pub chromatic_abberation_intensity: VolumeParameter<f32>,
+}
+
+impl Default for ScreenSpaceLensFlare {
+    fn default() -> Self {
+        Self {
+            intensity: VolumeParameter::new(0.0),
+            tint_color: VolumeParameter::new(Color::WHITE),
+            bloom_mip: VolumeParameter::new(1),
+            first_flare_intensity: VolumeParameter::new(1.0),
+            secondary_flare_intensity: VolumeParameter::new(1.0),
+            warped_flare_intensity: VolumeParameter::new(1.0),
+            warped_flare_scale: VolumeParameter::new(Vector2::ONE),
+            samples: VolumeParameter::new(1),
+            sample_dimmer: VolumeParameter::new(0.5),
+            vignette_effect: VolumeParameter::new(1.0),
+            starting_position: VolumeParameter::new(1.25),
+            scale: VolumeParameter::new(1.5),
+            streaks_intensity: VolumeParameter::new(0.0),
+            streaks_length: VolumeParameter::new(0.5),
+            streaks_orientation: VolumeParameter::new(0.0),
+            streaks_threshold: VolumeParameter::new(0.25),
+            resolution: VolumeParameter::new(ScreenSpaceLensFlareResolution::Quarter),
+            chromatic_abberation_intensity: VolumeParameter::new(0.5),
+        }
+    }
+}
+volume_override!(ScreenSpaceLensFlare);
+
 /// Every override type with its Add Component path.
 pub fn register(reg: &mut crate::ComponentRegistry) {
     reg.register::<Volume>("Miscellaneous/Volume");
     let o = "Rendering/Volume Overrides/";
     reg.register::<Bloom>(&format!("{o}Bloom"));
+    reg.register::<ScreenSpaceLensFlare>(&format!("{o}Screen Space Lens Flare"));
     reg.register::<Tonemapping>(&format!("{o}Tonemapping"));
     reg.register::<ColorAdjustments>(&format!("{o}Color Adjustments"));
     reg.register::<WhiteBalance>(&format!("{o}White Balance"));
@@ -631,6 +712,7 @@ pub struct VolumeProfile {
     pub lens_distortion: Option<LensDistortion>,
     pub depth_of_field: Option<DepthOfField>,
     pub motion_blur: Option<MotionBlur>,
+    pub screen_space_lens_flare: Option<ScreenSpaceLensFlare>,
 }
 
 impl oxide_assets::Asset for VolumeProfile {

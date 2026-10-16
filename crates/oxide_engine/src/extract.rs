@@ -260,6 +260,7 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
     oxide_terrain::extract_details(world, cam_pos, &mut frame.grass, &mut frame.draws);
     oxide_particles::extract(world, &mut frame.particles);
     crate::sprites2d::extract(world, &mut frame.sprites);
+    crate::lens_flares::extract(world, &mut frame.lens_flares);
 
     let default_mat = AssetId::from_path(DEFAULT_MATERIAL);
     let layer_of = |id| world.get(id).map_or(0, |o| o.layer);

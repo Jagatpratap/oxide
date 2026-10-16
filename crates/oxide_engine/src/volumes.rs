@@ -6,14 +6,15 @@
 use oxide_math::{Color, Vector2, Vector3, Vector4};
 use oxide_physics::{BoxCollider, CapsuleCollider, SphereCollider};
 use oxide_render::{
-    BloomSettings, DofMode, DofSettings, LensDistortionSettings, PostSettings, TonemapMode,
-    VignetteSettings,
+    BloomSettings, DofMode, DofSettings, LensDistortionSettings, PostSettings,
+    ScreenSpaceLensFlareSettings, TonemapMode, VignetteSettings,
 };
 use oxide_scene::{
     Bloom, ChannelMixer, ChromaticAberration, ColorAdjustments, Component, DepthOfField,
     DepthOfFieldMode, FilmGrain, GameObjectId, LensDistortion, LiftGammaGain, MotionBlur,
-    RenderSettings, ShadowsMidtonesHighlights, SplitToning, Tonemapping, TonemappingMode, Vignette,
-    Volume, VolumeProfile, WhiteBalance, World,
+    RenderSettings, ScreenSpaceLensFlare, ScreenSpaceLensFlareResolution,
+    ShadowsMidtonesHighlights, SplitToning, Tonemapping, TonemappingMode, Vignette, Volume,
+    VolumeProfile, WhiteBalance, World,
 };
 use std::collections::HashMap;
 
@@ -60,6 +61,7 @@ pub struct VolumeStack {
     /// their passes exist.
     pub depth_of_field: DepthOfField,
     pub motion_blur: MotionBlur,
+    pub screen_space_lens_flare: ScreenSpaceLensFlare,
 }
 
 impl VolumeStack {
@@ -114,6 +116,7 @@ impl VolumeStack {
             distortion_scale: 1.0,
             depth_of_field: DepthOfField::default(),
             motion_blur: MotionBlur::default(),
+            screen_space_lens_flare: ScreenSpaceLensFlare::default(),
         }
     }
 
@@ -191,6 +194,34 @@ impl VolumeStack {
                 self.motion_blur.intensity.value,
                 self.motion_blur.clamp.value,
             ],
+            screen_space_lens_flare: {
+                let f = &self.screen_space_lens_flare;
+                ScreenSpaceLensFlareSettings {
+                    intensity: f.intensity.value.max(0.0),
+                    tint: lin(f.tint_color.value),
+                    bloom_mip: f.bloom_mip.value.min(5),
+                    first_flare_intensity: f.first_flare_intensity.value,
+                    secondary_flare_intensity: f.secondary_flare_intensity.value,
+                    warped_flare_intensity: f.warped_flare_intensity.value,
+                    warped_flare_scale: f.warped_flare_scale.value.to_array(),
+                    samples: f.samples.value.clamp(1, 3),
+                    sample_dimmer: f.sample_dimmer.value,
+                    vignette_effect: f.vignette_effect.value,
+                    starting_position: f.starting_position.value,
+                    scale: f.scale.value,
+                    streaks_intensity: f.streaks_intensity.value.max(0.0),
+                    streaks_length: f.streaks_length.value,
+                    streaks_orientation: f.streaks_orientation.value,
+                    streaks_threshold: f.streaks_threshold.value,
+                    resolution_mip: match f.resolution.value {
+                        ScreenSpaceLensFlareResolution::Full
+                        | ScreenSpaceLensFlareResolution::Half => 0,
+                        ScreenSpaceLensFlareResolution::Quarter => 1,
+                        ScreenSpaceLensFlareResolution::Eighth => 2,
+                    },
+                    chromatic_aberration: f.chromatic_abberation_intensity.value,
+                }
+            },
         }
     }
 }
@@ -282,6 +313,8 @@ pub fn evaluate(world: &World, rs: &RenderSettings, position: Vector3) -> Volume
     let distortion = overrides::<LensDistortion>(world, &order, |p| p.lens_distortion.as_ref());
     let dof = overrides::<DepthOfField>(world, &order, |p| p.depth_of_field.as_ref());
     let blur = overrides::<MotionBlur>(world, &order, |p| p.motion_blur.as_ref());
+    let sslf =
+        overrides::<ScreenSpaceLensFlare>(world, &order, |p| p.screen_space_lens_flare.as_ref());
 
     let s = &mut stack;
     for (id, w) in order {
@@ -383,6 +416,38 @@ pub fn evaluate(world: &World, rs: &RenderSettings, position: Vector3) -> Volume
         if let Some(c) = blur.get(&id) {
             c.intensity.blend(&mut s.motion_blur.intensity.value, w);
             c.clamp.blend(&mut s.motion_blur.clamp.value, w);
+        }
+        if let Some(c) = sslf.get(&id) {
+            let d = &mut s.screen_space_lens_flare;
+            for (src, dst) in [
+                (&c.intensity, &mut d.intensity),
+                (&c.first_flare_intensity, &mut d.first_flare_intensity),
+                (
+                    &c.secondary_flare_intensity,
+                    &mut d.secondary_flare_intensity,
+                ),
+                (&c.warped_flare_intensity, &mut d.warped_flare_intensity),
+                (&c.sample_dimmer, &mut d.sample_dimmer),
+                (&c.vignette_effect, &mut d.vignette_effect),
+                (&c.starting_position, &mut d.starting_position),
+                (&c.scale, &mut d.scale),
+                (&c.streaks_intensity, &mut d.streaks_intensity),
+                (&c.streaks_length, &mut d.streaks_length),
+                (&c.streaks_orientation, &mut d.streaks_orientation),
+                (&c.streaks_threshold, &mut d.streaks_threshold),
+                (
+                    &c.chromatic_abberation_intensity,
+                    &mut d.chromatic_abberation_intensity,
+                ),
+            ] {
+                src.blend(&mut dst.value, w);
+            }
+            c.tint_color.blend(&mut d.tint_color.value, w);
+            c.bloom_mip.blend(&mut d.bloom_mip.value, w);
+            c.warped_flare_scale
+                .blend(&mut d.warped_flare_scale.value, w);
+            c.samples.blend(&mut d.samples.value, w);
+            c.resolution.blend(&mut d.resolution.value, w);
         }
     }
     stack
