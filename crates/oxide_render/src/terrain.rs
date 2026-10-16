@@ -140,7 +140,9 @@ impl TerrainGpu {
             let src: Option<&Texture2D> = layers
                 .get(i)
                 .and_then(|l| l.diffuse.as_ref())
-                .and_then(|h| assets.textures.get(h));
+                .and_then(|h| assets.textures.get(h))
+                // Pre-compressed (KTX2) textures have no CPU pixels to build the array from.
+                .filter(|t| !t.mips.is_empty());
             let base = match src {
                 Some(t) => resize(&t.mips[0], t.width, t.height, size, size),
                 None => vec![255u8; (size * size * 4) as usize],

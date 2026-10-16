@@ -8,3 +8,6 @@ license.workspace = true
 [dependencies]
 oxide_engine.workspace = true
 oxide_editor.workspace = true
+
+[lints]
+workspace = true

@@ -13,6 +13,83 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
         s,
         bus,
         ToolDef::new(
+            "texture_import_settings",
+            "Texture import settings",
+            "Gets a texture's import settings (its `.meta` file, Unity's Texture Importer) and what the import \
+             produced (size, mips, GPU format). With `settings` (any of texture_type Default|NormalMap, srgb, \
+             max_size, generate_mip_maps, wrap_mode, filter_mode, aniso_level, compression \
+             None|LowQuality|NormalQuality|HighQuality), writes the .meta and re-imports. Compression is BC7 for \
+             color and BC5 for normal maps (BC1/BC3 for LowQuality), cached in Library/TextureCache.",
+            schema(
+                json!({ "path": { "type": "string" }, "settings": { "type": "object" } }),
+                &["path"],
+            ),
+        ),
+        |args, e| {
+            let path = args
+                .get("path")
+                .and_then(Json::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            let assets = e.world.resource_mut::<oxide_assets::AssetServer>();
+            if let Some(Json::Object(fields)) = args.get("settings") {
+                let mut imp = assets.texture_importer(&path);
+                for (k, v) in fields {
+                    let Some(info) = oxide_core::reflect::Reflect::type_info(&imp)
+                        .fields
+                        .into_iter()
+                        .find(|f| f.name == k)
+                    else {
+                        return ToolResult::error(format!("no import setting `{k}`"));
+                    };
+                    let value = match crate::json_values::json_to_value(&info, v, &e.world) {
+                        Ok(v) => v,
+                        Err(err) => return ToolResult::error(format!("{k}: {err}")),
+                    };
+                    if let Err(err) = oxide_core::reflect::Reflect::set_field(&mut imp, k, value) {
+                        return ToolResult::error(format!("{k}: {err}"));
+                    }
+                }
+                let assets = e.world.resource_mut::<oxide_assets::AssetServer>();
+                if let Err(err) = assets.set_texture_importer(&path, &imp) {
+                    return ToolResult::error(err);
+                }
+            } else if assets.textures.handle_of(&path).is_none()
+                && let Err(err) = assets.load_texture(&path)
+            {
+                return ToolResult::error(err);
+            }
+            let assets = e.world.resource::<oxide_assets::AssetServer>();
+            let imp = assets.texture_importer(&path);
+            let settings: serde_json::Map<String, Json> =
+                oxide_core::reflect::Reflect::fields(&imp)
+                    .into_iter()
+                    .map(|(k, v)| (k.to_owned(), crate::json_values::value_to_json(None, &v)))
+                    .collect();
+            let tex = assets
+                .textures
+                .handle_of(&path)
+                .and_then(|h| assets.textures.get(&h));
+            ToolResult::json(json!({
+                "path": path,
+                "settings": settings,
+                "imported": tex.map(|t| json!({
+                    "width": t.width,
+                    "height": t.height,
+                    "mips": t.compressed.as_ref().map_or(t.mips.len(), |c| c.mips.len()),
+                    "gpu_format": t.compressed.as_ref().map_or("RGBA8".to_owned(), |c| format!("{:?}", c.format)),
+                    "gpu_bytes": t.compressed.as_ref().map_or(
+                        t.mips.iter().map(Vec::len).sum::<usize>(),
+                        |c| c.mips.iter().map(Vec::len).sum::<usize>(),
+                    ),
+                })),
+            }))
+        },
+    );
+    tool(
+        s,
+        bus,
+        ToolDef::new(
             "create_render_texture",
             "Create Render Texture",
             "Creates a `.renderTexture` asset (Unity RenderTexture) at `path` (e.g. \"Assets/Mirror.renderTexture\"). \

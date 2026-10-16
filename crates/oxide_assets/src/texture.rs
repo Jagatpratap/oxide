@@ -20,18 +20,119 @@ pub enum FilterMode {
     Trilinear,
 }
 
+/// Unity `TextureImporterType` (the kinds that change how pixels are stored).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Reflect)]
+pub enum TextureImporterType {
+    #[default]
+    Default,
+    /// Linear data, compressed as two channels (BC5); the shader rebuilds Z.
+    NormalMap,
+}
+
+/// Unity `TextureImporterCompression`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Reflect)]
+pub enum TextureCompression {
+    /// RGBA8.
+    None,
+    /// BC1 (opaque) / BC3 (alpha): 4–8 bits per pixel.
+    LowQuality,
+    /// BC7 (BC5 for normal maps): 8 bits per pixel.
+    #[default]
+    NormalQuality,
+    /// BC7 with the slowest, best encoder settings.
+    HighQuality,
+}
+
+/// GPU block-compressed formats (4×4 blocks).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Reflect)]
+pub enum CompressedFormat {
+    Bc1,
+    Bc3,
+    Bc4,
+    Bc5,
+    Bc7,
+    Astc4x4,
+}
+
+/// A texture's block-compressed mip chain (what the GPU gets when it supports the format).
+#[derive(Clone, Debug)]
+pub struct CompressedMips {
+    pub format: CompressedFormat,
+    /// Largest first, each in whole 4×4 blocks.
+    pub mips: Vec<Vec<u8>>,
+}
+
+/// Unity Texture Import Settings, kept in `<texture>.meta`.
+/// <https://docs.unity3d.com/Manual/class-TextureImporter.html>
+#[derive(Clone, Debug, PartialEq, Reflect)]
+#[reflect(default)]
+pub struct TextureImporter {
+    pub texture_type: TextureImporterType,
+    /// Color data (sRGB) rather than masks or normals.
+    pub srgb: bool,
+    /// Larger textures are scaled down to this on import.
+    pub max_size: u32,
+    pub generate_mip_maps: bool,
+    pub wrap_mode: TextureWrapMode,
+    pub filter_mode: FilterMode,
+    #[reflect(range(0, 16))]
+    pub aniso_level: u32,
+    pub compression: TextureCompression,
+}
+
+impl Default for TextureImporter {
+    fn default() -> Self {
+        Self {
+            texture_type: TextureImporterType::Default,
+            srgb: true,
+            max_size: 2048,
+            generate_mip_maps: true,
+            wrap_mode: TextureWrapMode::Repeat,
+            filter_mode: FilterMode::Trilinear,
+            aniso_level: 8,
+            compression: TextureCompression::NormalQuality,
+        }
+    }
+}
+
+impl TextureImporter {
+    /// Defaults for a file, guessing data maps from its name like before (normal maps are
+    /// Normal Map type; masks, roughness, metallic and height are linear).
+    pub fn guess(path: &str) -> Self {
+        let lower = path.to_ascii_lowercase();
+        let normal = ["normal", "_n.", "_nrm", "_norm"]
+            .iter()
+            .any(|k| lower.contains(k));
+        let linear = ["mask", "rough", "metal", "_orm", "height"]
+            .iter()
+            .any(|k| lower.contains(k));
+        Self {
+            texture_type: if normal {
+                TextureImporterType::NormalMap
+            } else {
+                TextureImporterType::Default
+            },
+            srgb: !(normal || linear),
+            ..Default::default()
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Texture2D {
     pub name: String,
     pub width: u32,
     pub height: u32,
-    /// Mip levels, largest first; each is tightly packed RGBA8, top row first.
+    /// Mip levels, largest first; each is tightly packed RGBA8, top row first. Empty for
+    /// textures loaded already block-compressed (KTX2): those have no CPU pixel copy.
     pub mips: Vec<Vec<u8>>,
     /// Color data (sRGB) vs. data maps such as normals or masks (linear).
     pub srgb: bool,
     pub wrap_mode: TextureWrapMode,
     pub filter_mode: FilterMode,
     pub aniso_level: u8,
+    /// Block-compressed copy for the GPU (the RGBA8 `mips` stay for CPU readers).
+    pub compressed: Option<CompressedMips>,
 }
 
 impl Asset for Texture2D {
@@ -55,6 +156,7 @@ impl Texture2D {
             wrap_mode: TextureWrapMode::Repeat,
             filter_mode: FilterMode::Trilinear,
             aniso_level: 8,
+            compressed: None,
         };
         t.generate_mips();
         t
@@ -71,6 +173,16 @@ impl Texture2D {
         let rgba = img.to_rgba8();
         let (w, h) = rgba.dimensions();
         Ok(Self::from_rgba8(name, w, h, rgba.into_raw(), srgb))
+    }
+
+    /// Scales the largest side down to `max` (box filter), keeping the aspect ratio.
+    pub fn limit_size(&mut self, max: u32) {
+        let max = max.max(1);
+        while self.width.max(self.height) > max && self.mips.len() > 1 {
+            self.mips.remove(0);
+            self.width = (self.width / 2).max(1);
+            self.height = (self.height / 2).max(1);
+        }
     }
 
     pub fn mip_count(&self) -> u32 {

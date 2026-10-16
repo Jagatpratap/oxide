@@ -13,6 +13,7 @@
 pub mod animation;
 pub mod gltf_import;
 pub mod handle;
+pub mod ktx2_import;
 pub mod material;
 pub mod mesh;
 pub mod model;
@@ -21,6 +22,7 @@ pub mod render_texture;
 pub mod server;
 pub mod terrain;
 pub mod texture;
+pub mod texture_compress;
 
 pub use animation::{
     AnimationClip, AnimationEvent, AnimatorController, AnimatorControllerLayer,
@@ -36,4 +38,7 @@ pub use primitives::PrimitiveType;
 pub use render_texture::RenderTexture;
 pub use server::{AssetServer, AudioClip, DEFAULT_MATERIAL};
 pub use terrain::{TerrainData, TerrainLayer, TreeInstance, TreePrototype};
-pub use texture::{FilterMode, Texture2D, TextureWrapMode};
+pub use texture::{
+    CompressedFormat, CompressedMips, FilterMode, Texture2D, TextureCompression, TextureImporter,
+    TextureImporterType, TextureWrapMode,
+};

@@ -41,6 +41,11 @@ bytemuck = { version = "1", features = ["derive"] }
 png = "0.18"
 base64 = "0.22"
 tiny_http = "0.12"
+# Intel ISPC texture compressor (BC1-7, ASTC) for texture import.
+intel_tex_2 = "0.5"
+# KTX2 container parsing and its Zstandard supercompression.
+ktx2 = "0.5"
+ruzstd = "0.9"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "hdr", "tga", "bmp"] }
 gltf = { version = "1.4", features = ["KHR_materials_emissive_strength", "KHR_texture_transform", "KHR_lights_punctual", "extras", "names", "utils"] }
 rapier3d = "0.36"
@@ -57,3 +62,8 @@ libloading = "0.9"
 opt-level = 2
 # Third-party code keeps line tables only (readable backtraces, far smaller builds).
 debug = "line-tables-only"
+
+[workspace.lints.rust]
+# intel_tex_2 ships prebuilt ISPC objects without a macOS platform load command; the
+# linker notes it on every link. Harmless.
+linker_messages = "allow"

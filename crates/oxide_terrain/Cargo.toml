@@ -12,3 +12,6 @@ oxide_assets.workspace = true
 oxide_scene.workspace = true
 oxide_physics.workspace = true
 oxide_render.workspace = true
+
+[lints]
+workspace = true

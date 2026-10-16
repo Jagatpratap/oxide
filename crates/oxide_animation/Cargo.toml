@@ -10,3 +10,6 @@ oxide_math.workspace = true
 oxide_core.workspace = true
 oxide_assets.workspace = true
 oxide_scene.workspace = true
+
+[lints]
+workspace = true

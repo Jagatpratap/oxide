@@ -9,3 +9,6 @@ license.workspace = true
 oxide_engine.workspace = true
 serde.workspace = true
 serde_yaml_ng.workspace = true
+
+[lints]
+workspace = true

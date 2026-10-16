@@ -32,3 +32,6 @@ log.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 gilrs.workspace = true
+
+[lints]
+workspace = true

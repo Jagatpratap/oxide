@@ -17,3 +17,6 @@ bincode = { version = "2", features = ["serde"] }
 
 [dev-dependencies]
 oxide_assets.workspace = true
+
+[lints]
+workspace = true

@@ -103,19 +103,119 @@ impl AssetServer {
         std::fs::read(&full).map_err(|e| format!("cannot read {}: {e}", full.display()))
     }
 
-    /// Loads (or reloads) a texture. Data maps (normal, mask, roughness, metallic) are linear.
+    /// Import settings of a texture: its `.meta` file, or defaults guessed from the name.
+    pub fn texture_importer(&self, path: &str) -> crate::TextureImporter {
+        let meta = self.full_path(&format!("{path}.meta"));
+        let mut imp = crate::TextureImporter::guess(path);
+        if let Ok(text) = std::fs::read_to_string(&meta) {
+            match serde_yaml_ng::from_str::<BTreeMap<String, Value>>(&text) {
+                Ok(fields) => {
+                    for (k, v) in fields {
+                        if let Err(e) = imp.set_field(&k, v) {
+                            oxide_core::debug_log_warning!("{path}.meta: {k}: {e}");
+                        }
+                    }
+                }
+                Err(e) => oxide_core::debug_log_warning!("{path}.meta: {e}"),
+            }
+        }
+        imp
+    }
+
+    /// Writes `<path>.meta` and re-imports the texture with the new settings.
+    pub fn set_texture_importer(
+        &mut self,
+        path: &str,
+        importer: &crate::TextureImporter,
+    ) -> Result<Handle<Texture2D>, String> {
+        let fields: BTreeMap<String, Value> = importer
+            .fields()
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), v))
+            .collect();
+        let text = serde_yaml_ng::to_string(&fields).map_err(|e| e.to_string())?;
+        let meta = self.full_path(&format!("{path}.meta"));
+        std::fs::write(&meta, text).map_err(|e| format!("cannot write {}: {e}", meta.display()))?;
+        self.load_texture(path)
+    }
+
+    /// Loads (or reloads) a texture with its import settings: size limit, mipmaps, and GPU
+    /// compression (cached under `Library/TextureCache`, like Unity's Library folder).
     pub fn load_texture(&mut self, path: &str) -> Result<Handle<Texture2D>, String> {
         let bytes = self.read(path)?;
-        let lower = path.to_ascii_lowercase();
-        let linear = ["normal", "_n.", "mask", "rough", "metal", "_orm", "height"]
-            .iter()
-            .any(|k| lower.contains(k));
+        let imp = self.texture_importer(path);
         let name = Path::new(path)
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("texture");
-        let tex = Texture2D::decode(name, &bytes, !linear)?;
+        if path.to_ascii_lowercase().ends_with(".ktx2") {
+            // Already GPU-ready: no resizing or recompression.
+            let mut tex = crate::ktx2_import::decode(name, &bytes)?;
+            tex.wrap_mode = imp.wrap_mode;
+            tex.filter_mode = imp.filter_mode;
+            return Ok(self.textures.insert(path.to_owned(), tex));
+        }
+        let mut tex = Texture2D::decode(name, &bytes, imp.srgb)?;
+        tex.limit_size(imp.max_size);
+        if !imp.generate_mip_maps {
+            tex.mips.truncate(1);
+        }
+        tex.wrap_mode = imp.wrap_mode;
+        tex.filter_mode = imp.filter_mode;
+        tex.aniso_level = imp.aniso_level.clamp(1, 16) as u8;
+        let has_alpha = tex.mips[0].as_chunks::<4>().0.iter().any(|p| p[3] < 255);
+        let format =
+            crate::texture_compress::choose_format(imp.compression, imp.texture_type, has_alpha);
+        if let Some(format) = format
+            && tex.width % 4 == 0
+            && tex.height % 4 == 0
+        {
+            tex.compressed = Some(self.compressed_cached(&bytes, &imp, format, &tex));
+        }
         Ok(self.textures.insert(path.to_owned(), tex))
+    }
+
+    fn compressed_cached(
+        &self,
+        source: &[u8],
+        imp: &crate::TextureImporter,
+        format: crate::CompressedFormat,
+        tex: &Texture2D,
+    ) -> crate::CompressedMips {
+        use crate::texture_compress::{compress_mips, level_size};
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        source.hash(&mut h);
+        format!(
+            "{imp:?} {format:?} {}x{} {} v1",
+            tex.width,
+            tex.height,
+            tex.mips.len()
+        )
+        .hash(&mut h);
+        let cache = self
+            .full_path("Library/TextureCache")
+            .join(format!("{:016x}.bin", h.finish()));
+        let sizes: Vec<usize> = (0..tex.mips.len())
+            .map(|i| level_size(format, (tex.width >> i).max(1), (tex.height >> i).max(1)))
+            .collect();
+        if let Ok(data) = std::fs::read(&cache)
+            && data.len() == sizes.iter().sum::<usize>()
+        {
+            let mut mips = Vec::with_capacity(sizes.len());
+            let mut at = 0;
+            for s in sizes {
+                mips.push(data[at..at + s].to_vec());
+                at += s;
+            }
+            return crate::CompressedMips { format, mips };
+        }
+        let out = compress_mips(format, imp.compression, &tex.mips, tex.width, tex.height);
+        if let Some(dir) = cache.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(&cache, out.mips.concat());
+        out
     }
 
     pub fn load_model(&mut self, path: &str) -> Result<Handle<Model>, String> {
@@ -250,7 +350,7 @@ impl AssetServer {
             .unwrap_or("")
             .to_ascii_lowercase();
         match ext.as_str() {
-            "png" | "jpg" | "jpeg" | "tga" | "bmp" | "hdr" => {
+            "png" | "jpg" | "jpeg" | "tga" | "bmp" | "hdr" | "ktx2" => {
                 if self.textures.handle_of(file).is_none() {
                     self.load_texture(file)?;
                 }

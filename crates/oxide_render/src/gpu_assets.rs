@@ -537,31 +537,85 @@ fn upload_mesh(device: &wgpu::Device, m: &Mesh, version: u64) -> GpuMesh {
     }
 }
 
+/// The wgpu format for a compressed texture, if the device supports it.
+fn compressed_format(
+    device: &wgpu::Device,
+    f: oxide_assets::CompressedFormat,
+    srgb: bool,
+) -> Option<wgpu::TextureFormat> {
+    use oxide_assets::CompressedFormat as C;
+    use wgpu::TextureFormat as T;
+    let features = device.features();
+    let bc = features.contains(wgpu::Features::TEXTURE_COMPRESSION_BC);
+    let astc = features.contains(wgpu::Features::TEXTURE_COMPRESSION_ASTC);
+    match f {
+        C::Bc1 if bc => Some(if srgb {
+            T::Bc1RgbaUnormSrgb
+        } else {
+            T::Bc1RgbaUnorm
+        }),
+        C::Bc3 if bc => Some(if srgb {
+            T::Bc3RgbaUnormSrgb
+        } else {
+            T::Bc3RgbaUnorm
+        }),
+        C::Bc4 if bc => Some(T::Bc4RUnorm),
+        C::Bc5 if bc => Some(T::Bc5RgUnorm),
+        C::Bc7 if bc => Some(if srgb {
+            T::Bc7RgbaUnormSrgb
+        } else {
+            T::Bc7RgbaUnorm
+        }),
+        C::Astc4x4 if astc => Some(T::Astc {
+            block: wgpu::AstcBlock::B4x4,
+            channel: if srgb {
+                wgpu::AstcChannel::UnormSrgb
+            } else {
+                wgpu::AstcChannel::Unorm
+            },
+        }),
+        _ => None,
+    }
+}
+
 fn upload_texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     t: &Texture2D,
     version: u64,
 ) -> GpuTexture {
-    let format = if t.srgb {
+    // The block-compressed copy when the GPU supports its format, else RGBA8.
+    let compressed = t
+        .compressed
+        .as_ref()
+        .and_then(|c| compressed_format(device, c.format, t.srgb).map(|f| (f, c)));
+    let rgba8 = if t.srgb {
         wgpu::TextureFormat::Rgba8UnormSrgb
     } else {
         wgpu::TextureFormat::Rgba8Unorm
     };
-    let mut data = Vec::new();
-    for m in &t.mips {
-        data.extend_from_slice(m);
-    }
+    let (format, data, mips, (width, height)) = match compressed {
+        Some((f, c)) => (f, c.mips.concat(), c.mips.len() as u32, (t.width, t.height)),
+        None if !t.mips.is_empty() => (rgba8, t.mips.concat(), t.mip_count(), (t.width, t.height)),
+        None => {
+            // A pre-compressed texture in a format this GPU can't sample.
+            oxide_core::debug_log_warning!(
+                "{}: this GPU doesn't support its compressed format; showing grey",
+                t.name
+            );
+            (rgba8, vec![128, 128, 128, 255], 1, (1, 1))
+        }
+    };
     let tex = device.create_texture_with_data(
         queue,
         &wgpu::TextureDescriptor {
             label: Some(&t.name),
             size: wgpu::Extent3d {
-                width: t.width,
-                height: t.height,
+                width,
+                height,
                 depth_or_array_layers: 1,
             },
-            mip_level_count: t.mip_count(),
+            mip_level_count: mips,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format,

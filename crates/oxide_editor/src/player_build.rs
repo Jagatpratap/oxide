@@ -260,6 +260,10 @@ name = "player"
 version = "0.1.0"
 edition = "2024"
 
+# The texture compressor's prebuilt objects make the macOS linker print a harmless note.
+[lints.rust]
+linker_messages = "allow"
+
 [dependencies]
 oxide = {{ package = "oxide_player", path = "{player_dep}" }}
 scripts = {{ path = "../scripts" }}

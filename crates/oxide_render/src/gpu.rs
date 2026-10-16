@@ -25,6 +25,13 @@ impl fmt::Display for GpuError {
 
 impl std::error::Error for GpuError {}
 
+/// Block-compressed texture formats the adapter supports (BC on desktop and Apple GPUs,
+/// ASTC on mobile and Apple GPUs).
+fn compression_features(adapter: &wgpu::Adapter) -> wgpu::Features {
+    adapter.features()
+        & (wgpu::Features::TEXTURE_COMPRESSION_BC | wgpu::Features::TEXTURE_COMPRESSION_ASTC)
+}
+
 /// The GPU: adapter, logical device and submission queue.
 pub struct Gpu {
     pub instance: wgpu::Instance,
@@ -45,7 +52,7 @@ impl Gpu {
         .map_err(GpuError::NoAdapter)?;
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("oxide device"),
-            required_features: wgpu::Features::empty(),
+            required_features: compression_features(&adapter),
             required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
             ..Default::default()
         }))
@@ -79,7 +86,7 @@ impl Gpu {
         .ok()?;
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("oxide headless device"),
-            required_features: wgpu::Features::empty(),
+            required_features: compression_features(&adapter),
             required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
             ..Default::default()
         }))

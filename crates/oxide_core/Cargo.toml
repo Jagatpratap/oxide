@@ -11,3 +11,6 @@ serde.workspace = true
 serde_json.workspace = true
 log.workspace = true
 oxide_derive.workspace = true
+
+[lints]
+workspace = true

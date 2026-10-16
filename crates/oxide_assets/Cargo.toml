@@ -11,4 +11,10 @@ oxide_core.workspace = true
 serde.workspace = true
 serde_yaml_ng.workspace = true
 image.workspace = true
+intel_tex_2.workspace = true
+ktx2.workspace = true
+ruzstd.workspace = true
 gltf.workspace = true
+
+[lints]
+workspace = true

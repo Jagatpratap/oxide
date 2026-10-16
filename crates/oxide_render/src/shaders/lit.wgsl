@@ -126,8 +126,10 @@ fn fs_main(in: VertexOut, @builtin(front_facing) front: bool) -> FragOut {
         var t = in.tangent.xyz / t_len;
         t = normalize(t - n * dot(n, t));
         let b = cross(n, t) * in.tangent.w;
-        var tn = textureSample(normal_map, mat_sampler, uv).xyz * 2.0 - 1.0;
-        tn = vec3f(tn.xy * material.pbr.z, tn.z);
+        // Tangent-space normal from X/Y (works for RGB and two-channel BC5 maps), as
+        // Unity's UnpackNormalScale: scale X/Y, then rebuild Z.
+        let nxy = (textureSample(normal_map, mat_sampler, uv).xy * 2.0 - 1.0) * material.pbr.z;
+        let tn = vec3f(nxy, sqrt(clamp(1.0 - dot(nxy, nxy), 0.0, 1.0)));
         n = normalize(t * tn.x + b * tn.y + n * max(tn.z, 1e-3));
     }
 
