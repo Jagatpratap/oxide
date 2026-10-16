@@ -84,6 +84,7 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: &s
                     }
                 }
                 "InputActionAsset" => input_actions(st, engine, ui, path),
+                "Preset" => preset(st, engine, ui, path),
                 t if engine.world.resource::<AssetServer>().types.is_data(t) => {
                     data_asset(st, engine, ui, path)
                 }
@@ -201,6 +202,48 @@ fn edit_fields(ui: &mut egui::Ui, engine: &mut Engine, obj: &mut dyn Reflect, sa
         }
     }
     changed
+}
+
+/// A Preset: its saved values shown with the target component's own fields.
+fn preset(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: &str) {
+    let h = oxide_assets::Handle::<oxide_assets::Preset>::from_path(path);
+    let Some(p) = engine
+        .world
+        .resource_mut::<AssetServer>()
+        .data_asset(&h)
+        .cloned()
+    else {
+        ui.colored_label(
+            Color32::from_rgb(230, 120, 100),
+            format!("cannot load {path}"),
+        );
+        return;
+    };
+    ui.label(format!(
+        "Preset for {}",
+        crate::inspector::nicify(&p.target_type)
+    ));
+    let Some(mut c) = engine.world.registry.create(&p.target_type) else {
+        ui.weak(format!(
+            "No component type `{}` is registered.",
+            p.target_type
+        ));
+        return;
+    };
+    p.apply(&mut *c);
+    ui.add_space(4.0);
+    if crate::inspector::reflect_grid(ui, &engine.world, &mut *c, &format!("preset:{path}")) {
+        let edited = oxide_assets::Preset::of(&*c);
+        if let Err(e) = engine
+            .world
+            .resource_mut::<AssetServer>()
+            .save_data(path, Box::new(edited))
+        {
+            st.status = e;
+        }
+    }
+    ui.add_space(4.0);
+    ui.weak("Apply it from a component's ⋮ menu → Apply Preset.");
 }
 
 /// Input Actions: Unity's "Edit Asset" button and a summary of maps and actions.

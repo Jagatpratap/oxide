@@ -29,6 +29,10 @@ pub struct InspectorState {
     pub locked: Option<Vec<GameObjectId>>,
     /// A component type to expand and scroll into view on the next frame (MCP).
     pub scroll_to: Option<String>,
+    /// "Save as Preset..." asked for this preset to be written.
+    save_preset: Option<oxide_assets::Preset>,
+    /// "Apply Preset": the component and the preset file.
+    apply_preset: Option<(Slot, String)>,
 }
 
 impl InspectorState {
@@ -182,7 +186,34 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
             add_component(ui, st, w);
             ui.add_space(24.0);
         });
+    presets(st, engine, &mut edits);
     apply(st, &mut engine.world, &targets, edits);
+}
+
+/// Carries out "Save as Preset..." and "Apply Preset" from a component's menu.
+fn presets(st: &mut EditorState, engine: &mut oxide_engine::Engine, edits: &mut Vec<(Edit, u64)>) {
+    let assets = engine.world.resource_mut::<AssetServer>();
+    if let Some((slot, path)) = st.inspector.apply_preset.take() {
+        let h = oxide_assets::Handle::<oxide_assets::Preset>::from_path(path.clone());
+        match assets.data_asset(&h).cloned() {
+            Some(p) => edits.push((Edit::Paste(slot, p.values), 0)),
+            None => st.status = format!("cannot load preset {path}"),
+        }
+    }
+    if let Some(preset) = st.inspector.save_preset.take() {
+        let root = assets.full_path("");
+        let path = crate::asset_ops::unique_path(
+            &root,
+            &format!("Assets/Presets/{}.preset", preset.target_type),
+        );
+        st.status = match assets.save_data(&path, Box::new(preset)) {
+            Ok(()) => {
+                st.project.invalidate();
+                format!("Saved preset {path}")
+            }
+            Err(e) => e,
+        };
+    }
 }
 
 /// A script's own Inspector (Unity `[CustomEditor]`). It draws on a copy of the component;
@@ -869,6 +900,29 @@ fn components(
             if debug {
                 ui.weak(format!("id {}", cid.0));
             }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // Unity's ⋮ button (drawn: the glyph isn't in the editor fonts).
+                let r = ui
+                    .add(
+                        egui::Button::new("")
+                            .frame(false)
+                            .min_size(egui::vec2(14.0, 16.0)),
+                    )
+                    .on_hover_text("Component menu");
+                let c = r.rect.center();
+                let col = if r.hovered() {
+                    Color32::WHITE
+                } else {
+                    ui.visuals().text_color()
+                };
+                for dy in [-4.0, 0.0, 4.0] {
+                    ui.painter()
+                        .circle_filled(c + egui::vec2(0.0, dy), 1.4, col);
+                }
+                egui::Popup::menu(&r).show(|ui| {
+                    component_menu(ui, st, w, edits, slot, id, cid, type_name, index, count)
+                });
+            });
         });
         let (_, header_resp, _) = header.body(|ui| {
             if let Some(script) = &missing {
@@ -957,55 +1011,13 @@ fn components(
                 }
             }
         });
-        header_resp.response.context_menu(|ui| {
-            if ui.button("Reset").clicked() {
-                edits.push((Edit::Reset(slot), 0));
-                ui.close();
-            }
-            if ui.button("Remove Component").clicked() {
-                edits.push((Edit::Remove(slot), 0));
-                ui.close();
-            }
-            if ui
-                .add_enabled(index > 0, egui::Button::new("Move Up"))
-                .clicked()
-            {
-                edits.push((Edit::Move(slot, -1), 0));
-                ui.close();
-            }
-            if ui
-                .add_enabled(index + 1 < count, egui::Button::new("Move Down"))
-                .clicked()
-            {
-                edits.push((Edit::Move(slot, 1), 0));
-                ui.close();
-            }
-            ui.separator();
-            if ui.button("Copy Component").clicked()
-                && let Some(c) = w.component_dyn(id, cid)
-            {
-                let fields = c
-                    .fields()
-                    .into_iter()
-                    .map(|(k, v)| (k.to_owned(), v))
-                    .collect();
-                st.inspector.clipboard = Some((type_name.to_owned(), fields));
-                ui.close();
-            }
-            let can_paste = st
-                .inspector
-                .clipboard
-                .as_ref()
-                .is_some_and(|(t, _)| t == type_name);
-            if ui
-                .add_enabled(can_paste, egui::Button::new("Paste Component Values"))
-                .clicked()
-                && let Some((_, f)) = &st.inspector.clipboard
-            {
-                edits.push((Edit::Paste(slot, f.clone()), 0));
-                ui.close();
-            }
-        });
+        // Right-click anywhere on the header row (Unity), or the ⋮ button.
+        header_resp
+            .response
+            .interact(egui::Sense::click())
+            .context_menu(|ui| {
+                component_menu(ui, st, w, edits, slot, id, cid, type_name, index, count)
+            });
     }
     if hidden > 0 {
         ui.separator();
@@ -1013,6 +1025,94 @@ fn components(
             "{hidden} component(s) not on every selected object are hidden."
         ));
     }
+}
+
+/// A component's menu (⋮ / right-click on its header): Reset, Remove, Move, Copy/Paste,
+/// Presets.
+#[allow(clippy::too_many_arguments)]
+fn component_menu(
+    ui: &mut egui::Ui,
+    st: &mut EditorState,
+    w: &World,
+    edits: &mut Vec<(Edit, u64)>,
+    slot: Slot,
+    id: GameObjectId,
+    cid: ComponentId,
+    type_name: &'static str,
+    index: usize,
+    count: usize,
+) {
+    if ui.button("Reset").clicked() {
+        edits.push((Edit::Reset(slot), 0));
+        ui.close();
+    }
+    if ui.button("Remove Component").clicked() {
+        edits.push((Edit::Remove(slot), 0));
+        ui.close();
+    }
+    if ui
+        .add_enabled(index > 0, egui::Button::new("Move Up"))
+        .clicked()
+    {
+        edits.push((Edit::Move(slot, -1), 0));
+        ui.close();
+    }
+    if ui
+        .add_enabled(index + 1 < count, egui::Button::new("Move Down"))
+        .clicked()
+    {
+        edits.push((Edit::Move(slot, 1), 0));
+        ui.close();
+    }
+    ui.separator();
+    if ui.button("Copy Component").clicked()
+        && let Some(c) = w.component_dyn(id, cid)
+    {
+        let fields = c
+            .fields()
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), v))
+            .collect();
+        st.inspector.clipboard = Some((type_name.to_owned(), fields));
+        ui.close();
+    }
+    let can_paste = st
+        .inspector
+        .clipboard
+        .as_ref()
+        .is_some_and(|(t, _)| t == type_name);
+    if ui
+        .add_enabled(can_paste, egui::Button::new("Paste Component Values"))
+        .clicked()
+        && let Some((_, f)) = &st.inspector.clipboard
+    {
+        edits.push((Edit::Paste(slot, f.clone()), 0));
+        ui.close();
+    }
+    ui.separator();
+    // Unity's Presets: save these settings, or apply saved ones.
+    if ui.button("Save as Preset...").clicked()
+        && let Some(c) = w.component_dyn(id, cid)
+    {
+        st.inspector.save_preset = Some(oxide_assets::Preset::of(c));
+        ui.close();
+    }
+    let presets = w.resource::<AssetServer>().presets_for(type_name);
+    ui.add_enabled_ui(!presets.is_empty(), |ui| {
+        ui.menu_button("Apply Preset", |ui| {
+            for p in &presets {
+                let name = p
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(p)
+                    .trim_end_matches(".preset");
+                if ui.button(name).on_hover_text(p).clicked() {
+                    st.inspector.apply_preset = Some((slot, p.clone()));
+                    ui.close();
+                }
+            }
+        });
+    });
 }
 
 /// Display name of an asset: its own name for materials and meshes, else the file part of

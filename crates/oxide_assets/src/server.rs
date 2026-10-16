@@ -86,6 +86,9 @@ impl AssetServer {
         for t in crate::asset_types::builtin_types() {
             s.types.register(t);
         }
+        s.register_data_asset::<crate::preset::Preset>(
+            crate::AssetTypeInfo::new("Preset", &["preset"]).color(190, 170, 230),
+        );
         for p in PrimitiveType::ALL {
             // Built-in primitives have lightmap UVs, like Unity's.
             let mut m = p.mesh();

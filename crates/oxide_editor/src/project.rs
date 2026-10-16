@@ -349,6 +349,8 @@ enum Op {
     NewFolder(String),
     /// A new asset of a registered type (by type name) in a folder.
     NewAsset(&'static str, String),
+    /// A Prefab Variant of a prefab asset, next to it.
+    PrefabVariant(String),
 }
 
 /// A Create menu entry: (menu path, asset type name, sort order).
@@ -531,6 +533,10 @@ fn item_menu(ui: &mut egui::Ui, path: &str, dir: bool, ops: &mut Vec<Op>, ps: &m
     }
     if !dir && ui.button("Reimport").clicked() {
         ops.push(Op::Reimport(path.to_owned()));
+        ui.close();
+    }
+    if path.ends_with(".prefab") && ui.button("Create Prefab Variant").clicked() {
+        ops.push(Op::PrefabVariant(path.to_owned()));
         ui.close();
     }
 }
@@ -778,7 +784,14 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
     let list = ps.zoom <= MIN_ZOOM + 0.5;
     let searching = !query.is_empty();
     let central = egui::CentralPanel::default().show(ui, |ui| {
-        let scroll = egui::ScrollArea::vertical()
+        // The background is registered first so the assets drawn after it are on top and
+        // get their own clicks and right-clicks.
+        let bg = ui.interact(
+            ui.available_rect_before_wrap(),
+            ui.id().with("project-bg"),
+            Sense::click(),
+        );
+        let _scroll = egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 if entries.is_empty() {
@@ -832,30 +845,27 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
                 }
             });
         // Clicking empty space clears the asset selection.
-        let bg = ui.interact(
-            scroll.inner_rect,
-            ui.id().with("project-bg"),
-            Sense::click(),
-        );
         if bg.clicked() {
             ps.selected = None;
         }
-        bg.context_menu(|ui| {
-            ui.menu_button("Create", |ui| create_menu(ui, ps, scripts, &menu, &mut ops));
-            let reveal = if cfg!(target_os = "macos") {
-                "Reveal in Finder"
-            } else {
-                "Show in Explorer"
-            };
-            if ui.button(reveal).clicked() {
-                ops.push(Op::Reveal(folder.clone()));
-                ui.close();
-            }
-            if ui.button("Refresh").clicked() {
-                st.actions.push(Action::RefreshAssets);
-                ui.close();
-            }
-        });
+        {
+            bg.context_menu(|ui| {
+                ui.menu_button("Create", |ui| create_menu(ui, ps, scripts, &menu, &mut ops));
+                let reveal = if cfg!(target_os = "macos") {
+                    "Reveal in Finder"
+                } else {
+                    "Show in Explorer"
+                };
+                if ui.button(reveal).clicked() {
+                    ops.push(Op::Reveal(folder.clone()));
+                    ui.close();
+                }
+                if ui.button("Refresh").clicked() {
+                    st.actions.push(Action::RefreshAssets);
+                    ui.close();
+                }
+            });
+        }
     });
     // Drop a Hierarchy object here to make it a prefab (Unity's way of creating prefabs).
     if let Some(payload) = central
@@ -1167,6 +1177,12 @@ fn run(st: &mut EditorState, engine: &mut Engine, root: &Path, op: Op) -> Result
             st.project.start_rename();
             st.project.invalidate();
         }
+        Op::PrefabVariant(base) => {
+            let path = create_prefab_variant(engine, root, &base)?;
+            st.project.selected = Some(path);
+            st.project.start_rename();
+            st.project.invalidate();
+        }
         Op::NewAsset(type_name, folder) => {
             let path = new_asset(engine, root, type_name, &folder)?;
             st.project.selected = Some(path);
@@ -1220,6 +1236,24 @@ pub fn new_asset(
         _ => return Err(format!("{type_name} can't be created from the Create menu")),
     }
     Ok(path)
+}
+
+/// Unity's Create → Prefab Variant on a prefab asset: `<Name> Variant.prefab` beside it,
+/// based on it with no overrides yet.
+pub fn create_prefab_variant(
+    engine: &mut Engine,
+    root: &Path,
+    base: &str,
+) -> Result<String, String> {
+    let stem = base.trim_end_matches(".prefab");
+    let path = asset_ops::unique_path(root, &format!("{stem} Variant.prefab"));
+    // Made from a temporary instance in the open world, so every component type is known.
+    let w = &mut engine.world;
+    let inst = w.instantiate_prefab(base, None)?;
+    let r = w.create_prefab_variant(inst, &path);
+    // Immediately: Edit mode has no end of frame to flush a deferred Destroy.
+    w.destroy_immediate(inst);
+    r.map(|()| path)
 }
 
 /// Template for Create → Shader → Full Screen Shader (a Full Screen Pass effect).
