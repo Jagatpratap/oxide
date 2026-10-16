@@ -76,6 +76,7 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
                     clear: ClearMode::Sky,
                     culling_mask: u32::MAX,
                     occlusion_culling,
+                    antialiasing: Default::default(),
                 };
                 let off = match e.capture(640, 360, Some(vec![view(false)])) {
                     Ok(i) => i,

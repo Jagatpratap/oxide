@@ -365,6 +365,7 @@ pub fn extract(
             });
             if t.cast_shadows {
                 draws.push(DrawItem {
+                    id: 0,
                     mesh: c.lods[(lod + 1).min(LODS - 1)].id(),
                     submesh: 0,
                     material: AssetId::from_path(oxide_assets::DEFAULT_MATERIAL),
@@ -416,6 +417,7 @@ pub fn extract(
                         m.id()
                     });
                 draws.push(DrawItem {
+                    id: 0,
                     mesh: proto.mesh.id(),
                     submesh: s as u32,
                     material: mat,

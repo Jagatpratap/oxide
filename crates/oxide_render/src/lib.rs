@@ -7,6 +7,7 @@
 //! - [`occlusion`]: CPU occlusion culling (occluder depth buffer + min-depth pyramid).
 //! - [`capture`]: offscreen rendering and readback (screenshots, MCP, tests).
 
+pub mod aa;
 pub mod capture;
 pub mod frame;
 pub mod gpu;

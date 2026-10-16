@@ -21,6 +21,49 @@ pub enum ClearMode {
     Nothing,
 }
 
+/// Post-process anti-aliasing of a camera (Unity URP `AntialiasingMode`). MSAA is separate:
+/// [`Environment::msaa_samples`] and [`AntiAliasingSettings::allow_msaa`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AntiAliasing {
+    #[default]
+    None,
+    /// Fast Approximate Anti-aliasing: one edge-smoothing pass after tonemapping.
+    Fxaa,
+    /// Temporal Anti-aliasing: jittered frames accumulated with motion vectors. Turns
+    /// MSAA off for the camera, like URP.
+    Taa,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AntiAliasingSettings {
+    pub mode: AntiAliasing,
+    /// Unity `Camera.allowMSAA`.
+    pub allow_msaa: bool,
+    /// How much of the history is kept each frame (URP "Base Blend Factor").
+    pub taa_base_blend_factor: f32,
+    /// Size of the sub-pixel jitter (URP "Jitter Scale").
+    pub taa_jitter_scale: f32,
+    /// How tightly history is clamped to the current neighbourhood (URP "Variance Clamp
+    /// Scale"): lower = less ghosting, more flicker.
+    pub taa_variance_clamp_scale: f32,
+    /// Identifies the view whose TAA history this is (the camera object; views of the same
+    /// size with different ids keep separate histories).
+    pub history_id: u64,
+}
+
+impl Default for AntiAliasingSettings {
+    fn default() -> Self {
+        Self {
+            mode: AntiAliasing::None,
+            allow_msaa: true,
+            taa_base_blend_factor: 0.875,
+            taa_jitter_scale: 1.0,
+            taa_variance_clamp_scale: 0.9,
+            history_id: 0,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct CameraView {
     pub position: Vector3,
@@ -34,6 +77,9 @@ pub struct CameraView {
     pub culling_mask: u32,
     /// Skip draws hidden behind occluders (Unity `Camera.useOcclusionCulling`).
     pub occlusion_culling: bool,
+    /// Anti-aliasing. With several cameras in one frame, the first camera's setting applies
+    /// to the whole target (TAA needs a single camera; otherwise it falls back to FXAA).
+    pub antialiasing: AntiAliasingSettings,
 }
 
 impl CameraView {
@@ -104,6 +150,8 @@ pub struct PunctualLight {
 
 #[derive(Clone, Debug)]
 pub struct DrawItem {
+    /// Stable identity of the renderer's object (0 = none), used for motion vectors.
+    pub id: u64,
     pub mesh: AssetId,
     pub submesh: u32,
     pub material: AssetId,
@@ -219,6 +267,8 @@ pub struct Environment {
     pub bloom: Option<(f32, f32)>,
     pub vignette: f32,
     pub shadow_distance: f32,
+    /// MSAA samples (1, 2, 4 or 8; clamped to what the GPU supports).
+    pub msaa_samples: u32,
 }
 
 impl Default for Environment {
@@ -235,6 +285,7 @@ impl Default for Environment {
             bloom: Some((0.4, 1.0)),
             vignette: 0.15,
             shadow_distance: 150.0,
+            msaa_samples: 4,
         }
     }
 }
@@ -267,6 +318,9 @@ pub struct RenderFrame {
     /// Pairs of vertices (line list).
     pub lines: Vec<LineVertex>,
     pub time: f32,
+    /// Frame number (Unity `Time.frameCount`): drives TAA jitter, and tells repeated renders
+    /// of one frame (Scene and Game views) apart from new frames.
+    pub frame_index: u64,
 }
 
 impl RenderFrame {

@@ -156,6 +156,7 @@ impl SceneCamera {
             clear: ClearMode::Sky,
             culling_mask: u32::MAX,
             occlusion_culling: true,
+            antialiasing: Default::default(),
         }
     }
 }

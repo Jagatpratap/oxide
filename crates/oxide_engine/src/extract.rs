@@ -8,8 +8,8 @@ use oxide_render::{
     PunctualLight, ReflectionProbeView, RenderFrame, ShadowSettings, SunLight,
 };
 use oxide_scene::{
-    Camera, CameraClearFlags, DebugDraw, FogMode, LODGroup, Light, LightShadows, LightType,
-    MeshFilter, MeshRenderer, OcclusionPortal, Projection, ReflectionProbe,
+    AntialiasingMode, Camera, CameraClearFlags, DebugDraw, FogMode, LODGroup, Light, LightShadows,
+    LightType, MeshFilter, MeshRenderer, MsaaQuality, OcclusionPortal, Projection, ReflectionProbe,
     ReflectionProbeClearFlags, ReflectionProbeMode, ReflectionProbeRefreshMode, RenderSettings,
     ShadowCastingMode, SkinnedMeshRenderer, StaticEditorFlags, World,
 };
@@ -38,6 +38,18 @@ pub fn camera_view(world: &World, id: oxide_scene::GameObjectId, c: &Camera) -> 
         },
         culling_mask: c.culling_mask,
         occlusion_culling: c.use_occlusion_culling,
+        antialiasing: oxide_render::AntiAliasingSettings {
+            mode: match c.antialiasing {
+                AntialiasingMode::None => oxide_render::AntiAliasing::None,
+                AntialiasingMode::FastApproximateAntialiasing => oxide_render::AntiAliasing::Fxaa,
+                AntialiasingMode::TemporalAntiAliasing => oxide_render::AntiAliasing::Taa,
+            },
+            allow_msaa: c.allow_msaa,
+            taa_base_blend_factor: c.taa_base_blend_factor,
+            taa_jitter_scale: c.taa_jitter_scale,
+            taa_variance_clamp_scale: c.taa_variance_clamp_scale,
+            history_id: id.to_bits(),
+        },
     }
 }
 
@@ -78,6 +90,12 @@ pub fn environment(rs: &RenderSettings) -> Environment {
         bloom: rs.bloom.then_some((rs.bloom_intensity, rs.bloom_threshold)),
         vignette: rs.vignette,
         shadow_distance: rs.shadow_distance,
+        msaa_samples: match rs.msaa {
+            MsaaQuality::Disabled => 1,
+            MsaaQuality::Msaa2x => 2,
+            MsaaQuality::Msaa4x => 4,
+            MsaaQuality::Msaa8x => 8,
+        },
     }
 }
 
@@ -96,6 +114,7 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
         cameras: cameras_override.unwrap_or_else(|| cameras(world)),
         environment: environment(&settings),
         time: world.resource::<oxide_core::Time>().time(),
+        frame_index: world.resource::<oxide_core::Time>().frame_count(),
         ..Default::default()
     };
 
@@ -198,6 +217,7 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
                 .or(r.materials.last())
                 .map_or(default_mat, |m| m.id());
             frame.draws.push(DrawItem {
+                id: id.to_bits(),
                 mesh: mesh.id(),
                 submesh: s as u32,
                 material,
@@ -230,6 +250,7 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
             };
             for s in 0..mesh.submeshes.len().max(1) {
                 frame.draws.push(DrawItem {
+                    id: id.to_bits(),
                     mesh: mesh_h.id(),
                     submesh: s as u32,
                     material: r
@@ -260,6 +281,7 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
         }
         for s in 0..mesh.submeshes.len().max(1) {
             frame.draws.push(DrawItem {
+                id: id.to_bits(),
                 mesh: mesh_h.id(),
                 submesh: s as u32,
                 material: r
@@ -437,6 +459,7 @@ mod lod_tests {
             clear: ClearMode::Sky,
             culling_mask: u32::MAX,
             occlusion_culling: true,
+            antialiasing: Default::default(),
         }
     }
 

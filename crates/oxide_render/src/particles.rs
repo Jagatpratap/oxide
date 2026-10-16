@@ -8,8 +8,10 @@ use std::collections::HashMap;
 
 pub struct ParticleGpu {
     layout: wgpu::BindGroupLayout,
-    alpha: wgpu::RenderPipeline,
-    additive: wgpu::RenderPipeline,
+    pipeline_layout: wgpu::PipelineLayout,
+    module: wgpu::ShaderModule,
+    /// `(alpha, additive)` per MSAA sample count.
+    pipelines: HashMap<u32, (wgpu::RenderPipeline, wgpu::RenderPipeline)>,
     groups: HashMap<Option<AssetId>, wgpu::BindGroup>,
     sampler: wgpu::Sampler,
     white: wgpu::TextureView,
@@ -21,8 +23,7 @@ impl ParticleGpu {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         frame_layout: &wgpu::BindGroupLayout,
-        module: &wgpu::ShaderModule,
-        samples: u32,
+        module: wgpu::ShaderModule,
     ) -> Self {
         use wgpu::util::DeviceExt;
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -51,53 +52,6 @@ impl ParticleGpu {
             bind_group_layouts: &[Some(frame_layout), Some(&layout)],
             immediate_size: 0,
         });
-        let make = |blend: wgpu::BlendState, label: &str| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&pl),
-                vertex: wgpu::VertexState {
-                    module,
-                    entry_point: Some("vs_main"),
-                    compilation_options: Default::default(),
-                    buffers: &[Some(wgpu::VertexBufferLayout {
-                        array_stride: std::mem::size_of::<ParticleInstance>() as u64,
-                        step_mode: wgpu::VertexStepMode::Instance,
-                        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32, 2 => Float32x4, 3 => Float32],
-                    })],
-                },
-                primitive: wgpu::PrimitiveState::default(),
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: DEPTH_FORMAT,
-                    depth_write_enabled: Some(false),
-                    depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
-                    stencil: Default::default(),
-                    bias: Default::default(),
-                }),
-                multisample: wgpu::MultisampleState { count: samples, ..Default::default() },
-                fragment: Some(wgpu::FragmentState {
-                    module,
-                    entry_point: Some("fs_main"),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState { format: HDR_FORMAT, blend: Some(blend), write_mask: wgpu::ColorWrites::ALL })],
-                }),
-                multiview_mask: None,
-                cache: None,
-            })
-        };
-        let additive_blend = wgpu::BlendState {
-            color: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::SrcAlpha,
-                dst_factor: wgpu::BlendFactor::One,
-                operation: wgpu::BlendOperation::Add,
-            },
-            alpha: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::Zero,
-                dst_factor: wgpu::BlendFactor::One,
-                operation: wgpu::BlendOperation::Add,
-            },
-        };
-        let alpha = make(wgpu::BlendState::ALPHA_BLENDING, "particles alpha");
-        let additive = make(additive_blend, "particles additive");
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("particle sampler"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -134,13 +88,70 @@ impl ParticleGpu {
         });
         Self {
             layout,
-            alpha,
-            additive,
+            pipeline_layout: pl,
+            module,
+            pipelines: HashMap::new(),
             groups: HashMap::new(),
             sampler,
             white,
             buffer,
         }
+    }
+
+    /// Creates the alpha and additive pipelines for `samples` MSAA samples.
+    pub fn ensure_pipelines(&mut self, device: &wgpu::Device, samples: u32) {
+        if self.pipelines.contains_key(&samples) {
+            return;
+        }
+        let make = |blend: wgpu::BlendState, label: &str| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&self.pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &self.module,
+                    entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: &[Some(wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<ParticleInstance>() as u64,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32, 2 => Float32x4, 3 => Float32],
+                    })],
+                },
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(false),
+                    depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: wgpu::MultisampleState { count: samples, ..Default::default() },
+                fragment: Some(wgpu::FragmentState {
+                    module: &self.module,
+                    entry_point: Some("fs_main"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState { format: HDR_FORMAT, blend: Some(blend), write_mask: wgpu::ColorWrites::ALL })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let additive_blend = wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::SrcAlpha,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::Zero,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+        };
+        let alpha = make(wgpu::BlendState::ALPHA_BLENDING, "particles alpha");
+        let additive = make(additive_blend, "particles additive");
+        let pipelines = (alpha, additive);
+        self.pipelines.insert(samples, pipelines);
     }
 
     fn group(
@@ -229,11 +240,16 @@ impl ParticleGpu {
         ranges
     }
 
+    /// Draws with the pipelines for `samples` (see [`Self::ensure_pipelines`]).
     pub fn draw(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         ranges: &[(Option<AssetId>, ParticleBlend, std::ops::Range<u32>)],
+        samples: u32,
     ) -> u32 {
+        let Some((alpha, additive)) = self.pipelines.get(&samples) else {
+            return 0;
+        };
         let mut calls = 0;
         pass.set_vertex_buffer(0, self.buffer.slice(..));
         for (tex, blend, r) in ranges {
@@ -241,8 +257,8 @@ impl ParticleGpu {
                 continue;
             };
             pass.set_pipeline(match blend {
-                ParticleBlend::Alpha => &self.alpha,
-                ParticleBlend::Additive => &self.additive,
+                ParticleBlend::Alpha => alpha,
+                ParticleBlend::Additive => additive,
             });
             pass.set_bind_group(1, g, &[]);
             pass.draw(0..6, r.clone());

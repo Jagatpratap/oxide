@@ -70,6 +70,7 @@ struct Instance {
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 struct MainKey {
+    samples: u32,
     transparent: bool,
     double_sided: bool,
     skinned: bool,
@@ -98,8 +99,47 @@ struct ShadowBatch {
     instances: std::ops::Range<u32>,
 }
 
+/// Pipelines of the scene pass that depend on the MSAA sample count.
+struct FixedPipelines {
+    sky: wgpu::RenderPipeline,
+    solid: wgpu::RenderPipeline,
+    depth_clear: wgpu::RenderPipeline,
+    line: wgpu::RenderPipeline,
+    terrain: wgpu::RenderPipeline,
+}
+
+/// Object transforms and bone matrices of the previous and current frame (for motion
+/// vectors). Several renders of one frame (Scene and Game views) share the same entry.
+#[derive(Default)]
+struct MotionHistory {
+    frame: Option<u64>,
+    prev_models: HashMap<(u64, u32), Matrix4x4>,
+    curr_models: HashMap<(u64, u32), Matrix4x4>,
+    prev_joints: Vec<Matrix4x4>,
+    curr_joints: Vec<Matrix4x4>,
+    prev_joint_offsets: HashMap<u64, u32>,
+    curr_joint_offsets: HashMap<u64, u32>,
+}
+
+/// Accumulated TAA result of one view (camera × size).
+struct TaaHistory {
+    textures: [wgpu::TextureView; 2],
+    /// Index of the texture holding the latest result.
+    current: usize,
+    valid: bool,
+    /// Unjittered view-projection of the last frame.
+    prev_vp: Matrix4x4,
+    position: Vector3,
+    forward: Vector3,
+    last_used: u64,
+}
+
 struct Targets {
     last_used: u64,
+    /// FXAA input (tonemapped, sRGB-encoded), made on first use.
+    ldr: Option<wgpu::TextureView>,
+    /// Motion vectors, made on first TAA use.
+    motion: Option<wgpu::TextureView>,
     bloom: Vec<(wgpu::TextureView, u32, u32)>,
     msaa: Option<wgpu::TextureView>,
     resolve_tex: wgpu::Texture,
@@ -131,7 +171,8 @@ pub struct SceneRenderer {
     pub gpu_assets: GpuAssets,
     terrain: crate::terrain::TerrainGpu,
     particles: crate::particles::ParticleGpu,
-    sample_count: u32,
+    /// MSAA sample counts the GPU supports for the HDR and depth formats.
+    supported_samples: Vec<u32>,
     frame_layout: wgpu::BindGroupLayout,
     shadow_layout: wgpu::BindGroupLayout,
     main_layout: wgpu::PipelineLayout,
@@ -140,10 +181,18 @@ pub struct SceneRenderer {
     shadow_module: wgpu::ShaderModule,
     main_pipelines: HashMap<MainKey, wgpu::RenderPipeline>,
     shadow_pipelines: HashMap<ShadowKey, wgpu::RenderPipeline>,
-    sky_pipeline: wgpu::RenderPipeline,
-    solid_pipeline: wgpu::RenderPipeline,
-    depth_clear_pipeline: wgpu::RenderPipeline,
-    line_pipeline: wgpu::RenderPipeline,
+    sky_module: wgpu::ShaderModule,
+    lines_module: wgpu::ShaderModule,
+    terrain_module: wgpu::ShaderModule,
+    frame_only_layout: wgpu::PipelineLayout,
+    terrain_pipeline_layout: wgpu::PipelineLayout,
+    /// Sky/clear, line and terrain pipelines per MSAA sample count.
+    fixed: HashMap<u32, FixedPipelines>,
+    aa: crate::aa::AaGpu,
+    motion_buffer: wgpu::Buffer,
+    prev_joint_buffer: wgpu::Buffer,
+    motion: MotionHistory,
+    taa_histories: HashMap<(u64, u32, u32), TaaHistory>,
     frame_buffers: Vec<wgpu::Buffer>,
     frame_groups: Vec<wgpu::BindGroup>,
     light_buffer: wgpu::Buffer,
@@ -158,12 +207,13 @@ pub struct SceneRenderer {
     shadow_groups: Vec<wgpu::BindGroup>,
     groups_dirty: bool,
     /// Render targets per output size (Scene and Game views render at different sizes).
-    targets: HashMap<(u32, u32), Targets>,
+    targets: HashMap<(u32, u32, u32), Targets>,
     frame_index: u64,
     post: PostProcessor,
     /// One occlusion buffer per camera of the last frame.
     occlusion: Vec<crate::occlusion::OcclusionBuffer>,
     pub last_stats: RenderStats,
+    last_samples: u32,
     reflections: ReflectionProbes,
 }
 
@@ -248,12 +298,15 @@ fn uniform_entry(binding: u32, vis: wgpu::ShaderStages) -> wgpu::BindGroupLayout
 impl SceneRenderer {
     pub fn new(gpu: &Gpu) -> Self {
         let device = &gpu.device;
-        let flags = gpu.adapter.get_texture_format_features(HDR_FORMAT).flags;
-        let sample_count = if flags.sample_count_supported(4) {
-            4
-        } else {
-            1
-        };
+        let hdr_flags = gpu.adapter.get_texture_format_features(HDR_FORMAT).flags;
+        let depth_flags = gpu.adapter.get_texture_format_features(DEPTH_FORMAT).flags;
+        let supported_samples = [1, 2, 4, 8]
+            .into_iter()
+            .filter(|&n| {
+                n == 1
+                    || hdr_flags.sample_count_supported(n) && depth_flags.sample_count_supported(n)
+            })
+            .collect();
         let gpu_assets = GpuAssets::new(device, &gpu.queue);
         let vf = wgpu::ShaderStages::VERTEX_FRAGMENT;
         let frame_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -335,91 +388,6 @@ impl SceneRenderer {
         let sky_module = shader(device, "sky.wgsl", include_str!("shaders/sky.wgsl"));
         let lines_module = shader(device, "lines.wgsl", include_str!("shaders/lines.wgsl"));
 
-        let ms = wgpu::MultisampleState {
-            count: sample_count,
-            ..Default::default()
-        };
-        let fullscreen = |entry: &str, write_color: bool, label: &str| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&frame_only),
-                vertex: wgpu::VertexState {
-                    module: &sky_module,
-                    entry_point: Some("vs_main"),
-                    compilation_options: Default::default(),
-                    buffers: &[],
-                },
-                primitive: wgpu::PrimitiveState::default(),
-                // Writes depth 0 (reversed-Z far plane): this also clears depth in the viewport.
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: DEPTH_FORMAT,
-                    depth_write_enabled: Some(true),
-                    depth_compare: Some(wgpu::CompareFunction::Always),
-                    stencil: Default::default(),
-                    bias: Default::default(),
-                }),
-                multisample: ms,
-                fragment: Some(wgpu::FragmentState {
-                    module: &sky_module,
-                    entry_point: Some(entry),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: HDR_FORMAT,
-                        blend: None,
-                        write_mask: if write_color {
-                            wgpu::ColorWrites::ALL
-                        } else {
-                            wgpu::ColorWrites::empty()
-                        },
-                    })],
-                }),
-                multiview_mask: None,
-                cache: None,
-            })
-        };
-        let sky_pipeline = fullscreen("fs_main", true, "sky pipeline");
-        let solid_pipeline = fullscreen("fs_solid", true, "solid clear pipeline");
-        let depth_clear_pipeline = fullscreen("fs_solid", false, "depth clear pipeline");
-
-        let line_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("line pipeline"),
-            layout: Some(&frame_only),
-            vertex: wgpu::VertexState {
-                module: &lines_module,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<LineVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4],
-                })],
-            },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::LineList,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: ms,
-            fragment: Some(wgpu::FragmentState {
-                module: &lines_module,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: HDR_FORMAT,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
-
         let shadow_size = 2048;
         let shadow_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("sun shadow cascades"),
@@ -472,75 +440,34 @@ impl SceneRenderer {
             .map(|_| buf("shadow view", 64, wgpu::BufferUsages::UNIFORM))
             .collect();
         let post = PostProcessor::new(device);
-        let mut terrain = crate::terrain::TerrainGpu::new(device);
-        {
-            let terrain_src = format!(
+        let terrain = crate::terrain::TerrainGpu::new(device);
+        let terrain_module = shader(
+            device,
+            "terrain.wgsl",
+            &format!(
                 "{}\n{}",
                 include_str!("shaders/terrain.wgsl"),
                 include_str!("shaders/lighting.wgsl")
-            );
-            let module = shader(device, "terrain.wgsl", &terrain_src);
-            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            ),
+        );
+        let terrain_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("terrain pipeline layout"),
                 bind_group_layouts: &[Some(&frame_layout), Some(&terrain.layout)],
                 immediate_size: 0,
             });
-            let buffers = vertex_layouts(false);
-            terrain.pipeline = Some(device.create_render_pipeline(
-                &wgpu::RenderPipelineDescriptor {
-                    label: Some("terrain pipeline"),
-                    layout: Some(&layout),
-                    vertex: wgpu::VertexState {
-                        module: &module,
-                        entry_point: Some("vs_main"),
-                        compilation_options: Default::default(),
-                        buffers: &buffers,
-                    },
-                    primitive: wgpu::PrimitiveState {
-                        front_face: wgpu::FrontFace::Cw,
-                        cull_mode: Some(wgpu::Face::Back),
-                        ..Default::default()
-                    },
-                    depth_stencil: Some(wgpu::DepthStencilState {
-                        format: DEPTH_FORMAT,
-                        depth_write_enabled: Some(true),
-                        depth_compare: Some(wgpu::CompareFunction::Greater),
-                        stencil: Default::default(),
-                        bias: Default::default(),
-                    }),
-                    multisample: ms,
-                    fragment: Some(wgpu::FragmentState {
-                        module: &module,
-                        entry_point: Some("fs_main"),
-                        compilation_options: Default::default(),
-                        targets: &[Some(wgpu::ColorTargetState {
-                            format: HDR_FORMAT,
-                            blend: None,
-                            write_mask: wgpu::ColorWrites::ALL,
-                        })],
-                    }),
-                    multiview_mask: None,
-                    cache: None,
-                },
-            ));
-        }
         let particle_module = shader(
             device,
             "particles.wgsl",
             include_str!("shaders/particles.wgsl"),
         );
-        let particles = crate::particles::ParticleGpu::new(
-            device,
-            &gpu.queue,
-            &frame_layout,
-            &particle_module,
-            sample_count,
-        );
+        let particles =
+            crate::particles::ParticleGpu::new(device, &gpu.queue, &frame_layout, particle_module);
         Self {
             terrain,
             particles,
             gpu_assets,
-            sample_count,
+            supported_samples,
             frame_layout,
             shadow_layout,
             main_layout,
@@ -549,10 +476,17 @@ impl SceneRenderer {
             shadow_module,
             main_pipelines: HashMap::new(),
             shadow_pipelines: HashMap::new(),
-            sky_pipeline,
-            solid_pipeline,
-            depth_clear_pipeline,
-            line_pipeline,
+            sky_module,
+            lines_module,
+            terrain_module,
+            frame_only_layout: frame_only,
+            terrain_pipeline_layout,
+            fixed: HashMap::new(),
+            aa: crate::aa::AaGpu::new(device),
+            motion_buffer: buf("motion instances", 144 * 256, wgpu::BufferUsages::VERTEX),
+            prev_joint_buffer: buf("previous joints", 64 * 256, wgpu::BufferUsages::STORAGE),
+            motion: MotionHistory::default(),
+            taa_histories: HashMap::new(),
             frame_buffers: Vec::new(),
             frame_groups: Vec::new(),
             light_buffer: buf(
@@ -575,16 +509,164 @@ impl SceneRenderer {
             post,
             occlusion: Vec::new(),
             last_stats: RenderStats::default(),
+            last_samples: 1,
             reflections: ReflectionProbes::new(device, &gpu.queue),
         }
     }
 
+    /// The largest supported MSAA sample count not above `wanted`.
+    pub fn sample_count_for(&self, wanted: u32) -> u32 {
+        self.supported_samples
+            .iter()
+            .copied()
+            .filter(|&n| n <= wanted.max(1))
+            .max()
+            .unwrap_or(1)
+    }
+
+    /// MSAA samples used by the last render.
     pub fn sample_count(&self) -> u32 {
-        self.sample_count
+        self.last_samples
+    }
+
+    fn ensure_fixed(&mut self, device: &wgpu::Device, samples: u32) {
+        if self.fixed.contains_key(&samples) {
+            return;
+        }
+        let ms = wgpu::MultisampleState {
+            count: samples,
+            ..Default::default()
+        };
+        let (sky_module, frame_only) = (&self.sky_module, &self.frame_only_layout);
+        let fullscreen = |entry: &str, write_color: bool, label: &str| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(frame_only),
+                vertex: wgpu::VertexState {
+                    module: sky_module,
+                    entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                primitive: wgpu::PrimitiveState::default(),
+                // Writes depth 0 (reversed-Z far plane): this also clears depth in the viewport.
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::Always),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: ms,
+                fragment: Some(wgpu::FragmentState {
+                    module: sky_module,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: HDR_FORMAT,
+                        blend: None,
+                        write_mask: if write_color {
+                            wgpu::ColorWrites::ALL
+                        } else {
+                            wgpu::ColorWrites::empty()
+                        },
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let sky = fullscreen("fs_main", true, "sky pipeline");
+        let solid = fullscreen("fs_solid", true, "solid clear pipeline");
+        let depth_clear = fullscreen("fs_solid", false, "depth clear pipeline");
+        let line = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("line pipeline"),
+            layout: Some(frame_only),
+            vertex: wgpu::VertexState {
+                module: &self.lines_module,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<LineVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4],
+                })],
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::LineList,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: ms,
+            fragment: Some(wgpu::FragmentState {
+                module: &self.lines_module,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: HDR_FORMAT,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let buffers = vertex_layouts(false);
+        let terrain = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("terrain pipeline"),
+            layout: Some(&self.terrain_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &self.terrain_module,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &buffers,
+            },
+            primitive: wgpu::PrimitiveState {
+                front_face: wgpu::FrontFace::Cw,
+                cull_mode: Some(wgpu::Face::Back),
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Greater),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: ms,
+            fragment: Some(wgpu::FragmentState {
+                module: &self.terrain_module,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: HDR_FORMAT,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        self.fixed.insert(
+            samples,
+            FixedPipelines {
+                sky,
+                solid,
+                depth_clear,
+                line,
+                terrain,
+            },
+        );
     }
 
     fn main_pipeline(&mut self, device: &wgpu::Device, key: MainKey) -> &wgpu::RenderPipeline {
-        let (module, layout, ms) = (&self.lit_module, &self.main_layout, self.sample_count);
+        let (module, layout, ms) = (&self.lit_module, &self.main_layout, key.samples);
         self.main_pipelines.entry(key).or_insert_with(|| {
             let buffers = vertex_layouts(key.skinned);
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -679,10 +761,10 @@ impl SceneRenderer {
         })
     }
 
-    fn ensure_targets(&mut self, device: &wgpu::Device, w: u32, h: u32) {
+    fn ensure_targets(&mut self, device: &wgpu::Device, w: u32, h: u32, samples: u32) {
         self.frame_index += 1;
         let now = self.frame_index;
-        if let Some(t) = self.targets.get_mut(&(w, h)) {
+        if let Some(t) = self.targets.get_mut(&(w, h, samples)) {
             t.last_used = now;
             return;
         }
@@ -715,8 +797,7 @@ impl SceneRenderer {
                 .create_view(&Default::default())
         };
         let ra = wgpu::TextureUsages::RENDER_ATTACHMENT;
-        let msaa =
-            (self.sample_count > 1).then(|| tex("hdr msaa", HDR_FORMAT, self.sample_count, ra));
+        let msaa = (samples > 1).then(|| tex("hdr msaa", HDR_FORMAT, samples, ra));
         let resolve_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("hdr"),
             size: wgpu::Extent3d {
@@ -732,12 +813,20 @@ impl SceneRenderer {
             view_formats: &[],
         });
         let resolve = resolve_tex.create_view(&Default::default());
-        let depth = tex("depth", DEPTH_FORMAT, self.sample_count, ra);
+        // Single-sample depth is read by the motion vector and TAA passes.
+        let depth_usage = if samples == 1 {
+            ra | wgpu::TextureUsages::TEXTURE_BINDING
+        } else {
+            ra
+        };
+        let depth = tex("depth", DEPTH_FORMAT, samples, depth_usage);
         let bloom = PostProcessor::bloom_chain(device, w, h);
         self.targets.insert(
-            (w, h),
+            (w, h, samples),
             Targets {
                 last_used: now,
+                ldr: None,
+                motion: None,
                 bloom,
                 msaa,
                 resolve_tex,
@@ -854,26 +943,72 @@ impl SceneRenderer {
     ) -> RenderStats {
         let (w, h) = (width.max(1), height.max(1));
         let captures = self.update_reflections(gpu, assets, frame);
-        let (mut encoder, mut stats) = self.render_scene(gpu, assets, frame, w, h, None);
+        let (mut encoder, mut stats, out) = self.render_scene(gpu, assets, frame, w, h, None);
         stats.reflection_probes = self.reflections.active_count();
         stats.probe_captures = captures;
 
         // ---- post-processing into the target ------------------------------------------
+        let key = (w, h, out.samples);
+        if out.fxaa {
+            let t = self.targets.get_mut(&key).expect("targets");
+            t.ldr.get_or_insert_with(|| {
+                gpu.device
+                    .create_texture(&wgpu::TextureDescriptor {
+                        label: Some("ldr (fxaa input)"),
+                        size: wgpu::Extent3d {
+                            width: w,
+                            height: h,
+                            depth_or_array_layers: 1,
+                        },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: crate::aa::LDR_FORMAT,
+                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                            | wgpu::TextureUsages::TEXTURE_BINDING,
+                        view_formats: &[],
+                    })
+                    .create_view(&Default::default())
+            });
+        }
         let env = &frame.environment;
-        let targets = self.targets.get(&(w, h)).expect("targets");
+        let targets = &self.targets[&key];
+        let hdr = match out.taa {
+            Some(k) => {
+                let hist = &self.taa_histories[&k];
+                &hist.textures[hist.current]
+            }
+            None => &targets.resolve,
+        };
         let bloom = env.bloom.filter(|_| !frame.cameras.is_empty());
+        let (post_target, post_format) = match &targets.ldr {
+            Some(ldr) if out.fxaa => (ldr, crate::aa::LDR_FORMAT),
+            _ => (target, format),
+        };
         self.post.run(
             &gpu.device,
             &gpu.queue,
             &mut encoder,
-            &targets.resolve,
+            hdr,
             &targets.bloom,
-            target,
-            format,
+            post_target,
+            post_format,
             env.exposure,
             bloom,
             env.vignette,
         );
+        if out.fxaa {
+            self.aa.fxaa(
+                &gpu.device,
+                &gpu.queue,
+                &mut encoder,
+                post_target,
+                target,
+                format,
+                w,
+                h,
+            );
+        }
         gpu.queue.submit([encoder.finish()]);
         self.last_stats = stats;
         stats
@@ -959,7 +1094,7 @@ impl SceneRenderer {
                 center,
                 exclude: job.probe.as_ref().map(|_| job.slot),
             };
-            let (mut encoder, _) = self.render_scene(
+            let (mut encoder, _, out) = self.render_scene(
                 gpu,
                 assets,
                 &capture_frame,
@@ -967,7 +1102,7 @@ impl SceneRenderer {
                 CAPTURE_H,
                 Some(capture),
             );
-            let targets = &self.targets[&(CAPTURE_W, CAPTURE_H)];
+            let targets = &self.targets[&(CAPTURE_W, CAPTURE_H, out.samples)];
             for face in 0..6u32 {
                 encoder.copy_texture_to_texture(
                     wgpu::TexelCopyTextureInfo {
@@ -1013,10 +1148,37 @@ impl SceneRenderer {
         w: u32,
         h: u32,
         capture: Option<Capture>,
-    ) -> (wgpu::CommandEncoder, RenderStats) {
+    ) -> (wgpu::CommandEncoder, RenderStats, SceneOutput) {
         let device = &gpu.device;
         let queue = &gpu.queue;
-        self.ensure_targets(device, w, h);
+
+        // Anti-aliasing comes from the first camera; TAA needs exactly one camera.
+        let aa = frame
+            .cameras
+            .first()
+            .map(|c| c.antialiasing)
+            .unwrap_or_default();
+        let mut mode = if capture.is_some() {
+            AntiAliasing::None
+        } else {
+            aa.mode
+        };
+        if mode == AntiAliasing::Taa && frame.cameras.len() != 1 {
+            mode = AntiAliasing::Fxaa;
+        }
+        let taa = mode == AntiAliasing::Taa;
+        let samples = if taa || !aa.allow_msaa {
+            1
+        } else {
+            self.sample_count_for(frame.environment.msaa_samples)
+        };
+        self.ensure_targets(device, w, h, samples);
+        self.ensure_fixed(device, samples);
+        self.particles.ensure_pipelines(device, samples);
+        if capture.is_none() {
+            self.last_samples = samples;
+            self.motion.advance(frame);
+        }
         let mut stats = RenderStats {
             cameras: frame.cameras.len() as u32,
             ..Default::default()
@@ -1254,6 +1416,8 @@ impl SceneRenderer {
 
         // ---- per-camera culling and batching -------------------------------------------
         let mut camera_batches: Vec<(Vec<Batch>, Vec<Batch>)> = Vec::new();
+        // (jittered, unjittered view-projection, frustum) of the TAA camera.
+        let mut taa_matrices: Option<(Matrix4x4, Matrix4x4, [Vector4; 6])> = None;
         let mut camera_terrain: Vec<Vec<(AssetId, AssetId, u32)>> = Vec::new();
         let mut occlusion = std::mem::take(&mut self.occlusion);
         occlusion.resize_with(frame.cameras.len(), Default::default);
@@ -1261,6 +1425,24 @@ impl SceneRenderer {
             let aspect = aspect0(cam);
             let vp = cam.view_projection(aspect);
             let planes = frustum_planes(&vp);
+            // TAA: shift the projection by a sub-pixel amount each frame (culling stays
+            // unjittered).
+            let draw_vp = if taa {
+                let (jx, jy) = crate::aa::jitter(frame.frame_index);
+                let s = aa.taa_jitter_scale;
+                let pw = (w as f32 * cam.viewport[2]).max(1.0);
+                let ph = (h as f32 * cam.viewport[3]).max(1.0);
+                let j = Matrix4x4::from_translation(Vector3::new(
+                    2.0 * jx * s / pw,
+                    2.0 * jy * s / ph,
+                    0.0,
+                ));
+                let jittered = j * vp;
+                taa_matrices = Some((jittered, vp, planes));
+                jittered
+            } else {
+                vp
+            };
             let occ = &mut occlusion[ci];
             let occlusion_on = cam.occlusion_culling;
             if occlusion_on {
@@ -1374,6 +1556,7 @@ impl SceneRenderer {
             let mut ob: Vec<Batch> = Vec::new();
             for r in opaque {
                 let key = MainKey {
+                    samples,
                     transparent: false,
                     double_sided: r.double_sided,
                     skinned: r.item.joint_offset.is_some(),
@@ -1406,6 +1589,7 @@ impl SceneRenderer {
                     instances.push(make_instance(r));
                     Batch {
                         key: MainKey {
+                            samples,
                             transparent: true,
                             double_sided: r.double_sided,
                             skinned: r.item.joint_offset.is_some(),
@@ -1496,9 +1680,9 @@ impl SceneRenderer {
                 cvp[i] = cascade_vp[i].to_cols_array();
             }
             let u = FrameUniform {
-                view_proj: vp.to_cols_array(),
+                view_proj: draw_vp.to_cols_array(),
                 view: view.to_cols_array(),
-                inv_view_proj: vp.inverse().to_cols_array(),
+                inv_view_proj: draw_vp.inverse().to_cols_array(),
                 camera_pos: cam.position.extend(frame.time).to_array(),
                 sun_dir: sun_dir.extend(frame.sun.is_some() as u32 as f32).to_array(),
                 sun_color: [sun_color[0], sun_color[1], sun_color[2], strength],
@@ -1606,7 +1790,8 @@ impl SceneRenderer {
         }
 
         // ---- camera passes -------------------------------------------------------------
-        let targets = self.targets.get(&(w, h)).expect("targets");
+        let targets = self.targets.get(&(w, h, samples)).expect("targets");
+        let fixed = &self.fixed[&samples];
         let (color_view, resolve) = match &targets.msaa {
             Some(m) => (m, Some(&targets.resolve)),
             None => (&targets.resolve, None),
@@ -1627,7 +1812,12 @@ impl SceneRenderer {
                     view: &targets.depth,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(0.0),
-                        store: wgpu::StoreOp::Discard,
+                        // TAA reads depth afterwards.
+                        store: if taa {
+                            wgpu::StoreOp::Store
+                        } else {
+                            wgpu::StoreOp::Discard
+                        },
                     }),
                     stencil_ops: None,
                 }),
@@ -1643,19 +1833,17 @@ impl SceneRenderer {
                 pass.set_scissor_rect(px as u32, py as u32, (pw as u32).max(1), (ph as u32).max(1));
                 pass.set_bind_group(0, &self.frame_groups[ci], &[]);
                 match cam.clear {
-                    ClearMode::Sky => pass.set_pipeline(&self.sky_pipeline),
-                    ClearMode::Color(_) => pass.set_pipeline(&self.solid_pipeline),
-                    ClearMode::DepthOnly => pass.set_pipeline(&self.depth_clear_pipeline),
+                    ClearMode::Sky => pass.set_pipeline(&fixed.sky),
+                    ClearMode::Color(_) => pass.set_pipeline(&fixed.solid),
+                    ClearMode::DepthOnly => pass.set_pipeline(&fixed.depth_clear),
                     ClearMode::Nothing => {}
                 }
                 if cam.clear != ClearMode::Nothing {
                     pass.draw(0..3, 0..1);
                 }
                 pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-                if let Some(tp) = &self.terrain.pipeline
-                    && !camera_terrain[ci].is_empty()
-                {
-                    pass.set_pipeline(tp);
+                if !camera_terrain[ci].is_empty() {
+                    pass.set_pipeline(&fixed.terrain);
                     for &(data, mesh_id, idx) in &camera_terrain[ci] {
                         let (Some(bg), Some(mesh)) = (
                             self.terrain.bind_group(data),
@@ -1692,10 +1880,10 @@ impl SceneRenderer {
                     pass.draw_indexed(range, 0, b.instances.clone());
                 }
                 if !particle_ranges.is_empty() {
-                    stats.draw_calls += self.particles.draw(&mut pass, &particle_ranges);
+                    stats.draw_calls += self.particles.draw(&mut pass, &particle_ranges, samples);
                 }
                 if !frame.lines.is_empty() {
-                    pass.set_pipeline(&self.line_pipeline);
+                    pass.set_pipeline(&fixed.line);
                     pass.set_vertex_buffer(0, self.line_buffer.slice(..));
                     pass.draw(0..frame.lines.len() as u32, 0..1);
                 }
@@ -1703,7 +1891,296 @@ impl SceneRenderer {
         }
 
         self.occlusion = occlusion;
-        (encoder, stats)
+
+        // ---- TAA: motion vectors, then the history resolve ----------------------------
+        let mut taa_key = None;
+        if let (true, Some((jittered, vp, planes)), Some(cam)) =
+            (taa, taa_matrices, frame.cameras.first())
+        {
+            // Visible opaque objects that moved since the last frame.
+            let mut moving = Vec::new();
+            for r in &resolved {
+                let d = r.item;
+                if r.transparent
+                    || d.shadows_only
+                    || d.id == 0
+                    || cam.culling_mask & (1u32 << (d.layer & 31)) == 0
+                    || (r.radius.is_finite() && !sphere_visible(&planes, r.center, r.radius))
+                {
+                    continue;
+                }
+                let instance = match d.joint_offset {
+                    Some(offset) => match self.motion.prev_joint_offsets.get(&d.id) {
+                        Some(&prev) => crate::aa::MotionInstance {
+                            model: Matrix4x4::IDENTITY.to_cols_array(),
+                            prev: Matrix4x4::IDENTITY.to_cols_array(),
+                            extra: [offset, prev, 0, 0],
+                        },
+                        None => continue,
+                    },
+                    None => match self.motion.prev_models.get(&(d.id, d.submesh)) {
+                        Some(prev) if *prev != d.model => crate::aa::MotionInstance {
+                            model: d.model.to_cols_array(),
+                            prev: prev.to_cols_array(),
+                            extra: [0; 4],
+                        },
+                        _ => continue,
+                    },
+                };
+                moving.push(MotionDraw {
+                    mesh: d.mesh,
+                    submesh: d.submesh,
+                    skinned: d.joint_offset.is_some(),
+                    instance,
+                });
+            }
+            let key = (aa.history_id, w, h);
+            taa_key = Some(key);
+            self.taa_resolve(
+                gpu,
+                &mut encoder,
+                &moving,
+                (w, h, samples),
+                key,
+                cam,
+                (jittered, vp),
+                aa,
+            );
+        }
+        (
+            encoder,
+            stats,
+            SceneOutput {
+                samples,
+                taa: taa_key,
+                fxaa: mode == AntiAliasing::Fxaa,
+            },
+        )
+    }
+}
+
+/// What `render_scene` produced, for post-processing.
+struct SceneOutput {
+    samples: u32,
+    /// TAA history holding the anti-aliased HDR image (else it is the resolve target).
+    taa: Option<(u64, u32, u32)>,
+    fxaa: bool,
+}
+
+/// An object in the motion-vector pass.
+struct MotionDraw {
+    mesh: AssetId,
+    submesh: u32,
+    skinned: bool,
+    instance: crate::aa::MotionInstance,
+}
+
+impl MotionHistory {
+    /// On a new frame, the current transforms become the previous ones and `frame`'s are
+    /// recorded. Repeated renders of the same frame change nothing.
+    fn advance(&mut self, frame: &RenderFrame) {
+        if self.frame == Some(frame.frame_index) {
+            return;
+        }
+        self.frame = Some(frame.frame_index);
+        std::mem::swap(&mut self.prev_models, &mut self.curr_models);
+        std::mem::swap(&mut self.prev_joints, &mut self.curr_joints);
+        std::mem::swap(&mut self.prev_joint_offsets, &mut self.curr_joint_offsets);
+        self.curr_models.clear();
+        self.curr_joint_offsets.clear();
+        for d in frame.draws.iter().filter(|d| d.id != 0) {
+            match d.joint_offset {
+                Some(o) => {
+                    self.curr_joint_offsets.insert(d.id, o);
+                }
+                None => {
+                    self.curr_models.insert((d.id, d.submesh), d.model);
+                }
+            }
+        }
+        self.curr_joints.clone_from(&frame.joints);
+    }
+}
+
+impl SceneRenderer {
+    /// Motion vectors for `moving`, then TAA from the scene target and the view's history
+    /// into the history's other texture.
+    #[allow(clippy::too_many_arguments)]
+    fn taa_resolve(
+        &mut self,
+        gpu: &Gpu,
+        encoder: &mut wgpu::CommandEncoder,
+        moving: &[MotionDraw],
+        target_key: (u32, u32, u32),
+        key: (u64, u32, u32),
+        cam: &CameraView,
+        (jittered, vp): (Matrix4x4, Matrix4x4),
+        aa: AntiAliasingSettings,
+    ) {
+        let device = &gpu.device;
+        let queue = &gpu.queue;
+        let (w, h, _) = target_key;
+        let hdr_tex = |label: &str, format: wgpu::TextureFormat| {
+            device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d {
+                        width: w,
+                        height: h,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                })
+                .create_view(&Default::default())
+        };
+        let now = self.frame_index;
+        if !self.taa_histories.contains_key(&key) {
+            while self.taa_histories.len() >= 4 {
+                let oldest = *self
+                    .taa_histories
+                    .iter()
+                    .min_by_key(|(_, t)| t.last_used)
+                    .expect("non-empty")
+                    .0;
+                self.taa_histories.remove(&oldest);
+            }
+            self.taa_histories.insert(
+                key,
+                TaaHistory {
+                    textures: [
+                        hdr_tex("taa history", HDR_FORMAT),
+                        hdr_tex("taa history", HDR_FORMAT),
+                    ],
+                    current: 0,
+                    valid: false,
+                    prev_vp: vp,
+                    position: cam.position,
+                    forward: cam.rotation * Vector3::Z,
+                    last_used: now,
+                },
+            );
+        }
+        let targets = self.targets.get_mut(&target_key).expect("targets");
+        targets
+            .motion
+            .get_or_insert_with(|| hdr_tex("motion vectors", crate::aa::MOTION_FORMAT));
+        let targets = &self.targets[&target_key];
+        let hist = self.taa_histories.get_mut(&key).expect("inserted");
+        hist.last_used = now;
+        // A camera cut (teleport or sudden turn) starts over instead of smearing.
+        let forward = cam.rotation * Vector3::Z;
+        let cut = cam.position.distance(hist.position) > 10.0 || forward.dot(hist.forward) < 0.7;
+        let valid = hist.valid && !cut;
+        let prev_vp = if valid { hist.prev_vp } else { vp };
+
+        // Motion vectors.
+        let joint_bytes = (self.motion.prev_joints.len() * 64) as u64;
+        grow_buffer(
+            device,
+            &mut self.prev_joint_buffer,
+            joint_bytes,
+            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            "previous joints",
+        );
+        if !self.motion.prev_joints.is_empty() {
+            let flat: Vec<f32> = self
+                .motion
+                .prev_joints
+                .iter()
+                .flat_map(|m| m.to_cols_array())
+                .collect();
+            queue.write_buffer(&self.prev_joint_buffer, 0, bytemuck::cast_slice(&flat));
+        }
+        let instances: Vec<crate::aa::MotionInstance> = moving.iter().map(|m| m.instance).collect();
+        grow_buffer(
+            device,
+            &mut self.motion_buffer,
+            (instances.len() * std::mem::size_of::<crate::aa::MotionInstance>()) as u64,
+            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            "motion instances",
+        );
+        if !instances.is_empty() {
+            queue.write_buffer(&self.motion_buffer, 0, bytemuck::cast_slice(&instances));
+        }
+        let motion_view = targets.motion.as_ref().expect("made above");
+        {
+            let group = self.aa.motion_group(
+                device,
+                queue,
+                jittered.to_cols_array(),
+                vp.to_cols_array(),
+                prev_vp.to_cols_array(),
+                &self.joint_buffer,
+                &self.prev_joint_buffer,
+                &targets.depth,
+            );
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("motion vectors"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: motion_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            pass.set_bind_group(0, &group, &[]);
+            pass.set_vertex_buffer(1, self.motion_buffer.slice(..));
+            for (i, m) in moving.iter().enumerate() {
+                let Some(mesh) = self.gpu_assets.meshes.get(&m.mesh) else {
+                    continue;
+                };
+                if m.skinned {
+                    let Some(skin) = &mesh.skin else { continue };
+                    pass.set_pipeline(&self.aa.motion_skinned);
+                    pass.set_vertex_buffer(2, skin.slice(..));
+                } else {
+                    pass.set_pipeline(&self.aa.motion_static);
+                }
+                pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                let i = i as u32;
+                pass.draw_indexed(mesh.submeshes[m.submesh as usize].clone(), 0, i..i + 1);
+            }
+        }
+
+        // Resolve.
+        let current = hist.current;
+        self.aa.taa(
+            device,
+            queue,
+            encoder,
+            crate::aa::TaaUniform {
+                inv_vp: vp.inverse().to_cols_array(),
+                prev_vp: prev_vp.to_cols_array(),
+                params: [
+                    (1.0 - aa.taa_base_blend_factor).clamp(0.02, 1.0),
+                    aa.taa_variance_clamp_scale.max(0.1),
+                    valid as u32 as f32,
+                    0.0,
+                ],
+                texel: [1.0 / w as f32, 1.0 / h as f32, w as f32, h as f32],
+            },
+            &targets.resolve,
+            &hist.textures[current],
+            motion_view,
+            &targets.depth,
+            &hist.textures[1 - current],
+        );
+        hist.current = 1 - current;
+        hist.valid = true;
+        hist.prev_vp = vp;
+        hist.position = cam.position;
+        hist.forward = forward;
     }
 }
 
@@ -1732,6 +2209,7 @@ fn face_cameras(
                 clear,
                 culling_mask,
                 occlusion_culling: false,
+                antialiasing: Default::default(),
             }
         })
         .collect()

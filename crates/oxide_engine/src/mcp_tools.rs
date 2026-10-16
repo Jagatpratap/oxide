@@ -370,6 +370,7 @@ pub fn build_server(bus: Arc<Bus>) -> McpServer {
                     projection: ProjectionKind::Perspective { fov },
                     near: 0.1, far: 5000.0, viewport: [0.0, 0.0, 1.0, 1.0], clear: ClearMode::Sky, culling_mask: u32::MAX,
                     occlusion_culling: true,
+                    antialiasing: Default::default(),
                 }])
             } else if args.contains_key("camera") {
                 let id = tri!(obj_arg(args, &e.world, "camera"));

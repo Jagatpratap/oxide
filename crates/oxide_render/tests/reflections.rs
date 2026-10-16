@@ -8,6 +8,7 @@ const SIZE: u32 = 128;
 
 fn draw(mesh: PrimitiveType, material: AssetId, pos: Vector3, scale: Vector3) -> DrawItem {
     DrawItem {
+        id: 0,
         mesh: AssetId::from_path(&mesh.mesh_path()),
         submesh: 0,
         material,
@@ -55,6 +56,7 @@ fn scene(assets: &mut AssetServer) -> RenderFrame {
             clear: ClearMode::Sky,
             culling_mask: u32::MAX,
             occlusion_culling: false,
+            antialiasing: Default::default(),
         }],
         draws: vec![
             draw(

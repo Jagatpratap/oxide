@@ -20,7 +20,6 @@ struct GpuTerrain {
 
 pub struct TerrainGpu {
     pub layout: wgpu::BindGroupLayout,
-    pub pipeline: Option<wgpu::RenderPipeline>,
     cache: HashMap<AssetId, GpuTerrain>,
     layer_sampler: wgpu::Sampler,
     control_sampler: wgpu::Sampler,
@@ -108,7 +107,6 @@ impl TerrainGpu {
         });
         Self {
             layout,
-            pipeline: None,
             cache: HashMap::new(),
             layer_sampler,
             control_sampler,

@@ -23,6 +23,26 @@ pub enum CameraClearFlags {
     Nothing,
 }
 
+/// Post-process anti-aliasing (Unity URP `AntialiasingMode`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
+pub enum AntialiasingMode {
+    #[default]
+    None,
+    FastApproximateAntialiasing,
+    /// Turns MSAA off for this camera, like URP.
+    TemporalAntiAliasing,
+}
+
+/// MSAA sample count (URP asset "Anti Aliasing (MSAA)").
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
+pub enum MsaaQuality {
+    Disabled,
+    Msaa2x,
+    #[default]
+    Msaa4x,
+    Msaa8x,
+}
+
 /// Unity `Camera`. <https://docs.unity3d.com/Manual/class-Camera.html>
 #[derive(Clone, Debug, Reflect)]
 pub struct Camera {
@@ -44,6 +64,19 @@ pub struct Camera {
     pub post_processing: bool,
     /// Skip renderers hidden behind occluders (Unity `Camera.useOcclusionCulling`).
     pub use_occlusion_culling: bool,
+    /// Post-process anti-aliasing (URP camera "Anti-aliasing").
+    pub antialiasing: AntialiasingMode,
+    /// Use the project's MSAA on this camera (Unity `Camera.allowMSAA`).
+    pub allow_msaa: bool,
+    /// TAA: share of the history kept each frame (URP "Base Blend Factor").
+    #[reflect(range(0, 1))]
+    pub taa_base_blend_factor: f32,
+    /// TAA: sub-pixel jitter size (URP "Jitter Scale").
+    #[reflect(range(0, 1))]
+    pub taa_jitter_scale: f32,
+    /// TAA: history clamp tightness; lower = less ghosting, more flicker.
+    #[reflect(range(0.5, 2))]
+    pub taa_variance_clamp_scale: f32,
 }
 
 impl Default for Camera {
@@ -61,6 +94,11 @@ impl Default for Camera {
             culling_mask: u32::MAX,
             post_processing: true,
             use_occlusion_culling: true,
+            antialiasing: AntialiasingMode::None,
+            allow_msaa: true,
+            taa_base_blend_factor: 0.875,
+            taa_jitter_scale: 1.0,
+            taa_variance_clamp_scale: 0.9,
         }
     }
 }
@@ -281,6 +319,8 @@ pub struct RenderSettings {
     /// Multiplies LOD transition distances (Unity `QualitySettings.lodBias`): 2 keeps
     /// detail twice as far.
     pub lod_bias: f32,
+    /// Multisample anti-aliasing for all cameras that allow it (URP asset MSAA).
+    pub msaa: MsaaQuality,
 }
 
 impl Default for RenderSettings {
@@ -307,6 +347,7 @@ impl Default for RenderSettings {
             shadow_distance: 150.0,
             vignette: 0.15,
             lod_bias: 1.0,
+            msaa: MsaaQuality::Msaa4x,
         }
     }
 }
