@@ -185,15 +185,19 @@ with `.meta` files in P3).
   [Grid snapping](https://docs.unity3d.com/Manual/GridSnapping.html),
   [Overlays](https://docs.unity3d.com/Manual/overlays.html),
   [Gizmos & handles](https://docs.unity3d.com/Manual/gizmos-and-handles.html))
-- ◐ **Inspector**: reflected fields, add/remove component, multi-object edit, lock, debug mode, custom editors
+- ☑ **Inspector**: reflected fields, add/remove component, multi-object edit, lock, debug mode, custom editors
+  for script components (`CustomEditor`), asset Inspectors (texture import settings, materials, models, prefabs,
+  scripts/shaders, labels, preview)
   ([Inspector](https://docs.unity3d.com/Manual/UsingTheInspector.html))
-- ◐ **Project** window: folder tree, thumbnails, search, labels, drag-into-scene
+- ☑ **Project** window: folder tree, Favorites, thumbnails (textures, materials, models, prefabs), grid/list zoom,
+  search with `t:`/`l:`, Asset Labels, rename/duplicate/delete/move (references rewritten), drag-into-scene
   ([Project window](https://docs.unity3d.com/Manual/ProjectView.html))
 - ◐ **Game** view: play/pause/step, resolution/aspect, stats, maximize on play
   ([Game view](https://docs.unity3d.com/Manual/GameView.html))
 - ◐ **Console**: collapse, filter, stack trace, click-to-source
   ([Console](https://docs.unity3d.com/Manual/console-window.html))
-- ◐ Toolbar, status bar, Undo/Redo + Undo History, selection history, shortcuts manager, search
+- ☑ Toolbar, status bar, Undo/Redo + Undo History, selection history, Shortcuts Manager (rebinding, conflicts,
+  keyboard view), Search window (⌘K: assets, objects, menus, settings)
   ([Toolbar](https://docs.unity3d.com/Manual/toolbar-lp.html),
   [Undo](https://docs.unity3d.com/Manual/UndoWindow.html),
   [Shortcuts](https://docs.unity3d.com/Manual/ShortcutsManager.html),
@@ -217,7 +221,10 @@ and selection history; Project Settings and Preferences windows; Console call si
 traces; Game view control bar. Rect (T) and Transform (Y) tools, Pivot/Center (Z) and
 Global/Local (X) handle modes; 2D mode; Scene lighting and Effects (skybox, fog, particles,
 post-processing) toggles; Hierarchy eye/hand toggles for scene visibility and pickability.
-MCP: `editor_*` tools drive all of it. Not yet: movable overlay panels, Scene view audio
+Project window thumbnails, grid/list zoom, Favorites, Unity search syntax, Asset Labels and asset
+operations with reference fix-up; asset Inspectors; Shortcuts Manager; Search window (⌘K); custom
+Inspectors for scripts (`CustomEditor`, `InspectorGui`, `scripts! { ...; editors: T }`).
+MCP: `editor_*` tools drive all of it (`editor_project`, `editor_shortcuts`, `editor_search` added). Not yet: movable overlay panels, Scene view audio
 toggle, Rect tool for multiple objects at once (it resizes the active object).
 
 ### P3 — Asset pipeline
@@ -228,12 +235,13 @@ toggle, Rect tool for multiple objects at once (it resizes the active object).
   ([Asset types](https://docs.unity3d.com/Manual/AssetTypes.html),
   [Importing](https://docs.unity3d.com/Manual/import-assets.html))
 - ◐ Import settings: Texture Importer settings in `<texture>.meta` (type, sRGB, max size, mipmaps,
-  wrap/filter/aniso, compression), editable over MCP (`texture_import_settings`); Inspector UI and
-  Presets ☐
+  wrap/filter/aniso, compression), editable over MCP (`texture_import_settings`) and in the Inspector
+  with Apply/Revert ☑; Presets ☐
   ([Texture Importer](https://docs.unity3d.com/Manual/class-TextureImporter.html),
   [Presets](https://docs.unity3d.com/Manual/Presets.html))
 - ◐ File watching: textures (and their .meta), materials, shaders and render textures re-import
-  when edited on disk (polled twice a second); models/audio, background re-import, asset labels ☐
+  when edited on disk (polled twice a second); models/audio, background re-import ☐. Asset Labels ☑
+  (in `.meta`, searchable with `l:`)
 - ◐ Runtime loading: multi-scene (`SceneHandle`, additive scenes, `MoveGameObjectToScene`),
   `LoadSceneAsync` / `UnloadSceneAsync` with `allowSceneActivation` (files parsed on a background
   thread, activated one per frame); `WorldStreamer` cells + Tools → World Streaming → Split Scene
@@ -411,7 +419,8 @@ runner, native plugins.
   ([Packages](https://docs.unity3d.com/Manual/PackagesList.html))
 - ☐ Node graph framework → Shader Graph, VFX Graph, Animator, visual scripting all built on it
   ([Graph Toolkit](https://docs.unity3d.com/Manual/gtk/gtk-index.html))
-- ☐ Editor extension API: custom windows, custom inspectors/property drawers, overlays, tools, menu items
+- ◐ Editor extension API: custom inspectors ☑ (`CustomEditor` + `InspectorGui`); custom windows, property drawers,
+  overlays, tools, menu items ☐
   ([Extending the Editor](https://docs.unity3d.com/Manual/extending-the-editor.html),
   [Custom overlay](https://docs.unity3d.com/Manual/overlays-custom.html),
   [Custom tools](https://docs.unity3d.com/Manual/UsingCustomEditorTools.html))

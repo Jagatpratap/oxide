@@ -98,6 +98,9 @@ only when the editor is running (not with `--player`).
 | `editor_set_tool` | Selects the Scene view tool (hand, move, rotate, scale, rect, transform), handle orientation (global/local) and handle position (pivot/center) | yes |
 | `editor_scene_camera` | Positions the Scene view camera: `position` + `look_at`, or `pivot`/`yaw`/`pitch`/`distance`, or `frame` (an object to frame, like pressing F); also `draw_mode`, `mode_2d`, `lighting` and `effects` | yes |
 | `editor_scene_visibility` | The Hierarchy's eye and hand toggles: hide/show objects in the Scene view, disable/enable picking, `show_all`, or turn scene visibility off | yes |
+| `editor_project` | Project window: list a folder, search (`car t:Prefab l:Vehicle`), select, create folders, rename, move, duplicate, delete, read/set Asset Labels, icon zoom. Moves rewrite references | yes |
+| `editor_shortcuts` | Shortcuts Manager: list commands with their shortcuts, defaults and conflicts; set (`Cmd+Shift+K`, optionally reassigning) or reset; saved in Preferences | yes |
+| `editor_search` | Search window: find assets, scene objects (`t:Camera`), menu items and settings (`p:` `h:` `m:` `set:`); activate a result or show the popup | yes |
 | `editor_capture` | PNG of the whole editor window (menus, Hierarchy, Scene/Game views, Inspector, ...), as the user sees it | no |
 | `reflection_probes` | Lists Reflection Probes (box, mode, refresh mode, importance) and the last frame's reflection stats (`active` = probes with a captured cubemap, up to 15; `captures` = cubemaps captured that frame, sky included). | yes |
 | `create_render_texture` | Creates a `.renderTexture` asset (Unity RenderTexture) for a Camera's `target_texture` and for materials (mirrors, screens, scopes) | yes |
