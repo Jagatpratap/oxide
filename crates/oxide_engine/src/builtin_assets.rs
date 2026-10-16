@@ -7,6 +7,16 @@ use oxide_input::{Input, InputActionAsset};
 use oxide_scene::{PlayerInput, World};
 
 pub fn register(assets: &mut AssetServer) {
+    assets.register_data_asset::<oxide_scene::CurvePresetLibrary>(
+        AssetTypeInfo::new("CurvePresetLibrary", &["curves"])
+            .menu("Presets/Curve Preset Library", "New Curves", 300)
+            .color(140, 220, 160),
+    );
+    assets.register_data_asset::<oxide_scene::GradientPresetLibrary>(
+        AssetTypeInfo::new("GradientPresetLibrary", &["gradients"])
+            .menu("Presets/Gradient Preset Library", "New Gradients", 301)
+            .color(220, 160, 220),
+    );
     assets.register_data_asset::<oxide_scene::Tile>(
         AssetTypeInfo::new("Tile", &["tile"])
             .menu("2D/Tiles/Tile", "New Tile", 81)

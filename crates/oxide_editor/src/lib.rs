@@ -284,6 +284,8 @@ enum Modal {
 pub struct EditorState {
     /// Selected objects; the last one is the active object (shown in the Inspector).
     pub selection: Vec<GameObjectId>,
+    /// When the curve / gradient preset libraries were last read.
+    pub presets_synced: f64,
     pub tool: Tool,
     /// Handles follow the object's rotation (Unity "Local") instead of world axes.
     pub local_handles: bool,
@@ -354,6 +356,7 @@ pub struct EditorState {
 impl EditorState {
     fn new() -> Self {
         Self {
+            presets_synced: 0.0,
             selection: Vec::new(),
             tool: Tool::Move,
             local_handles: false,
@@ -1637,6 +1640,12 @@ impl Shell for Editor {
             self.st.selection.retain(|&id| w.is_alive(id));
         }
         project::sync_asset_types(&engine.world.resource::<oxide_assets::AssetServer>().types);
+        // Curve / gradient preset libraries for the Curve and Gradient Editors.
+        let now = oxide_core::time::realtime_since_startup();
+        if now - self.st.presets_synced > 1.0 {
+            self.st.presets_synced = now;
+            curve_editor::sync_presets(engine.world.resource_mut::<oxide_assets::AssetServer>());
+        }
         // Sprite Resolvers show their sprite in Edit mode too.
         oxide_scene::sprite_library::resolve_all(&mut engine.world);
         let animation_open = self.dock.iter_all_tabs().any(|(_, t)| *t == Tab::Animation);

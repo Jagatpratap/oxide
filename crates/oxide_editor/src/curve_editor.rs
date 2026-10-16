@@ -13,8 +13,111 @@ use oxide_core::{
 use oxide_math::Color;
 
 const ROW_H: f32 = 20.0;
+
+/// Presets from the project's `.curves` / `.gradients` libraries (the editor refreshes
+/// them; fields have no AssetServer), and presets saved from the editors, waiting to be
+/// written by the editor.
+#[derive(Default)]
+pub struct PresetLibraries {
+    pub curves: Vec<(String, AnimationCurve)>,
+    pub gradients: Vec<(String, Gradient)>,
+    pub save_curves: Vec<(String, AnimationCurve)>,
+    pub save_gradients: Vec<(String, Gradient)>,
+}
+
+pub static PRESETS: std::sync::Mutex<PresetLibraries> = std::sync::Mutex::new(PresetLibraries {
+    curves: Vec::new(),
+    gradients: Vec::new(),
+    save_curves: Vec::new(),
+    save_gradients: Vec::new(),
+});
+
+fn presets() -> std::sync::MutexGuard<'static, PresetLibraries> {
+    PRESETS.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 const CURVE_COLOR: Color32 = Color32::from_rgb(230, 80, 80);
 const MIN_COLOR: Color32 = Color32::from_rgb(90, 160, 240);
+
+/// Refreshes [`PRESETS`] from the project's preset libraries and writes presets saved from
+/// the editors into `Assets/Editor/Presets.curves` / `.gradients`. The editor calls this
+/// about once a second.
+pub fn sync_presets(assets: &mut oxide_assets::AssetServer) {
+    use oxide_scene::{CurvePreset, CurvePresetLibrary, GradientPreset, GradientPresetLibrary};
+    let (save_c, save_g) = {
+        let mut p = presets();
+        (
+            std::mem::take(&mut p.save_curves),
+            std::mem::take(&mut p.save_gradients),
+        )
+    };
+    if !save_c.is_empty() {
+        let path = "Assets/Editor/Presets.curves";
+        let mut lib = if assets.load_data(path).is_ok() {
+            assets
+                .data
+                .get_dyn(path)
+                .and_then(|d| d.as_any().downcast_ref::<CurvePresetLibrary>().cloned())
+                .unwrap_or_default()
+        } else {
+            CurvePresetLibrary::default()
+        };
+        lib.presets
+            .extend(save_c.into_iter().map(|(name, curve)| CurvePreset { name, curve }));
+        if let Err(e) = assets.save_data(path, Box::new(lib)) {
+            oxide_core::debug_log_warning!("{path}: {e}");
+        }
+    }
+    if !save_g.is_empty() {
+        let path = "Assets/Editor/Presets.gradients";
+        let mut lib = if assets.load_data(path).is_ok() {
+            assets
+                .data
+                .get_dyn(path)
+                .and_then(|d| d.as_any().downcast_ref::<GradientPresetLibrary>().cloned())
+                .unwrap_or_default()
+        } else {
+            GradientPresetLibrary::default()
+        };
+        lib.presets
+            .extend(save_g.into_iter().map(|(name, gradient)| GradientPreset { name, gradient }));
+        if let Err(e) = assets.save_data(path, Box::new(lib)) {
+            oxide_core::debug_log_warning!("{path}: {e}");
+        }
+    }
+    let mut curves = vec![];
+    for path in assets.paths_of_type("CurvePresetLibrary") {
+        if !assets.data.contains(&path) {
+            let _ = assets.load_data(&path);
+        }
+        if let Some(lib) = assets
+            .data
+            .get_dyn(&path)
+            .and_then(|d| d.as_any().downcast_ref::<CurvePresetLibrary>())
+        {
+            curves.extend(lib.presets.iter().map(|p| (p.name.clone(), p.curve.clone())));
+        }
+    }
+    let mut gradients = vec![];
+    for path in assets.paths_of_type("GradientPresetLibrary") {
+        if !assets.data.contains(&path) {
+            let _ = assets.load_data(&path);
+        }
+        if let Some(lib) = assets
+            .data
+            .get_dyn(&path)
+            .and_then(|d| d.as_any().downcast_ref::<GradientPresetLibrary>())
+        {
+            gradients.extend(
+                lib.presets
+                    .iter()
+                    .map(|p| (p.name.clone(), p.gradient.clone())),
+            );
+        }
+    }
+    let mut p = presets();
+    p.curves = curves;
+    p.gradients = gradients;
+}
 
 /// Type names drawn by [`value_field`].
 pub fn handles(type_name: Option<&str>) -> bool {
@@ -696,19 +799,49 @@ fn curve_editor(
                 ]),
             ),
         ];
-        for (name, preset) in presets {
+        let project: Vec<(String, AnimationCurve)> = self::presets().curves.clone();
+        let all = presets
+            .into_iter()
+            .map(|(n, c)| (n.to_owned(), c, false))
+            .chain(project.into_iter().map(|(n, c)| (n, c, true)));
+        for (name, preset, from_project) in all {
             let (r, resp) = ui.allocate_exact_size(vec2(40.0, 26.0), Sense::click());
             draw_curve_preview(ui.painter(), r, &[(&preset, CURVE_COLOR)], resp.hovered());
-            if resp.on_hover_text(name).clicked()
+            if from_project {
+                ui.painter().rect_stroke(
+                    r,
+                    2.0,
+                    Stroke::new(1.0, Color32::from_rgb(140, 220, 160)),
+                    StrokeKind::Inside,
+                );
+            }
+            let tip = if from_project {
+                format!("{name} (project preset)")
+            } else {
+                name.clone()
+            };
+            if resp.on_hover_text(tip).clicked()
                 && let Some((c, _)) = curves.first_mut()
             {
                 let (pre, post) = (c.pre_wrap_mode, c.post_wrap_mode);
                 **c = preset;
-                c.pre_wrap_mode = pre;
-                c.post_wrap_mode = post;
+                if !from_project {
+                    c.pre_wrap_mode = pre;
+                    c.post_wrap_mode = post;
+                }
                 st.selected = None;
                 changed = true;
             }
+        }
+        if let Some((c, _)) = curves.first()
+            && ui
+                .small_button("+")
+                .on_hover_text("Save this curve as a preset (Assets/Editor/Presets.curves)")
+                .clicked()
+        {
+            let mut p = self::presets();
+            let n = p.curves.len() + p.save_curves.len() + 1;
+            p.save_curves.push((format!("Curve {n}"), (*c).clone()));
         }
     });
     changed
@@ -1147,6 +1280,29 @@ fn gradient_editor(ui: &mut egui::Ui, st: &mut GradientState, g: &mut Gradient) 
             st.dragging = find(a, drag_time).map(|i| (a, i));
         }
     }
+    // Presets: the project's gradient libraries, and saving this one.
+    ui.horizontal_wrapped(|ui| {
+        ui.weak("Presets");
+        let list: Vec<(String, Gradient)> = presets().gradients.clone();
+        for (name, preset) in list {
+            let (r, resp) = ui.allocate_exact_size(vec2(40.0, 18.0), Sense::click());
+            draw_gradient(ui.painter(), r, &preset);
+            if resp.on_hover_text(&name).clicked() {
+                *g = preset;
+                st.selected = None;
+                changed = true;
+            }
+        }
+        if ui
+            .small_button("+")
+            .on_hover_text("Save this gradient as a preset (Assets/Editor/Presets.gradients)")
+            .clicked()
+        {
+            let mut p = presets();
+            let n = p.gradients.len() + p.save_gradients.len() + 1;
+            p.save_gradients.push((format!("Gradient {n}"), g.clone()));
+        }
+    });
     changed
 }
 
@@ -1379,6 +1535,26 @@ pub fn min_max_gradient_field(ui: &mut egui::Ui, g: &mut MinMaxGradient, salt: &
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn saved_presets_become_project_presets() {
+        let dir = std::env::temp_dir().join(format!("oxide-presets-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("Assets")).unwrap();
+        let mut assets = oxide_assets::AssetServer::new(&dir);
+        oxide_engine::builtin_assets::register(&mut assets);
+        let torque = AnimationCurve::ease_in_out(0.0, 100.0, 7000.0, 340.0);
+        presets().save_curves.push(("Torque".into(), torque.clone()));
+        presets().save_gradients.push(("Fire".into(), Gradient::default()));
+        sync_presets(&mut assets);
+        assert!(dir.join("Assets/Editor/Presets.curves").is_file());
+        let p = presets();
+        assert!(p.curves.iter().any(|(n, c)| n == "Torque" && *c == torque));
+        assert!(p.gradients.iter().any(|(n, _)| n == "Fire"));
+        drop(p);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     use super::*;
 
     #[test]

@@ -18,6 +18,7 @@ pub mod quality;
 pub mod resources;
 pub mod scene_manager;
 pub mod serialize;
+pub mod presets;
 pub mod sprite_library;
 pub mod system;
 pub mod tilemap;
@@ -36,6 +37,7 @@ pub use quality::{QualityLevel, QualitySettings, ShadowQuality};
 pub use resources::Resources;
 pub use scene_manager::{AsyncOperation, PumpResult, SceneOpStatus, SceneOperations};
 pub use serialize::{ComponentData, ObjectData, SceneFile};
+pub use presets::{CurvePreset, CurvePresetLibrary, GradientPreset, GradientPresetLibrary};
 pub use sprite_library::{SpriteLibrary, SpriteLibraryAsset, SpriteResolver};
 pub use system::{DebugDraw, DebugLine, System};
 pub use tilemap::{
