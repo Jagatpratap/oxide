@@ -18,6 +18,7 @@ pub mod quality;
 pub mod resources;
 pub mod scene_manager;
 pub mod serialize;
+pub mod sprite_library;
 pub mod system;
 pub mod tilemap;
 pub mod timers;
@@ -35,6 +36,7 @@ pub use quality::{QualityLevel, QualitySettings, ShadowQuality};
 pub use resources::Resources;
 pub use scene_manager::{AsyncOperation, PumpResult, SceneOpStatus, SceneOperations};
 pub use serialize::{ComponentData, ObjectData, SceneFile};
+pub use sprite_library::{SpriteLibrary, SpriteLibraryAsset, SpriteResolver};
 pub use system::{DebugDraw, DebugLine, System};
 pub use tilemap::{
     AnimatedTile, Grid, RuleNeighbor, RuleOutput, RuleTile, Tile, TileBase, TileCell, TilePalette,
@@ -63,6 +65,8 @@ pub fn register_builtin(reg: &mut ComponentRegistry) {
     reg.register::<RenderObjectsRendererFeature>("Rendering/Renderer Features/Render Objects");
     reg.register::<player_input::PlayerInput>("Input/Player Input");
     reg.register::<SpriteRenderer>("Rendering/Sprite Renderer");
+    reg.register::<sprite_library::SpriteLibrary>("2D Animation/Sprite Library");
+    reg.register::<sprite_library::SpriteResolver>("2D Animation/Sprite Resolver");
     reg.register::<tilemap::Grid>("Tilemap/Grid");
     reg.register::<tilemap::Tilemap>("Tilemap/Tilemap");
     reg.register::<tilemap::TilemapRenderer>("Tilemap/Tilemap Renderer");

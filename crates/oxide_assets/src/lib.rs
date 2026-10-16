@@ -35,7 +35,8 @@ pub use animation::{
     AnimationClip, AnimationEvent, AnimatorController, AnimatorControllerLayer,
     AnimatorLayerBlendingMode, AnimatorOverrideController, AnimatorState, AnimatorStateMachine,
     AvatarMask, BlendTree2DType, ClipOverride, Condition, ConditionMode, Interpolation, Motion,
-    Parameter, ParameterType, PropertyCurve, Track, TransformCurves, Transition,
+    ObjectCurve, ObjectKey, Parameter, ParameterType, PropertyCurve, Track, TransformCurves,
+    Transition,
 };
 pub use asset_types::{AssetTypeInfo, AssetTypeRegistry, CreateKind, DataAsset, DataAssets};
 pub use handle::{Asset, AssetId, Assets, Handle};

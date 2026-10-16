@@ -493,9 +493,10 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
             "The Animation window (it edits the clips of the selected object's Animator): returns its target, \
              clip, playhead, record and preview state. `time` moves the playhead (seconds, snapped to 60 fps \
              frames), `record` toggles Record mode (moving objects or changing component values then writes \
-             keys), `preview` poses the object with the clip in Edit mode, `clip` picks one of the target's clips.",
+             keys), `preview` poses the object with the clip in Edit mode, `clip` picks one of the target's clips, \
+             `add_sprites` (a sprite texture or sprite) keys its sprites as a 12 fps flipbook on the SpriteRenderer.",
             schema(
-                json!({ "time": { "type": "number" }, "record": { "type": "boolean" }, "preview": { "type": "boolean" }, "clip": { "type": "string" } }),
+                json!({ "time": { "type": "number" }, "record": { "type": "boolean" }, "preview": { "type": "boolean" }, "clip": { "type": "string" }, "add_sprites": { "type": "string" } }),
                 &[],
             ),
         ),
@@ -508,6 +509,11 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
                     args.get("preview").and_then(Json::as_bool),
                     args.get("clip").and_then(Json::as_str),
                 );
+                if let Some(sp) = args.get("add_sprites").and_then(Json::as_str)
+                    && let Err(err) = ed.st.animation.add_sprites(&mut e.world, sp)
+                {
+                    return ToolResult::error(err);
+                }
                 ToolResult::json(ed.st.animation.state_json())
             })
         },

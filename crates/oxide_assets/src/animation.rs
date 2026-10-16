@@ -130,6 +130,53 @@ pub struct AnimationClip {
     /// channel, script fields), like Unity's generic float curves.
     #[serde(default)]
     pub properties: Vec<PropertyCurve>,
+    /// Keyframes that swap an asset or text field (Unity's object reference curves): a
+    /// SpriteRenderer's sprite for sprite animation, a Sprite Resolver's label.
+    #[serde(default)]
+    pub object_curves: Vec<ObjectCurve>,
+}
+
+/// One object-reference key: from `time` on, the field holds `value`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ObjectKey {
+    pub time: f32,
+    /// An asset path (`Assets/hero.png#run_2`) or text.
+    pub value: String,
+}
+
+/// Stepped keys on an asset or string field of a component.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ObjectCurve {
+    pub path: String,
+    pub component: String,
+    pub property: String,
+    /// Sorted by time.
+    pub keys: Vec<ObjectKey>,
+}
+
+impl ObjectCurve {
+    /// The value at `t` (the last key at or before it; the first key before that).
+    pub fn sample(&self, t: f32) -> Option<&str> {
+        let i = self.keys.partition_point(|k| k.time <= t + 1e-6);
+        self.keys.get(i.saturating_sub(1)).map(|k| k.value.as_str())
+    }
+
+    /// Adds or replaces the key at `t`, keeping order.
+    pub fn set_key(&mut self, t: f32, value: &str) {
+        match self.keys.iter_mut().find(|k| (k.time - t).abs() < 1e-4) {
+            Some(k) => k.value = value.to_owned(),
+            None => {
+                let i = self.keys.partition_point(|k| k.time < t);
+                self.keys.insert(
+                    i,
+                    ObjectKey {
+                        time: t,
+                        value: value.to_owned(),
+                    },
+                );
+            }
+        }
+    }
 }
 
 /// A float curve on a component property of a transform below the animated root (Unity
@@ -193,7 +240,13 @@ impl AnimationClip {
             })
             .flatten();
         let props = self.properties.iter().map(|p| p.curve.time_range().1);
-        self.length = transforms.chain(props).fold(0.0, f32::max);
+        // A sprite animation's last frame lasts one frame (12 fps, Unity's default).
+        let objects = self.object_curves.iter().filter_map(|c| {
+            c.keys
+                .last()
+                .map(|k| k.time + if c.keys.len() > 1 { 1.0 / 12.0 } else { 0.0 })
+        });
+        self.length = transforms.chain(props).chain(objects).fold(0.0, f32::max);
     }
 }
 

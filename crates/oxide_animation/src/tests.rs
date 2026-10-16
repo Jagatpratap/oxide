@@ -341,3 +341,56 @@ fn property_curves_drive_component_fields() {
     assert!((l.color.g - 0.25).abs() < 1e-5, "green {}", l.color.g);
     assert_eq!(read_property(&w, bone, "Light", "color.g"), Some(0.25));
 }
+
+/// Sprite animation: object keys swap a SpriteRenderer's sprite (stepped, no blending).
+#[test]
+fn object_curves_flip_sprites() {
+    let (mut w, mut sys, root, _) = setup();
+    w.registry
+        .register::<oxide_scene::SpriteRenderer>("Rendering/Sprite Renderer");
+    w.add_component(root, oxide_scene::SpriteRenderer::default());
+    let mut curve = oxide_assets::ObjectCurve {
+        path: String::new(),
+        component: "SpriteRenderer".into(),
+        property: "sprite".into(),
+        keys: vec![],
+    };
+    for i in 0..3 {
+        curve.set_key(i as f32 * 0.25, &format!("builtin:frame{i}"));
+    }
+    let mut clip = AnimationClip {
+        name: "Run".into(),
+        looping: true,
+        object_curves: vec![curve],
+        ..Default::default()
+    };
+    clip.recalculate_length();
+    assert!(
+        (clip.length - (0.5 + 1.0 / 12.0)).abs() < 1e-5,
+        "last frame lasts one frame"
+    );
+    let h = w
+        .resource_mut::<AssetServer>()
+        .animations
+        .insert("run", clip);
+    w.add_component(
+        root,
+        Animation {
+            clip: Some(h),
+            ..Default::default()
+        },
+    );
+    let sprite = |w: &World| {
+        w.get_component::<oxide_scene::SpriteRenderer>(root)
+            .unwrap()
+            .sprite
+            .as_ref()
+            .map(|s| s.path().to_owned())
+    };
+    tick(&mut w, &mut sys, 0.1);
+    assert_eq!(sprite(&w).as_deref(), Some("builtin:frame0"));
+    tick(&mut w, &mut sys, 0.2);
+    assert_eq!(sprite(&w).as_deref(), Some("builtin:frame1"));
+    tick(&mut w, &mut sys, 0.25);
+    assert_eq!(sprite(&w).as_deref(), Some("builtin:frame2"));
+}

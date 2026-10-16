@@ -1552,6 +1552,8 @@ impl Shell for Editor {
             self.st.selection.retain(|&id| w.is_alive(id));
         }
         project::sync_asset_types(&engine.world.resource::<oxide_assets::AssetServer>().types);
+        // Sprite Resolvers show their sprite in Edit mode too.
+        oxide_scene::sprite_library::resolve_all(&mut engine.world);
         let animation_open = self.dock.iter_all_tabs().any(|(_, t)| *t == Tab::Animation);
         self.st.tile_palette_open = self
             .dock

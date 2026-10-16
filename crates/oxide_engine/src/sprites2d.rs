@@ -171,7 +171,13 @@ pub fn extract(world: &World, out: &mut Vec<SpriteDraw>) {
         if !world.get(id).is_some_and(|o| o.active_in_hierarchy()) {
             continue;
         }
-        let Some(s) = r.sprite.as_ref().and_then(|h| assets.sprites.get(h)) else {
+        // A Sprite Resolver decides the sprite (also in Edit mode, like Unity).
+        let resolved = oxide_scene::sprite_library::resolved_sprite(world, id);
+        let Some(s) = resolved
+            .as_ref()
+            .or(r.sprite.as_ref())
+            .and_then(|h| assets.sprites.get(h))
+        else {
             continue;
         };
         let flip = Matrix4x4::from_scale(Vector3::new(

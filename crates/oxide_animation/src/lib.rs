@@ -541,6 +541,8 @@ struct Sampler<'a> {
     events: Vec<(String, Value)>,
     /// Property curves: (weighted sum, weight) per animated property.
     props: HashMap<PropKey, (f32, f32)>,
+    /// Object curves: (value, weight); the heaviest motion's value wins.
+    objs: HashMap<PropKey, (String, f32)>,
 }
 
 /// An animated component property: (object, component type, property with channel).
@@ -595,6 +597,61 @@ pub fn read_property(
 fn apply_props(world: &mut World, props: HashMap<PropKey, f32>) {
     for ((id, component, property), x) in props {
         write_property(world, id, &component, &property, x);
+    }
+}
+
+/// Writes object keys: asset fields get the asset path, text fields the text.
+fn apply_objs(world: &mut World, objs: HashMap<PropKey, String>) {
+    for ((id, component, property), v) in objs {
+        write_object_property(world, id, &component, &property, &v);
+    }
+}
+
+/// Sets an asset or string field from an object key. Returns whether it changed.
+pub fn write_object_property(
+    world: &mut World,
+    id: GameObjectId,
+    component: &str,
+    property: &str,
+    v: &str,
+) -> bool {
+    let Some(o) = world.get(id) else {
+        return false;
+    };
+    let Some((cid, _, _)) = o.component_list().into_iter().find(|c| c.1 == component) else {
+        return false;
+    };
+    if let Some(p) = v.split('#').next()
+        && p.starts_with("Assets/")
+        && let Some(a) = world.try_resource_mut::<AssetServer>()
+    {
+        let _ = a.ensure_loaded(p);
+    }
+    let Some(c) = world.component_dyn_mut(id, cid) else {
+        return false;
+    };
+    let nv = match c.get_field(property) {
+        Some(Value::String(old)) if old == v => return false,
+        Some(Value::Asset(old)) if old == v => return false,
+        Some(Value::String(_)) => Value::String(v.to_owned()),
+        Some(Value::Asset(_) | Value::Null) => Value::Asset(v.to_owned()),
+        _ => return false,
+    };
+    c.set_field(property, nv).is_ok()
+}
+
+/// The current value of an asset or string field, for object keys.
+pub fn read_object_property(
+    world: &World,
+    id: GameObjectId,
+    component: &str,
+    property: &str,
+) -> Option<String> {
+    let o = world.get(id)?;
+    let (cid, _, _) = o.component_list().into_iter().find(|c| c.1 == component)?;
+    match world.component_dyn(id, cid)?.get_field(property)? {
+        Value::String(s) | Value::Asset(s) => Some(s),
+        _ => None,
     }
 }
 
@@ -735,6 +792,23 @@ impl Sampler<'_> {
                 .or_insert((0.0, 0.0));
             e.0 += pc.curve.evaluate(t) * w;
             e.1 += w;
+        }
+        for oc in &clip.object_curves {
+            let id = if oc.path.is_empty() {
+                Some(self.root)
+            } else {
+                bind(self.world, self.root, self.bindings, &oc.path)
+            };
+            let (Some(id), Some(v)) = (id, oc.sample(t)) else {
+                continue;
+            };
+            let e = self
+                .objs
+                .entry((id, oc.component.clone(), oc.property.clone()))
+                .or_insert((String::new(), -1.0));
+            if w > e.1 {
+                *e = (v.to_owned(), w);
+            }
         }
         if events && self.collect_events && self.time_override.is_none() {
             for i in events_between(clip, prev, now, looping) {
@@ -1081,6 +1155,7 @@ struct Output {
     root_yaw: f32,
     events: Vec<(String, Value)>,
     props: HashMap<PropKey, f32>,
+    objs: HashMap<PropKey, String>,
 }
 
 fn sample_layer(
@@ -1191,10 +1266,14 @@ fn evaluate(
             rm: RootAcc::default(),
             events: vec![],
             props: HashMap::new(),
+            objs: HashMap::new(),
         };
         sample_layer(&mut s, sm, &lrt, &rt.params);
         let (pose, rm, events) = (finalize(s.pose), s.rm, s.events);
         let props = finalize_props(s.props);
+        // Later layers with any weight replace object keys (they can't blend).
+        out.objs
+            .extend(s.objs.into_iter().map(|(k, (v, _))| (k, v)));
         out.events.extend(events);
         if li == 0 {
             out.pose = pose;
@@ -1264,6 +1343,7 @@ fn evaluate(
                     rm: RootAcc::default(),
                     events: vec![],
                     props: HashMap::new(),
+                    objs: HashMap::new(),
                 };
                 sample_layer(&mut rs, sm, &lrt, &rt.params);
                 let reference = finalize(rs.pose);
@@ -1329,6 +1409,7 @@ fn update_animator(
     };
     apply(world, out.pose);
     apply_props(world, out.props);
+    apply_objs(world, out.objs);
     // Root motion, in world space.
     let to_world = world.local_to_world(id);
     a.rt.delta_position = to_world.transform_vector3(out.root_position);
@@ -1504,6 +1585,7 @@ fn update_legacy(world: &mut World, assets: &AssetServer, dt: f32) {
         let mut events = vec![];
         let mut pose = HashMap::new();
         let mut props = HashMap::new();
+        let mut objs = HashMap::new();
         if a.playing == Some(true)
             && let Some(clip) = a.clip.as_ref().and_then(|h| assets.animations.get(h))
         {
@@ -1525,10 +1607,12 @@ fn update_legacy(world: &mut World, assets: &AssetServer, dt: f32) {
                 rm: RootAcc::default(),
                 events: vec![],
                 props: HashMap::new(),
+                objs: HashMap::new(),
             };
             s.clip(clip, prev, a.time, a.looping, 1.0, true);
             pose = finalize(s.pose);
             props = finalize_props(s.props);
+            objs = s.objs.into_iter().map(|(k, (v, _))| (k, v)).collect();
             events = s.events;
         }
         if let Some(c) = world.component_mut::<Animation>(id, cid) {
@@ -1538,6 +1622,7 @@ fn update_legacy(world: &mut World, assets: &AssetServer, dt: f32) {
         }
         apply(world, pose);
         apply_props(world, props);
+        apply_objs(world, objs);
         for (name, arg) in events {
             world.send_message(id, &name, arg);
         }

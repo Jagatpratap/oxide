@@ -6,10 +6,13 @@
 
 use crate::EditorState;
 use egui::{Align2, Color32, FontId, Rect, Sense, Stroke, pos2, vec2};
-use oxide_animation::{Animation, Animator, find_path, read_property, write_property};
+use oxide_animation::{
+    Animation, Animator, find_path, read_object_property, read_property, write_object_property,
+    write_property,
+};
 use oxide_assets::{
-    AnimationClip, AnimatorController, AssetServer, Handle, Interpolation, PropertyCurve, Track,
-    TransformCurves,
+    AnimationClip, AnimatorController, AssetServer, Handle, Interpolation, ObjectCurve,
+    PropertyCurve, Track, TransformCurves,
 };
 use oxide_core::reflect::Value;
 use oxide_core::{AnimationCurve, Keyframe};
@@ -30,6 +33,8 @@ enum Row {
     Rotation(usize),
     Scale(usize),
     Property(usize),
+    /// Object-reference keys (sprites).
+    Object(usize),
 }
 
 #[derive(Clone, Copy, Default)]
@@ -45,6 +50,8 @@ struct Snapshot {
     transforms: HashMap<GameObjectId, Local>,
     /// (object, component, property) → value.
     props: HashMap<(GameObjectId, String, String), f32>,
+    /// Asset and text fields (sprites, resolver labels).
+    objs: HashMap<(GameObjectId, String, String), String>,
 }
 
 #[derive(Default)]
@@ -82,6 +89,30 @@ impl AnimationWindow {
             "preview": self.preview,
             "playing": self.playing,
         })
+    }
+
+    /// MCP: keys a sprite sheet's sprites as a flipbook on the current clip.
+    pub fn add_sprites(&mut self, world: &mut World, sprites: &str) -> Result<usize, String> {
+        let path = self
+            .clip
+            .clone()
+            .ok_or("the Animation window has no clip")?;
+        if !path.ends_with(".anim") {
+            return Err(format!("{path} is read-only"));
+        }
+        let assets = world.resource_mut::<AssetServer>();
+        if let Some(t) = sprites.split('#').next() {
+            assets.ensure_loaded(t)?;
+        }
+        let h: Handle<AnimationClip> = Handle::from_path(path.clone());
+        let mut clip = assets
+            .animations
+            .get(&h)
+            .cloned()
+            .ok_or("clip not loaded")?;
+        let n = add_flipbook(&mut clip, assets, sprites);
+        assets.save_animation_clip(&path, &clip)?;
+        Ok(n)
     }
 
     /// MCP control: playhead (seconds), record, preview, clip.
@@ -251,6 +282,10 @@ fn row_times(c: &AnimationClip, row: &Row) -> Vec<f32> {
             .properties
             .get(*i)
             .map(|p| p.curve.keys.iter().map(|k| k.time).collect()),
+        Row::Object(i) => c
+            .object_curves
+            .get(*i)
+            .map(|o| o.keys.iter().map(|k| k.time).collect()),
     }
     .unwrap_or_default()
 }
@@ -277,6 +312,13 @@ fn delete_key(c: &mut AnimationClip, row: &Row, k: usize) {
                 p.curve.remove_key(k);
             }
         }
+        Row::Object(i) => {
+            if let Some(o) = c.object_curves.get_mut(*i)
+                && k < o.keys.len()
+            {
+                o.keys.remove(k);
+            }
+        }
     }
 }
 
@@ -300,6 +342,21 @@ fn shift_key(c: &mut AnimationClip, row: &Row, k: usize, t: f32) -> usize {
         Row::Property(i) => c.properties.get_mut(*i).map_or(k, |p| {
             let v = p.curve.keys.get(k).map_or(0.0, |x| x.value);
             p.curve.move_key(k, t, v)
+        }),
+        Row::Object(i) => c.object_curves.get_mut(*i).map_or(k, |o| {
+            if k >= o.keys.len() {
+                return k;
+            }
+            let key = o.keys.remove(k);
+            let j = o.keys.partition_point(|x| x.time < t);
+            o.keys.insert(
+                j,
+                oxide_assets::ObjectKey {
+                    time: t,
+                    value: key.value,
+                },
+            );
+            j
         }),
     }
 }
@@ -344,6 +401,17 @@ fn key_row_now(c: &mut AnimationClip, world: &World, root: GameObjectId, row: &R
                 set_curve_key(&mut p.curve, t, v);
             }
         }
+        Row::Object(i) => {
+            let Some(o) = c.object_curves.get_mut(*i) else {
+                return;
+            };
+            let Some(id) = find_path(world, root, &o.path) else {
+                return;
+            };
+            if let Some(v) = read_object_property(world, id, &o.component, &o.property) {
+                o.set_key(t, &v);
+            }
+        }
     }
 }
 
@@ -383,6 +451,11 @@ fn snapshot(world: &World, root: GameObjectId) -> Snapshot {
                 continue;
             };
             for (field, v) in c.fields() {
+                if let Value::Asset(a) | Value::String(a) = &v {
+                    s.objs
+                        .insert((id, name.to_owned(), field.to_owned()), a.clone());
+                    continue;
+                }
                 let chans: &[&str] = match v {
                     Value::Float(_) | Value::Int(_) => &[""],
                     Value::Vector2(_) => &["x", "y"],
@@ -418,6 +491,9 @@ fn restore(world: &mut World, s: &Snapshot) {
     for ((id, c, p), x) in &s.props {
         write_property(world, *id, c, p, *x);
     }
+    for ((id, c, p), v) in &s.objs {
+        write_object_property(world, *id, c, p, v);
+    }
 }
 
 /// Poses `root` with `clip` at `t` (the editor preview).
@@ -444,6 +520,11 @@ fn sample(world: &mut World, root: GameObjectId, clip: &AnimationClip, t: f32) {
     for p in &clip.properties {
         if let Some(id) = find_path(world, root, &p.path) {
             write_property(world, id, &p.component, &p.property, p.curve.evaluate(t));
+        }
+    }
+    for o in &clip.object_curves {
+        if let (Some(id), Some(v)) = (find_path(world, root, &o.path), o.sample(t)) {
+            write_object_property(world, id, &o.component, &o.property, v);
         }
     }
 }
@@ -491,6 +572,35 @@ fn record(
         }
         if scaled {
             set_key(c.scale.get_or_insert_with(|| new_track(t, l.s)), t, l.s);
+        }
+        changed = true;
+    }
+    for ((id, comp, prop), v) in &now.objs {
+        let Some(before) = last.objs.get(&(*id, comp.clone(), prop.clone())) else {
+            continue;
+        };
+        if v == before {
+            continue;
+        }
+        let Some(path) = rel_path(world, root, *id) else {
+            continue;
+        };
+        let existing = clip
+            .object_curves
+            .iter_mut()
+            .find(|o| o.path == path && &o.component == comp && &o.property == prop);
+        match existing {
+            Some(o) => o.set_key(t, v),
+            None => {
+                let mut o = ObjectCurve {
+                    path,
+                    component: comp.clone(),
+                    property: prop.clone(),
+                    keys: vec![],
+                };
+                o.set_key(t, v);
+                clip.object_curves.push(o);
+            }
         }
         changed = true;
     }
@@ -744,6 +854,57 @@ pub fn window_ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
     }
 }
 
+/// Keys `path`'s sprites (a texture's slices in natural order, or one sprite) on the
+/// root SpriteRenderer at 12 fps, as dropping sprites into Unity's Animation window does.
+/// Returns how many frames were added.
+pub fn add_flipbook(clip: &mut AnimationClip, assets: &AssetServer, path: &str) -> usize {
+    let mut sprites: Vec<String> = if path.contains('#') {
+        vec![path.to_owned()]
+    } else {
+        assets
+            .sprite_paths()
+            .into_iter()
+            .filter(|s| s.starts_with(&format!("{path}#")))
+            .collect()
+    };
+    // Natural order: walk_2 before walk_10.
+    sprites.sort_by_key(|s| {
+        let digits: String = s.chars().rev().take_while(|c| c.is_ascii_digit()).collect();
+        let n: u64 = digits
+            .chars()
+            .rev()
+            .collect::<String>()
+            .parse()
+            .unwrap_or(0);
+        (
+            s.trim_end_matches(|c: char| c.is_ascii_digit()).to_owned(),
+            n,
+        )
+    });
+    if sprites.is_empty() {
+        return 0;
+    }
+    let i = match clip.object_curves.iter().position(|o| {
+        o.path.is_empty() && o.component == "SpriteRenderer" && o.property == "sprite"
+    }) {
+        Some(i) => i,
+        None => {
+            clip.object_curves.push(ObjectCurve {
+                path: String::new(),
+                component: "SpriteRenderer".into(),
+                property: "sprite".into(),
+                keys: vec![],
+            });
+            clip.object_curves.len() - 1
+        }
+    };
+    for (k, sp) in sprites.iter().enumerate() {
+        clip.object_curves[i].set_key(k as f32 / 12.0, sp);
+    }
+    clip.recalculate_length();
+    sprites.len()
+}
+
 fn clips_equal(a: &AnimationClip, b: &AnimationClip) -> bool {
     a == b
 }
@@ -762,6 +923,7 @@ fn rows(c: &AnimationClip) -> Vec<Row> {
         }
     }
     out.extend((0..c.properties.len()).map(Row::Property));
+    out.extend((0..c.object_curves.len()).map(Row::Object));
     out
 }
 
@@ -780,6 +942,10 @@ fn row_label(c: &AnimationClip, row: &Row) -> String {
         Row::Property(i) => {
             let p = &c.properties[*i];
             format!("{} : {}.{}", name(&p.path), p.component, p.property)
+        }
+        Row::Object(i) => {
+            let o = &c.object_curves[*i];
+            format!("{} : {}.{}", name(&o.path), o.component, o.property)
         }
     }
 }
@@ -856,6 +1022,11 @@ fn add_property_menu(
                             .into_iter()
                             .map(|(k, v)| (k.to_owned(), v))
                             .collect();
+                        let objects: Vec<String> = fields
+                            .iter()
+                            .filter(|(_, v)| matches!(v, Value::Asset(_)))
+                            .map(|(f, _)| f.clone())
+                            .collect();
                         let props: Vec<String> = fields
                             .iter()
                             .flat_map(|(f, v)| {
@@ -876,10 +1047,25 @@ fn add_property_menu(
                                 })
                             })
                             .collect();
-                        if props.is_empty() {
+                        if props.is_empty() && objects.is_empty() {
                             continue;
                         }
                         ui.menu_button(crate::inspector::nicify(comp), |ui| {
+                            for f in &objects {
+                                if ui.button(format!("{f} (keys)")).clicked() {
+                                    let v = read_object_property(world, id, comp, f)
+                                        .unwrap_or_default();
+                                    let mut o = ObjectCurve {
+                                        path: path.clone(),
+                                        component: comp.to_owned(),
+                                        property: f.clone(),
+                                        keys: vec![],
+                                    };
+                                    o.set_key(t, &v);
+                                    clip.object_curves.push(o);
+                                    ui.close();
+                                }
+                            }
                             for p in props {
                                 if ui.button(&p).clicked() {
                                     let v = read_property(world, id, comp, &p).unwrap_or(0.0);
@@ -980,6 +1166,16 @@ fn dopesheet(
         w.playing = false;
     }
     let sheet_resp = ui.interact(sheet, ui.id().with("anim-sheet"), Sense::click_and_drag());
+    // Dropping a sprite sheet (or sprites) makes a flipbook (Unity).
+    if editable
+        && let Some(payload) = sheet_resp.dnd_release_payload::<crate::project::AssetPayload>()
+        && world.has_component::<oxide_scene::SpriteRenderer>(root)
+    {
+        let n = add_flipbook(clip, world.resource::<AssetServer>(), &payload.0);
+        if n > 0 {
+            w.span = (n as f32 / 12.0 * 1.25).max(1.0);
+        }
+    }
     if sheet_resp.hovered() {
         let scroll = ui.input(|i| i.smooth_scroll_delta.y);
         if scroll != 0.0 {

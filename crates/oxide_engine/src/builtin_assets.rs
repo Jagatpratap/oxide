@@ -22,6 +22,11 @@ pub fn register(assets: &mut AssetServer) {
             .menu("2D/Tiles/Rule Tile", "New Rule Tile", 83)
             .color(120, 190, 140),
     );
+    assets.register_data_asset::<oxide_scene::SpriteLibraryAsset>(
+        AssetTypeInfo::new("SpriteLibraryAsset", &["spriteLib"])
+            .menu("2D/Sprite Library Asset", "New Sprite Library Asset", 85)
+            .color(200, 170, 230),
+    );
     assets.register_data_asset::<oxide_scene::TilePalette>(
         AssetTypeInfo::new("TilePalette", &["palette"])
             .menu("2D/Tile Palette", "New Palette", 84)
