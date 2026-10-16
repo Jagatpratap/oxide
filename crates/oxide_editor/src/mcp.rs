@@ -1,7 +1,8 @@
 //! MCP tools for the editor: state, selection, Play mode, Undo, menu items, the Scene view
 //! camera and window screenshots. Register with `App::mcp_tools(oxide_editor::mcp::register)`.
 
-use crate::{Action, Editor, PlayState, Tool, menus};
+use crate::{Action, Editor, PlayState, Tool, asset_ops, menus};
+use oxide_assets::AssetServer;
 use oxide_engine::Engine;
 use oxide_engine::bus::Bus;
 use oxide_engine::mcp_tools::{obj_arg, schema, tool, vec3_arg};
@@ -636,6 +637,141 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
                     "hidden": list(&vis.hidden),
                     "unpickable": list(&vis.unpickable),
                 }))
+            })
+        },
+    );
+
+    tool(
+        s,
+        bus,
+        ToolDef::new(
+            "editor_project",
+            "Project window",
+            "Assets in the Project window. `list` a folder (default: the open one), `search` with Unity syntax \
+             (`car t:Prefab l:Vehicle`; `folder` limits it; also typed into the window's search box), `select` an asset (shows it in the Project window and \
+             Inspector), `create_folder`, `rename` (`name`; extension kept), `move` (`to`: new path), `duplicate`, \
+             `delete` (macOS: to the Trash), `labels` (read, or set with `labels`), `zoom` (icon size 16-128; 16 is \
+             the list view). Moving or renaming rewrites references in scenes, prefabs, materials and the open scene.",
+            schema(
+                json!({ "action": { "type": "string", "enum": ["status", "list", "search", "select", "create_folder", "rename", "move", "duplicate", "delete", "labels", "zoom"] },
+                       "path": { "type": "string" }, "folder": { "type": "string" }, "query": { "type": "string" },
+                       "name": { "type": "string" }, "to": { "type": "string" },
+                       "labels": { "type": "array", "items": { "type": "string" } }, "zoom": { "type": "number" } }),
+                &[],
+            ),
+        ),
+        |args, e| {
+            with_editor(e, |ed, e| {
+                let root = e.world.resource::<AssetServer>().full_path("");
+                let s = |k: &str| args.get(k).and_then(Json::as_str).map(str::to_owned);
+                let entry_json = |x: &crate::project::Entry| json!({ "name": x.name, "path": x.path, "type": crate::project::entry_kind(x).0, "labels": x.labels });
+                let path = s("path");
+                let need = || path.clone().ok_or_else(|| "`path` is required".to_owned());
+                let st = &mut ed.st;
+                let r: Result<Json, String> = (|| {
+                    Ok(match s("action").as_deref().unwrap_or("status") {
+                        "status" => json!({
+                            "folder": st.project.folder, "selected": st.project.selected,
+                            "search": st.project.search, "zoom": st.project.zoom,
+                            "inspecting": st.project.inspecting,
+                        }),
+                        "list" => {
+                            let folder = s("folder").unwrap_or_else(|| st.project.folder.clone());
+                            let v: Vec<Json> = crate::project::list_dir(&root, &folder)
+                                .iter()
+                                .map(entry_json)
+                                .collect();
+                            json!({ "folder": folder, "entries": v })
+                        }
+                        "search" => {
+                            // Shown in the Project window too, as if typed in its search box.
+                            st.project.search = s("query").unwrap_or_default();
+                            st.project.search_all = s("folder").is_none();
+                            let q = crate::project::Query::parse(&st.project.search);
+                            let folder = s("folder").unwrap_or_else(|| "Assets".into());
+                            let v: Vec<Json> = crate::project::list_all(&root, &folder)
+                                .iter()
+                                .filter(|x| q.matches(x))
+                                .map(entry_json)
+                                .collect();
+                            json!({ "results": v })
+                        }
+                        "select" => {
+                            let p = need()?;
+                            if !root.join(&p).exists() {
+                                return Err(format!("{p} doesn't exist"));
+                            }
+                            st.project.show(&p);
+                            st.selection.clear();
+                            st.actions.push(Action::OpenTab(crate::Tab::Project));
+                            json!({ "selected": p })
+                        }
+                        "create_folder" => {
+                            let p = asset_ops::unique_path(&root, &need()?);
+                            if !p.starts_with("Assets/") {
+                                return Err("folders go under Assets/".into());
+                            }
+                            std::fs::create_dir_all(root.join(&p)).map_err(|e| e.to_string())?;
+                            st.project.invalidate();
+                            json!({ "created": p })
+                        }
+                        "rename" | "move" => {
+                            let p = need()?;
+                            let to = if s("action").as_deref() == Some("rename") {
+                                crate::project::renamed_path(
+                                    &root,
+                                    &p,
+                                    &s("name").ok_or("`name` is required")?,
+                                )?
+                            } else {
+                                s("to").ok_or("`to` is required")?
+                            };
+                            let msg = asset_ops::move_asset(st, e, &p, &to)?;
+                            st.project.invalidate();
+                            json!({ "moved": to, "message": msg })
+                        }
+                        "duplicate" => {
+                            let new = asset_ops::duplicate_asset(&root, &need()?)?;
+                            st.project.invalidate();
+                            json!({ "created": new })
+                        }
+                        "delete" => {
+                            let p = need()?;
+                            asset_ops::delete_asset(&root, &p)?;
+                            if st.project.selected.as_deref() == Some(p.as_str()) {
+                                st.project.selected = None;
+                            }
+                            st.project.invalidate();
+                            json!({ "deleted": p })
+                        }
+                        "labels" => {
+                            let p = need()?;
+                            let assets = e.world.resource::<AssetServer>();
+                            if let Some(v) = args.get("labels").and_then(Json::as_array) {
+                                let v: Vec<String> = v
+                                    .iter()
+                                    .filter_map(|l| l.as_str().map(str::to_owned))
+                                    .collect();
+                                assets.set_asset_labels(&p, &v)?;
+                                st.project.invalidate();
+                            }
+                            json!({ "path": p, "labels": assets.asset_labels(&p) })
+                        }
+                        "zoom" => {
+                            let z = args
+                                .get("zoom")
+                                .and_then(Json::as_f64)
+                                .ok_or("`zoom` is required")?;
+                            st.project.zoom = (z as f32).clamp(crate::project::MIN_ZOOM, 128.0);
+                            json!({ "zoom": st.project.zoom })
+                        }
+                        other => return Err(format!("unknown action `{other}`")),
+                    })
+                })();
+                match r {
+                    Ok(v) => ToolResult::json(v),
+                    Err(m) => ToolResult::error(m),
+                }
             })
         },
     );

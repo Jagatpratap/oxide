@@ -25,6 +25,21 @@ impl Asset for AudioClip {
     const TYPE_NAME: &'static str = "AudioClip";
 }
 
+/// The `labels:` of a `.meta` file's text.
+pub fn labels_in_meta(text: &str) -> Vec<String> {
+    let map: serde_yaml_ng::Mapping = serde_yaml_ng::from_str(text).unwrap_or_default();
+    match map.get("labels") {
+        Some(serde_yaml_ng::Value::Sequence(v)) => v
+            .iter()
+            .filter_map(|l| l.as_str().map(str::to_owned))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// `.meta` fields that belong to every asset rather than to an importer.
+const META_KEYS: &[&str] = &["labels"];
+
 pub struct AssetServer {
     /// Project folder; asset paths like `Assets/x.png` are relative to it.
     pub root: PathBuf,
@@ -172,15 +187,69 @@ impl AssetServer {
         done
     }
 
+    /// The fields of `<path>.meta` (empty if there is none or it can't be read).
+    fn meta_map(&self, path: &str) -> serde_yaml_ng::Mapping {
+        std::fs::read_to_string(self.full_path(&format!("{path}.meta")))
+            .ok()
+            .and_then(|t| serde_yaml_ng::from_str(&t).ok())
+            .unwrap_or_default()
+    }
+
+    fn write_meta_map(&self, path: &str, map: &serde_yaml_ng::Mapping) -> Result<(), String> {
+        let meta = self.full_path(&format!("{path}.meta"));
+        if map.is_empty() {
+            let _ = std::fs::remove_file(&meta);
+            return Ok(());
+        }
+        let text = serde_yaml_ng::to_string(map).map_err(|e| e.to_string())?;
+        std::fs::write(&meta, text).map_err(|e| format!("cannot write {}: {e}", meta.display()))
+    }
+
+    /// Unity Asset Labels of an asset, kept in its `.meta` file (`labels: [...]`).
+    pub fn asset_labels(&self, path: &str) -> Vec<String> {
+        std::fs::read_to_string(self.full_path(&format!("{path}.meta")))
+            .map(|t| labels_in_meta(&t))
+            .unwrap_or_default()
+    }
+
+    /// Replaces an asset's labels (sorted, without duplicates), keeping its other `.meta`
+    /// fields such as texture import settings.
+    pub fn set_asset_labels(&self, path: &str, labels: &[String]) -> Result<(), String> {
+        let mut labels: Vec<String> = labels
+            .iter()
+            .map(|l| l.trim().to_owned())
+            .filter(|l| !l.is_empty())
+            .collect();
+        labels.sort_by_key(|l| l.to_lowercase());
+        labels.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+        let mut map = self.meta_map(path);
+        if labels.is_empty() {
+            map.remove("labels");
+        } else {
+            map.insert(
+                "labels".into(),
+                serde_yaml_ng::Value::Sequence(labels.into_iter().map(Into::into).collect()),
+            );
+        }
+        self.write_meta_map(path, &map)
+    }
+
     /// Import settings of a texture: its `.meta` file, or defaults guessed from the name.
     pub fn texture_importer(&self, path: &str) -> crate::TextureImporter {
         let meta = self.full_path(&format!("{path}.meta"));
         let mut imp = crate::TextureImporter::guess(path);
         if let Ok(text) = std::fs::read_to_string(&meta) {
-            match serde_yaml_ng::from_str::<BTreeMap<String, Value>>(&text) {
+            match serde_yaml_ng::from_str::<serde_yaml_ng::Mapping>(&text) {
                 Ok(fields) => {
                     for (k, v) in fields {
-                        if let Err(e) = imp.set_field(&k, v) {
+                        let Some(k) = k.as_str() else { continue };
+                        if META_KEYS.contains(&k) {
+                            continue;
+                        }
+                        let r = serde_yaml_ng::from_value::<Value>(v)
+                            .map_err(|e| e.to_string())
+                            .and_then(|v| imp.set_field(k, v).map_err(|e| e.to_string()));
+                        if let Err(e) = r {
                             oxide_core::debug_log_warning!("{path}.meta: {k}: {e}");
                         }
                     }
@@ -202,9 +271,13 @@ impl AssetServer {
             .into_iter()
             .map(|(k, v)| (k.to_owned(), v))
             .collect();
-        let text = serde_yaml_ng::to_string(&fields).map_err(|e| e.to_string())?;
-        let meta = self.full_path(&format!("{path}.meta"));
-        std::fs::write(&meta, text).map_err(|e| format!("cannot write {}: {e}", meta.display()))?;
+        // Labels and other non-importer fields stay.
+        let mut map = self.meta_map(path);
+        for (k, v) in fields {
+            let v = serde_yaml_ng::to_value(v).map_err(|e| e.to_string())?;
+            map.insert(k.into(), v);
+        }
+        self.write_meta_map(path, &map)?;
         self.load_texture(path)
     }
 
@@ -300,7 +373,10 @@ impl AssetServer {
         let text = String::from_utf8(bytes).map_err(|e| format!("{path}: {e}"))?;
         let file: MaterialFile =
             serde_yaml_ng::from_str(&text).map_err(|e| format!("{path}: {e}"))?;
-        let mut m = Material::default();
+        let mut m = Material {
+            name: String::new(),
+            ..Default::default()
+        };
         for (k, v) in file.fields {
             if let Value::Asset(p) = &v
                 && let Err(e) = self.ensure_loaded(p)
@@ -551,6 +627,39 @@ mod reload_tests {
         assert_eq!(a.reload_changed(), vec!["Assets/fx.wgsl".to_owned()]);
         assert_eq!(a.shaders.get(&h).unwrap().source, "// v2");
         assert!(a.reload_changed().is_empty(), "reloaded once");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn labels_live_in_meta_beside_import_settings() {
+        let dir = std::env::temp_dir().join(format!("oxide-labels-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("Assets")).unwrap();
+        let png = image::RgbaImage::from_pixel(4, 4, image::Rgba([255, 0, 0, 255]));
+        png.save(dir.join("Assets/red.png")).unwrap();
+        let mut a = AssetServer::new(&dir);
+        assert!(a.asset_labels("Assets/red.png").is_empty());
+        a.set_asset_labels(
+            "Assets/red.png",
+            &[
+                "Vehicle".into(),
+                "hero".into(),
+                "vehicle".into(),
+                " ".into(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(a.asset_labels("Assets/red.png"), vec!["hero", "Vehicle"]);
+        // Changing import settings keeps the labels, and labels don't upset the importer.
+        let mut imp = a.texture_importer("Assets/red.png");
+        imp.max_size = 2;
+        a.set_texture_importer("Assets/red.png", &imp).unwrap();
+        assert_eq!(a.asset_labels("Assets/red.png"), vec!["hero", "Vehicle"]);
+        assert_eq!(a.texture_importer("Assets/red.png").max_size, 2);
+        // Removing every label (and having no other settings) removes the .meta file.
+        a.set_asset_labels("Assets/x.mat", &["A".into()]).unwrap();
+        assert!(dir.join("Assets/x.mat.meta").is_file());
+        a.set_asset_labels("Assets/x.mat", &[]).unwrap();
+        assert!(!dir.join("Assets/x.mat.meta").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

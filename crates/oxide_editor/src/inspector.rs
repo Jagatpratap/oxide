@@ -108,6 +108,17 @@ enum Edit {
 }
 
 pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
+    // An asset clicked in the Project window, until a GameObject is selected.
+    if !st.selection.is_empty() {
+        st.project.inspecting = false;
+    }
+    if st.inspector.locked.is_none()
+        && st.project.inspecting
+        && let Some(path) = st.project.selected.clone()
+    {
+        crate::asset_inspector::ui(st, engine, ui, &path);
+        return;
+    }
     // Lock and Debug (Unity's padlock and ⋮ → Normal / Debug).
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -409,10 +420,8 @@ fn prefab_header(ui: &mut egui::Ui, st: &mut EditorState, w: &World, id: GameObj
             .on_hover_text("Show in Project window")
             .clicked()
         {
-            st.project.selected = Some(path.clone());
-            if let Some((dir, _)) = path.rsplit_once('/') {
-                st.project.folder = dir.to_owned();
-            }
+            st.project.show(&path);
+            st.project.inspecting = false;
             st.actions.push(Action::OpenTab(crate::Tab::Project));
         }
     });

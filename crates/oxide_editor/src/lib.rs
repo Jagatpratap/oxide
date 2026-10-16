@@ -8,6 +8,8 @@
 //! References: <https://docs.unity3d.com/Manual/UsingTheEditor.html>,
 //! <https://docs.unity3d.com/Manual/GameView.html>, <https://docs.unity3d.com/Manual/UndoWindow.html>
 
+mod asset_inspector;
+mod asset_ops;
 mod console;
 pub(crate) mod game_view;
 mod hierarchy;
@@ -17,6 +19,7 @@ pub mod mcp;
 mod menus;
 pub mod player_build;
 pub mod prefs;
+mod previews;
 mod project;
 pub mod project_files;
 mod scene_view;
@@ -260,6 +263,9 @@ pub struct EditorState {
     pub(crate) inspector: inspector::InspectorState,
     console: console::ConsoleState,
     project: project::ProjectState,
+    /// Asset thumbnails (Project window, Inspector).
+    previews: previews::Previews,
+    asset_inspector: asset_inspector::AssetInspectorState,
     scene_ui: scene_view::SceneViewState,
     pub(crate) game: game_view::GameViewState,
     modal: Option<Modal>,
@@ -304,6 +310,8 @@ impl EditorState {
             inspector: Default::default(),
             console: Default::default(),
             project: Default::default(),
+            previews: Default::default(),
+            asset_inspector: Default::default(),
             scene_ui: Default::default(),
             game: Default::default(),
             modal: None,
@@ -608,6 +616,29 @@ impl Editor {
     pub fn apply(&mut self, engine: &mut Engine, action: Action) -> Result<String, String> {
         let now = oxide_core::time::realtime_since_startup();
         let st = &mut self.st;
+        // Rename / Duplicate / Delete act on assets after the Project window was clicked.
+        if st.project.focused
+            && let Some(sel) = st.project.selected.clone()
+        {
+            match action {
+                Action::Rename => {
+                    st.project.start_rename();
+                    return Ok(String::new());
+                }
+                Action::Delete => {
+                    st.project.ask_delete();
+                    return Ok(String::new());
+                }
+                Action::Duplicate => {
+                    let root = engine.world.resource::<AssetServer>().full_path("");
+                    let new = asset_ops::duplicate_asset(&root, &sel)?;
+                    st.project.selected = Some(new.clone());
+                    st.project.invalidate();
+                    return Ok(format!("Duplicated {sel} as {new}"));
+                }
+                _ => {}
+            }
+        }
         let w = &mut engine.world;
         let msg = match action {
             Action::NewScene => {
@@ -853,7 +884,8 @@ impl Editor {
             }
             Action::RefreshAssets => {
                 let n = w.resource_mut::<AssetServer>().reload_changed().len();
-                st.project.cache = None;
+                st.project.invalidate();
+                st.previews.clear();
                 format!("Refreshed assets ({n} reimported)")
             }
             Action::UndoTo(target) => {
@@ -1414,6 +1446,11 @@ impl Shell for Editor {
             self.st.selection.retain(|&id| w.is_alive(id));
         }
         menus::shortcuts(&mut self.st, engine, &ctx);
+        self.st.previews.update(engine, &ctx);
+        // The Project window claims keyboard commands when it is clicked (it sets this).
+        if ctx.input(|i| i.pointer.any_pressed()) {
+            self.st.project.focused = false;
+        }
 
         let mut root = egui::Ui::new(
             ctx.clone(),

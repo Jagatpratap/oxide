@@ -37,6 +37,11 @@ impl Snapshot {
         }
     }
 
+    /// Rewrites asset paths (after assets moved). Returns how many references changed.
+    pub fn remap_assets(&mut self, f: &mut dyn FnMut(&str) -> Option<String>) -> usize {
+        self.scene.remap_asset_paths(f)
+    }
+
     /// Replaces the scene with this snapshot. Returns the restored selection.
     pub fn restore(&self, world: &mut World) -> Vec<GameObjectId> {
         world.clear(false);
@@ -125,6 +130,14 @@ impl UndoStack {
         self.undo.truncate(depth);
         self.redo.clear();
         self.last = None;
+    }
+
+    /// Rewrites asset paths in every step, so Undo after a rename doesn't bring back
+    /// references to the old path.
+    pub fn remap_assets(&mut self, f: &mut dyn FnMut(&str) -> Option<String>) {
+        for s in self.undo.iter_mut().chain(self.redo.iter_mut()) {
+            s.remap_assets(f);
+        }
     }
 
     pub fn clear(&mut self) {

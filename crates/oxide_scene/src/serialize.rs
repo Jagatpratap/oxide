@@ -108,7 +108,68 @@ pub struct SceneFile {
 
 pub const SCENE_FORMAT: u32 = 1;
 
+/// Rewrites the asset paths in `v` that `f` maps to a new path. Returns how many changed.
+pub fn remap_value_assets(v: &mut Value, f: &mut dyn FnMut(&str) -> Option<String>) -> usize {
+    match v {
+        Value::Asset(p) => match f(p) {
+            Some(n) => {
+                *p = n;
+                1
+            }
+            None => 0,
+        },
+        Value::List(items) => items.iter_mut().map(|i| remap_value_assets(i, f)).sum(),
+        Value::Object(m) => m.values_mut().map(|i| remap_value_assets(i, f)).sum(),
+        _ => 0,
+    }
+}
+
 impl SceneFile {
+    /// Rewrites asset references (component fields, prefab links, render settings, nested
+    /// prefab contents) after assets were moved or renamed. Returns how many changed.
+    pub fn remap_asset_paths(&mut self, f: &mut dyn FnMut(&str) -> Option<String>) -> usize {
+        let mut n = 0;
+        if let Some(b) = self.base.as_mut()
+            && let Some(new) = f(b)
+        {
+            *b = new;
+            n += 1;
+        }
+        for o in &mut self.objects {
+            if let Some(p) = o.prefab.as_mut()
+                && let Some(new) = f(p)
+            {
+                *p = new;
+                n += 1;
+            }
+            for c in &mut o.components {
+                n += c
+                    .fields
+                    .values_mut()
+                    .map(|v| remap_value_assets(v, f))
+                    .sum::<usize>();
+            }
+        }
+        n += self
+            .render_settings
+            .values_mut()
+            .map(|v| remap_value_assets(v, f))
+            .sum::<usize>();
+        let prefabs = std::mem::take(&mut self.prefabs);
+        for (k, mut file) in prefabs {
+            n += file.remap_asset_paths(f);
+            let key = match f(&k) {
+                Some(new) => {
+                    n += 1;
+                    new
+                }
+                None => k,
+            };
+            self.prefabs.insert(key, file);
+        }
+        n
+    }
+
     pub fn to_yaml(&self) -> Result<String, String> {
         serde_yaml_ng::to_string(self).map_err(|e| e.to_string())
     }
