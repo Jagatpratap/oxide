@@ -34,11 +34,12 @@ pub fn loaded_build_id() -> &'static str {
     BUILD_ID
 }
 
-/// Declares a Scripts library's components: `Type => "Menu/Path"` for Add Component.
+/// Declares a Scripts library's components: `Type => "Menu/Path"` for Add Component, then
+/// optionally `; editors: Type, ...` for components with a custom Inspector.
 /// Expands to the entry points the editor calls after loading the library.
 #[macro_export]
 macro_rules! scripts {
-    ($($ty:ty => $menu:expr),* $(,)?) => {
+    ($($ty:ty => $menu:expr),* $(,)? $(; editors: $($ed:ty),* $(,)?)?) => {
         /// Engine build these scripts were compiled against.
         #[unsafe(no_mangle)]
         pub fn oxide_scripts_build_id() -> &'static str {
@@ -50,5 +51,50 @@ macro_rules! scripts {
         pub fn oxide_register_scripts(registry: &mut $crate::scene::ComponentRegistry) {
             $( registry.register::<$ty>($menu); )*
         }
+
+        /// Registers the custom Inspectors (`editors:` types implement `CustomEditor`).
+        #[unsafe(no_mangle)]
+        pub fn oxide_register_editors(editors: &mut $crate::CustomEditors) {
+            let _ = &editors;
+            $($( editors.register::<$ed>(); )*)?
+        }
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::prelude::*;
+
+    #[derive(Clone, Default, Reflect)]
+    pub struct Dial {
+        pub value: f32,
+    }
+
+    impl Component for Dial {}
+
+    impl CustomEditor for Dial {
+        fn on_inspector_gui(&mut self, gui: &mut InspectorGui) {
+            gui.slider("Value", &mut self.value, 0.0, 1.0);
+        }
+    }
+
+    #[derive(Clone, Default, Reflect)]
+    pub struct Plain {
+        pub on: bool,
+    }
+
+    impl Component for Plain {}
+
+    crate::scripts! { Dial => "Scripts/Dial", Plain => ""; editors: Dial }
+
+    #[test]
+    fn scripts_macro_registers_components_and_editors() {
+        let mut reg = crate::scene::ComponentRegistry::default();
+        oxide_register_scripts(&mut reg);
+        assert!(reg.get("Dial").is_some() && reg.get("Plain").is_some());
+        let mut editors = crate::CustomEditors::default();
+        oxide_register_editors(&mut editors);
+        assert!(editors.get("Dial").is_some());
+        assert!(editors.get("Plain").is_none());
+    }
 }

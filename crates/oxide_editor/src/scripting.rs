@@ -284,8 +284,15 @@ impl ScriptHost {
         let register: libloading::Symbol<fn(&mut ComponentRegistry)> =
             unsafe { lib.get(b"oxide_register_scripts") }.map_err(|e| e.to_string())?;
 
+        // Older Scripts libraries have no custom Inspectors.
+        let register_editors: Option<libloading::Symbol<fn(&mut oxide_engine::CustomEditors)>> =
+            unsafe { lib.get(b"oxide_register_editors") }.ok();
+
         let w = &mut engine.world;
         let old = std::mem::take(&mut self.script_types);
+        if let Some(e) = w.resources.get_mut::<oxide_engine::CustomEditors>() {
+            e.remove(&old);
+        }
         let taken = w.take_components_for_reload(|t| old.iter().any(|o| o == t));
         w.registry
             .unregister_where(|r| old.iter().any(|o| o == r.info.name));
@@ -299,6 +306,14 @@ impl ScriptHost {
             .map(|r| r.info.name.to_owned())
             .filter(|n| !before.contains(n))
             .collect();
+        if let Some(f) = register_editors {
+            if !w.resources.contains::<oxide_engine::CustomEditors>() {
+                w.resources.insert(oxide_engine::CustomEditors::default());
+            }
+            if let Some(e) = w.resources.get_mut::<oxide_engine::CustomEditors>() {
+                f(e);
+            }
+        }
         let missing = w.restore_components_after_reload(taken);
         for m in missing {
             debug_log_warning!("Script `{m}` no longer exists; its components keep their data");

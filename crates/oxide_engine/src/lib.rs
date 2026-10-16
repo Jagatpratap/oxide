@@ -3,6 +3,7 @@
 
 pub mod app;
 pub mod bus;
+pub mod custom_editor;
 pub mod engine;
 pub mod extract;
 pub mod gui;
@@ -24,6 +25,7 @@ pub mod streaming;
 pub mod volumes;
 
 pub use app::{App, AppControl, EngineConfig, McpToolsFn};
+pub use custom_editor::{CustomEditor, CustomEditors, InspectorGui, MessageType};
 pub use engine::{Engine, GameViewport, Plugin, Shell, init_world};
 
 pub use oxide_animation as animation;
@@ -161,7 +163,7 @@ pub mod prelude {
         color_material, create_camera, create_directional_light, create_point_light,
         create_primitive, instantiate_model, set_material,
     };
-    pub use crate::{App, AppControl};
+    pub use crate::{App, AppControl, CustomEditor, InspectorGui, MessageType};
     pub use oxide_animation::{
         Animation, Animator, AnimatorStateInfo, AnimatorUpdateMode, AvatarIKGoal, AvatarIKHint,
         HumanBodyBones,

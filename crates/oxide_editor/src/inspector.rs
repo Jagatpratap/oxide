@@ -181,6 +181,46 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
     apply(st, &mut engine.world, &targets, edits);
 }
 
+/// A script's own Inspector (Unity `[CustomEditor]`). It draws on a copy of the component;
+/// fields it changed become ordinary edits (Undo, prefab overrides, multi-scene saving).
+fn custom_inspector(
+    ui: &mut egui::Ui,
+    w: &World,
+    id: GameObjectId,
+    cid: ComponentId,
+    slot: Slot,
+    editor: oxide_engine::custom_editor::InspectorFn,
+    edits: &mut Vec<(Edit, u64)>,
+) {
+    let Some(comp) = w.component_dyn(id, cid) else {
+        return;
+    };
+    let before = comp.fields();
+    let mut copy = comp.clone_box();
+    let draw_default = |ui: &mut egui::Ui,
+                        w: &World,
+                        obj: &mut dyn oxide_core::reflect::Reflect,
+                        salt: &str| { reflect_grid(ui, w, obj, salt) };
+    let salt = format!("custom-{}-{}", id.to_bits(), cid.0);
+    let mut gui = oxide_engine::InspectorGui::new(ui, w, id, &draw_default, salt);
+    // A panicking Inspector must not take the editor down with it.
+    let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        editor(&mut *copy, &mut gui);
+    }));
+    if ran.is_err() {
+        ui.colored_label(
+            Color32::from_rgb(240, 110, 90),
+            "This component's Inspector panicked; see the Console.",
+        );
+        return;
+    }
+    for (k, v) in copy.fields() {
+        if before.iter().any(|(bk, bv)| *bk == k && *bv != v) {
+            edits.push((Edit::Field(slot, k.to_owned(), v), key(id, k)));
+        }
+    }
+}
+
 /// Debug mode: what Unity's Debug Inspector shows beyond the fields.
 fn debug_info(ui: &mut egui::Ui, w: &World, id: GameObjectId) {
     let Some(o) = w.get(id) else { return };
@@ -752,6 +792,18 @@ fn components(
                     ui.weak("Multi-object editing of LOD Groups is not supported.");
                 } else {
                     lod_group_editor(ui, w, id, cid, &st.selection, edits);
+                }
+                return;
+            }
+            if !debug
+                && let Some(editor) = w
+                    .try_resource::<oxide_engine::CustomEditors>()
+                    .and_then(|e| e.get(type_name))
+            {
+                if targets.len() > 1 {
+                    ui.weak("Multi-object editing is not supported by this component's Inspector.");
+                } else {
+                    custom_inspector(ui, w, id, cid, slot, editor, edits);
                 }
                 return;
             }
@@ -1725,5 +1777,79 @@ mod tests {
         assert_eq!(nicify("MeshRenderer"), "Mesh Renderer");
         assert_eq!(nicify("speed"), "Speed");
         assert_eq!(nicify("uv2"), "Uv2");
+    }
+
+    #[derive(Clone, Default, oxide_core::Reflect)]
+    struct Speedy {
+        speed: f32,
+        note: String,
+    }
+
+    impl oxide_scene::Component for Speedy {}
+
+    impl oxide_engine::CustomEditor for Speedy {
+        fn on_inspector_gui(&mut self, gui: &mut oxide_engine::InspectorGui) {
+            gui.draw_default_inspector(self);
+            if self.speed > 10.0 {
+                gui.help_box("Fast", oxide_engine::MessageType::Warning);
+            }
+            // As if a "Max Speed" button had been clicked.
+            self.speed = 42.0;
+        }
+    }
+
+    #[test]
+    fn custom_inspectors_edit_through_the_normal_path() {
+        let mut w = World::new();
+        oxide_scene::register_builtin(&mut w.registry);
+        w.registry.register::<Speedy>("Scripts/Speedy");
+        let mut editors = oxide_engine::CustomEditors::default();
+        editors.register::<Speedy>();
+        w.resources.insert(editors);
+        let id = w.create("Car");
+        w.add_component(
+            id,
+            Speedy {
+                speed: 12.0,
+                note: "keep".into(),
+            },
+        );
+        let cid = w.get(id).unwrap().component_list()[0].0;
+        let editor = w
+            .resource::<oxide_engine::CustomEditors>()
+            .get("Speedy")
+            .expect("registered");
+        let slot = Slot {
+            type_name: "Speedy",
+            nth: 0,
+        };
+        let ctx = egui::Context::default();
+        let mut edits = Vec::new();
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            custom_inspector(ui, &w, id, cid, slot, editor, &mut edits);
+        });
+        out.textures_delta.clear();
+        // Only the changed field becomes an edit; the component itself is untouched until
+        // the edits are applied (with Undo).
+        // egui may run the first frame twice (a sizing pass), repeating the same edit.
+        let mut changed: Vec<String> = edits
+            .iter()
+            .map(|e| match &e.0 {
+                Edit::Field(_, f, v) => format!("{f}={v:?}"),
+                _ => "other".into(),
+            })
+            .collect();
+        changed.dedup();
+        assert_eq!(changed, ["speed=Float(42.0)"]);
+        assert!(
+            matches!(&edits[0].0, Edit::Field(s, f, Value::Float(v)) if *s == slot && f == "speed" && (*v - 42.0).abs() < 1e-6)
+        );
+        let c = w.get_component::<Speedy>(id).unwrap();
+        assert_eq!((c.speed, c.note.as_str()), (12.0, "keep"));
+        // Unloading the script library forgets its Inspector.
+        let mut e = oxide_engine::CustomEditors::default();
+        e.register::<Speedy>();
+        e.remove(&["Speedy".to_owned()]);
+        assert!(e.is_empty());
     }
 }

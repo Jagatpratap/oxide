@@ -14,7 +14,8 @@ pub const BUILD_ID: &str = "player";
 /// Same as `oxide_dylib::scripts!`: declares a Scripts library's components.
 #[macro_export]
 macro_rules! scripts {
-    ($($ty:ty => $menu:expr),* $(,)?) => {
+    // Custom Inspectors (`editors:`) are editor-only: accepted and ignored here.
+    ($($ty:ty => $menu:expr),* $(,)? $(; editors: $($ed:ty),* $(,)?)?) => {
         pub fn oxide_scripts_build_id() -> &'static str {
             $crate::BUILD_ID
         }
