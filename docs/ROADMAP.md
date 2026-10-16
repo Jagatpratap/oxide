@@ -248,7 +248,13 @@ toggle, Rect tool for multiple objects at once (it resizes the active object).
   into Cells. Missing: background asset decoding (assets still load on the main thread),
   Resources-style folders, addressable bundles
   ([Managing assets at runtime](https://docs.unity3d.com/Manual/assets-managing-runtime.html))
-- ☐ ScriptableObject-equivalent data assets
+- ☑ ScriptableObject-equivalent data assets: asset type registry (Create menu, icons, extensions),
+  `register_data_asset::<T>()` for engine and script types (`scripts! { ...; assets: T => ("ext", "Menu") }`),
+  YAML files edited in the Inspector and over MCP (`asset_types`, `data_asset`); Presets ☑
+- ☑ Asset kinds with editors: Physics Material, Volume Profile, Lighting Settings, Lightmap Parameters,
+  Input Actions (+ window), Animation Clip / Controller / Override Controller / Avatar Mask (+ Animation
+  and Animator windows), Audio Mixer (+ window), Sprite Atlas, Tile / Animated Tile / Rule Tile,
+  Tile Palette (+ window), Sprite Library, Prefab Variants
 - ☐ Package export/import (`.oxidepackage`)
   ([Asset packages](https://docs.unity3d.com/Manual/AssetPackages.html))
 
@@ -369,13 +375,15 @@ runner, native plugins.
   [Character control](https://docs.unity3d.com/Manual/character-control-section.html),
   [Joints](https://docs.unity3d.com/Manual/joints-section.html),
   [Physics Debug](https://docs.unity3d.com/Manual/PhysicsDebugVisualization.html))
+- ☑ Curves and gradients (AnimationCurve, Gradient, MinMaxCurve) with Curve and Gradient Editors, used by
+  WheelCollider friction curves, the CarController torque/steering curves, particles and audio rolloff
 - ☑ Collision callbacks: `OnCollisionEnter/Stay/Exit`, `OnTriggerEnter/Stay/Exit`
   ([Collision](https://docs.unity3d.com/Manual/collision-section.html))
 - ◐ Input: legacy axes + action-map system, rebinding, gamepad, touch, IME text input
   ([Input](https://docs.unity3d.com/Manual/Input.html))
-- ☐ 2D: Sprites, Sprite Renderer, sprite atlas, Sprite Editor (slicing, pivots), 9-slice, sorting layers/groups
+- ◐ 2D: Sprites ☑, Sprite Renderer (simple/sliced/tiled) ☑, Sprite Atlas ☑, Sprite Editor (auto/grid slicing, pivots, 9-slice borders) ☑, sorting layers ☑, Sprite Library/Resolver ☑, sprite flipbook animation ☑; sorting groups, Sprite Shape, skinning ☐
   ([Sprites](https://docs.unity3d.com/Manual/sprite/sprite-landing.html))
-- ☐ Tilemaps: Grid, Tilemap, Tile Palette, rule tiles, isometric/hex
+- ◐ Tilemaps: Grid, Tilemap, TilemapRenderer, Tile Palette window + Scene painting (brush, box, fill, erase, picker), Animated and Rule Tiles ☑; isometric/hex, Tilemap Collider ☐
   ([Tilemaps](https://docs.unity3d.com/Manual/tilemaps/tilemaps-landing.html))
 - ☐ 2D physics (Rigidbody2D, colliders, effectors, joints)
   ([2D physics](https://docs.unity3d.com/Manual/2d-physics/2d-physics.html))
@@ -385,10 +393,10 @@ runner, native plugins.
 **Exit:** a playable 3D third-person controller demo and a 2D tilemap platformer, both built only in the editor.
 
 ### P8 — Animation, Audio, UI, VFX, Terrain, Video
-- ◐ Animation: AnimationClip ☑, Animation window (dopesheet/curves, keyframe recording) ☐, Animator Controller (state machine, transitions, parameters, layers, masks, blend trees 1D/2D) ☑ (in code; `.controller` files and the Animator window ☐), humanoid bone mapping ☑ / retargeting ☐, root motion ☑, IK (goals, hints, LookAt) ☑, animation events ☑, update modes ☑
+- ◐ Animation: AnimationClip ☑, Animation window (dopesheet/curves, keyframe recording, any-property and object-reference keys) ☑, Animator Controller (state machine, transitions, parameters, layers, masks, blend trees 1D/2D) ☑ with `.controller` files, Override Controllers, Avatar Masks and the Animator window ☑, humanoid bone mapping ☑ / retargeting ☐, root motion ☑, IK (goals, hints, LookAt) ☑, animation events ☑, update modes ☑
   ([Mecanim](https://docs.unity3d.com/Manual/animation-mecanim.html))
 - ☐ Timeline-style sequencer for cutscenes
-- ◐ Audio: AudioClip import settings, AudioSource/Listener, 3D rolloff, Doppler, Audio Mixer (groups, snapshots, effects, sends, ducking), reverb zones, filters, random containers
+- ◐ Audio: AudioClip import settings, AudioSource/Listener, 3D rolloff, Doppler, Audio Mixer (groups, snapshots, effects, exposed parameters ☑; sends, ducking ☐), reverb zones, filters, random containers
   ([Audio](https://docs.unity3d.com/Manual/Audio.html),
   [Audio Mixer](https://docs.unity3d.com/Manual/audio-mixer-landing.html),
   [Audio reference](https://docs.unity3d.com/Manual/AudioReference.html))

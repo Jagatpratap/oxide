@@ -37,7 +37,7 @@ If the engine isn't running, the bridge returns an error that says how to start 
 
 ## Tools
 
-62 tools (generated from the running editor's `tools/list`). Tools named `editor_*` exist
+79 tools (generated from the running editor's `tools/list`). Tools named `editor_*` exist
 only when the editor is running (not with `--player`).
 
 | Tool | What it does | Changes state |
@@ -89,6 +89,13 @@ only when the editor is running (not with `--player`).
 | `create_terrain` | Creates a generated terrain (noise heights, auto grass/rock/sand/snow texturing, heightfield collider) | yes |
 | `terrain_height` | Unity Terrain.SampleHeight: world Y of the terrain surface at `x`, `z` (null off-terrain) | no |
 | `spawn_effect` | Creates a ParticleSystem from a preset (smoke, fire, explosion, muzzle_flash, dust, rain) at `position` | yes |
+| `log_message` | Logs a message like Unity's Debug.Log / LogWarning / LogError (errors also record a stack trace) | yes |
+| `project_settings` | Unity Project Settings (tags, layers, sorting layers, physics, quality, ...), saved in ProjectSettings/*.yaml | yes |
+| `asset_types` | Every asset type the project knows (the asset type registry): type name, file extensions, Create menu path, whether it is a data asset (ScriptableObject, edited with `data_asset`) and, for data assets, the fields of a new one | no |
+| `data_asset` | Creates, reads or changes a data asset file (Unity ScriptableObject: Physics Material, Volume Profile, Lighting Settings, Input Actions, Tiles, Sprite Atlas, Sprite Library, script-defined data) | yes |
+| `input_actions` | Live Input System action states (what scripts read with `ctx.input().action("Move")`): value, phase, pressed and this-frame flags for every action enabled by a PlayerInput component | no |
+| `audio_mixer` | An Audio Mixer at runtime (Unity AudioMixer): `set` {"MusicVol": -10} sets exposed parameters (dB for volumes), `clear` removes script values, `snapshot` + `seconds` transitions to a snapshot | yes |
+| `tilemap` | Edits a Tilemap (Unity Tilemap API): `set` [{x, y, tile}] sets cells (tile = a .tile/.ruletile/.animatedtile path, or null to erase), `box_fill` {from, to, tile}, `flood_fill` {x, y, tile}, `clear` | yes |
 | `quit` | Closes the window and exits | yes (destructive) |
 | `editor_get_state` | Editor mode (edit/playing/paused), open scene and unsaved flag, selection, active tool, open windows, undo/redo history and the Scene view camera | no |
 | `editor_select` | Sets the editor selection (what the Inspector shows and the handles move) | yes |
@@ -102,6 +109,11 @@ only when the editor is running (not with `--player`).
 | `editor_shortcuts` | Shortcuts Manager: list commands with their shortcuts, defaults and conflicts; set (`Cmd+Shift+K`, optionally reassigning) or reset; saved in Preferences | yes |
 | `editor_search` | Search window: find assets, scene objects (`t:Camera`), menu items and settings (`p:` `h:` `m:` `set:`); activate a result or show the popup | yes |
 | `editor_ui_input` | Clicks, double/right-clicks, drags, scrolls, key presses and text in the editor UI at window coordinates (the same as `editor_capture` pixels), for testing windows that need the pointer such as the Curve and Gradient Editors | yes |
+| `editor_open_window` | Opens (or focuses) an editor window; `asset` opens Input Actions / Sprite Editor / Animator / Audio Mixer on a file | yes |
+| `editor_game_view` | Game view control bar: `size` (aspect or fixed resolution), `scale`, maximize on play, stats, gizmos | yes |
+| `editor_inspector` | Locks the Inspector to the current selection (`lock`: true) or unlocks it, toggles Debug mode, `scroll_to` a component, and returns which objects the Inspector shows | yes |
+| `editor_animation` | The Animation window (it edits the clips of the selected object's Animator): target, clip, playhead, record and preview state; `time`, `record`, `preview`, `clip`, and `add_sprites` (keys a sprite sheet as a 12 fps flipbook) | yes |
+| `editor_preferences` | Reads the per-user editor Preferences; `values` changes some | yes |
 | `editor_capture` | PNG of the whole editor window (menus, Hierarchy, Scene/Game views, Inspector, ...), as the user sees it | no |
 | `reflection_probes` | Lists Reflection Probes (box, mode, refresh mode, importance) and the last frame's reflection stats (`active` = probes with a captured cubemap, up to 15; `captures` = cubemaps captured that frame, sky included). | yes |
 | `create_render_texture` | Creates a `.renderTexture` asset (Unity RenderTexture) for a Camera's `target_texture` and for materials (mirrors, screens, scopes) | yes |
