@@ -139,6 +139,7 @@ pub fn menu_items(world: &World, keymap: &Keymap) -> Vec<MenuItem> {
         ),
         item("Edit/Preferences...", Action::OpenPreferences),
         item("Edit/Shortcuts...", Action::OpenTab(Tab::Shortcuts)),
+        item("Edit/Search All...", Action::OpenSearch),
     ];
     for n in 1..=9 {
         v.push(item(

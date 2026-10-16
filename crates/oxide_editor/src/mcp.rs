@@ -881,6 +881,69 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
         s,
         bus,
         ToolDef::new(
+            "editor_search",
+            "Search everything",
+            "Unity's Search window (⌘K): find assets (`t:Type l:Label`), scene objects (`t:Camera` finds objects \
+             with that component), menu items and settings pages. Prefixes `p:` `h:` `m:` `set:` pick one provider. \
+             `activate`: index of a result to select it (assets and objects) or run it (menus, settings); \
+             `open: true` opens an asset instead. `show: true` opens the Search popup with this query.",
+            schema(
+                json!({ "query": { "type": "string" }, "activate": { "type": "integer", "minimum": 0 },
+                       "open": { "type": "boolean" }, "show": { "type": "boolean" } }),
+                &["query"],
+            ),
+        ),
+        |args, e| {
+            with_editor(e, |ed, e| {
+                use crate::search_window::{Hit, activate, search};
+                let q = args
+                    .get("query")
+                    .and_then(Json::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                let hits = search(&mut ed.st, e, &q);
+                if args.get("show").and_then(Json::as_bool) == Some(true) {
+                    ed.st.search.open = true;
+                    ed.st.search.query = q.clone();
+                }
+                let mut done = Json::Null;
+                if let Some(i) = args.get("activate").and_then(Json::as_u64) {
+                    let Some(hit) = hits.get(i as usize) else {
+                        return ToolResult::error(format!(
+                            "no result {i} ({} results)",
+                            hits.len()
+                        ));
+                    };
+                    let open = args.get("open").and_then(Json::as_bool).unwrap_or(false);
+                    activate(&mut ed.st, e, hit, open);
+                    let actions = std::mem::take(&mut ed.st.actions);
+                    for a in actions {
+                        if let Err(err) = ed.apply(e, a) {
+                            return ToolResult::error(err);
+                        }
+                    }
+                    done = json!(i);
+                }
+                let rows: Vec<Json> = hits
+                    .iter()
+                    .enumerate()
+                    .map(|(i, h)| match h {
+                        Hit::Asset(x) => json!({ "index": i, "provider": "Project", "path": x.path,
+                                                 "type": crate::project::entry_kind(x).0, "labels": x.labels }),
+                        Hit::Object { id, path } => json!({ "index": i, "provider": "Hierarchy", "path": path, "id": id.to_bits() }),
+                        Hit::Menu { path, shortcut, .. } => json!({ "index": i, "provider": "Menu", "path": path, "shortcut": shortcut }),
+                        Hit::Setting { name, .. } => json!({ "index": i, "provider": "Settings", "path": name }),
+                    })
+                    .collect();
+                ToolResult::json(json!({ "results": rows, "activated": done }))
+            })
+        },
+    );
+
+    tool(
+        s,
+        bus,
+        ToolDef::new(
             "editor_scripts",
             "Game scripts",
             "The project's Rust scripts: `status` (compile state, errors, script component types), `recompile`, or \

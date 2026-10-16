@@ -24,6 +24,7 @@ mod project;
 pub mod project_files;
 mod scene_view;
 pub mod scripting;
+mod search_window;
 pub mod settings_window;
 pub mod shortcuts;
 mod theme;
@@ -212,6 +213,10 @@ pub enum Action {
     /// Edit → Project Settings, on this page.
     OpenProjectSettings(settings_window::Page),
     OpenPreferences,
+    /// Preferences, on this page.
+    OpenPreferencesPage(prefs::Page),
+    /// Edit → Search All (⌘K): the Search popup.
+    OpenSearch,
     /// Assets → Refresh: reimport files changed on disk.
     RefreshAssets,
     /// Undo History: undo or redo until this many steps are applied.
@@ -272,6 +277,7 @@ pub struct EditorState {
     /// Shortcut bindings (defaults plus the user's changes from Preferences).
     pub keymap: shortcuts::Keymap,
     shortcuts_ui: shortcuts::ShortcutsWindow,
+    pub(crate) search: search_window::SearchState,
     scene_ui: scene_view::SceneViewState,
     pub(crate) game: game_view::GameViewState,
     modal: Option<Modal>,
@@ -320,6 +326,7 @@ impl EditorState {
             asset_inspector: Default::default(),
             keymap: Default::default(),
             shortcuts_ui: Default::default(),
+            search: Default::default(),
             scene_ui: Default::default(),
             game: Default::default(),
             modal: None,
@@ -893,6 +900,15 @@ impl Editor {
             Action::OpenPreferences => {
                 self.focus_tab(Tab::Preferences);
                 return Ok("Opened Preferences".into());
+            }
+            Action::OpenPreferencesPage(page) => {
+                st.prefs_page = page;
+                self.focus_tab(Tab::Preferences);
+                return Ok("Opened Preferences".into());
+            }
+            Action::OpenSearch => {
+                st.search.open = !st.search.open;
+                String::new()
             }
             Action::RefreshAssets => {
                 let n = w.resource_mut::<AssetServer>().reload_changed().len();
@@ -1503,6 +1519,7 @@ impl Shell for Editor {
                     .show_inside(ui, &mut viewer);
             });
         self.modal_ui(&ctx, engine);
+        search_window::ui(&mut self.st, engine, &ctx);
 
         for a in std::mem::take(&mut self.st.actions) {
             if let Err(e) = self.apply(engine, a) {

@@ -250,6 +250,11 @@ pub fn commands() -> Vec<Command> {
             Action::OpenTab(crate::Tab::Shortcuts),
         ),
         command(
+            "Main Menu/Edit/Search All",
+            &[cmd(Key::K)],
+            Action::OpenSearch,
+        ),
+        command(
             "Main Menu/Assets/Refresh",
             &[cmd(Key::R)],
             Action::RefreshAssets,
