@@ -56,6 +56,7 @@ fn kind(name: &str) -> (&'static str, Color32) {
         "rs" => ("Script", Color32::from_rgb(240, 120, 90)),
         "prefab" => ("Prefab", Color32::from_rgb(140, 180, 255)),
         "mat" => ("Material", Color32::from_rgb(200, 160, 255)),
+        "rendertexture" => ("Render Texture", Color32::from_rgb(230, 190, 110)),
         _ => ("File", Color32::from_gray(170)),
     }
 }
@@ -163,6 +164,37 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
         ui.menu_button("+", |ui| {
             if ui.button("Folder").clicked() {
                 ps.new_folder = Some("New Folder".into());
+                ui.close();
+            }
+            // Asset files get a free "New X" name in the open folder, like Unity.
+            let free = |stem: &str, ext: &str| {
+                (0..)
+                    .map(|i| match i {
+                        0 => format!("{}/{stem}.{ext}", ps.folder),
+                        n => format!("{}/{stem} {n}.{ext}", ps.folder),
+                    })
+                    .find(|p| !root.join(p).exists())
+                    .expect("unbounded")
+            };
+            if ui.button("Material").clicked() {
+                let path = free("New Material", "mat");
+                let assets = engine.world.resource_mut::<AssetServer>();
+                let m = oxide_assets::Material::lit("New Material", oxide_math::Color::WHITE);
+                if let Err(e) = assets.save_material(&path, &m) {
+                    oxide_core::debug_log_error!("{e}");
+                }
+                ps.cache = None;
+                ui.close();
+            }
+            if ui.button("Render Texture").clicked() {
+                let path = free("New Render Texture", "renderTexture");
+                let assets = engine.world.resource_mut::<AssetServer>();
+                if let Err(e) =
+                    assets.save_render_texture(&path, &oxide_assets::RenderTexture::default())
+                {
+                    oxide_core::debug_log_error!("{e}");
+                }
+                ps.cache = None;
                 ui.close();
             }
             if ui

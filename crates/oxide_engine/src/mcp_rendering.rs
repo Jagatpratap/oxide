@@ -13,6 +13,48 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
         s,
         bus,
         ToolDef::new(
+            "create_render_texture",
+            "Create Render Texture",
+            "Creates a `.renderTexture` asset (Unity RenderTexture) at `path` (e.g. \"Assets/Mirror.renderTexture\"). \
+             Set a Camera's `target_texture` to it to render into it instead of the screen, and use the same path \
+             in a material's `base_map` / `emission_map` (mirrors, screens, scopes).",
+            schema(
+                json!({
+                    "path": { "type": "string" },
+                    "width": { "type": "integer", "minimum": 1, "maximum": 8192 },
+                    "height": { "type": "integer", "minimum": 1, "maximum": 8192 }
+                }),
+                &["path"],
+            ),
+        ),
+        |args, e| {
+            let path = args.get("path").and_then(Json::as_str).unwrap_or_default();
+            if !path.to_ascii_lowercase().ends_with(".rendertexture") {
+                return ToolResult::error("`path` must end in .renderTexture");
+            }
+            let size = |k: &str| args.get(k).and_then(Json::as_u64).unwrap_or(256) as u32;
+            let rt = oxide_assets::RenderTexture {
+                name: std::path::Path::new(path)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("RenderTexture")
+                    .to_owned(),
+                width: size("width").clamp(1, 8192),
+                height: size("height").clamp(1, 8192),
+            };
+            let assets = e.world.resource_mut::<oxide_assets::AssetServer>();
+            match assets.save_render_texture(path, &rt) {
+                Ok(_) => ToolResult::json(
+                    json!({ "path": path, "width": rt.width, "height": rt.height }),
+                ),
+                Err(err) => ToolResult::error(err),
+            }
+        },
+    );
+    tool(
+        s,
+        bus,
+        ToolDef::new(
             "reflection_probes",
             "Reflection probes",
             "Lists Reflection Probes (box, mode, refresh mode, importance) and the last frame's reflection stats \

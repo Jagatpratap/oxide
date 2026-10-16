@@ -36,6 +36,7 @@ pub struct AssetServer {
     pub controllers: Assets<AnimatorController>,
     pub audio: Assets<AudioClip>,
     pub terrains: Assets<crate::terrain::TerrainData>,
+    pub render_textures: Assets<crate::render_texture::RenderTexture>,
 }
 
 pub const DEFAULT_MATERIAL: &str = "builtin:Default-Material";
@@ -54,6 +55,7 @@ impl AssetServer {
             controllers: Assets::default(),
             audio: Assets::default(),
             terrains: Assets::default(),
+            render_textures: Assets::default(),
         };
         for p in PrimitiveType::ALL {
             s.meshes.insert(p.mesh_path(), p.mesh());
@@ -173,6 +175,52 @@ impl AssetServer {
         Ok(self.materials.insert(path.to_owned(), material.clone()))
     }
 
+    /// Loads (or reloads) a `.renderTexture` file.
+    pub fn load_render_texture(
+        &mut self,
+        path: &str,
+    ) -> Result<Handle<crate::render_texture::RenderTexture>, String> {
+        let text = String::from_utf8(self.read(path)?).map_err(|e| format!("{path}: {e}"))?;
+        let fields: BTreeMap<String, Value> =
+            serde_yaml_ng::from_str(&text).map_err(|e| format!("{path}: {e}"))?;
+        let mut rt = crate::render_texture::RenderTexture {
+            name: Path::new(path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("RenderTexture")
+                .to_owned(),
+            ..Default::default()
+        };
+        for (k, v) in fields {
+            if let Err(e) = rt.set_field(&k, v) {
+                oxide_core::debug_log_warning!("{path}: {k}: {e}");
+            }
+        }
+        rt.width = rt.width.clamp(1, 8192);
+        rt.height = rt.height.clamp(1, 8192);
+        Ok(self.render_textures.insert(path.to_owned(), rt))
+    }
+
+    /// Writes a `.renderTexture` file at `path` and stores it under that path.
+    pub fn save_render_texture(
+        &mut self,
+        path: &str,
+        rt: &crate::render_texture::RenderTexture,
+    ) -> Result<Handle<crate::render_texture::RenderTexture>, String> {
+        let fields: BTreeMap<String, Value> = rt
+            .fields()
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), v))
+            .collect();
+        let text = serde_yaml_ng::to_string(&fields).map_err(|e| e.to_string())?;
+        let full = self.full_path(path);
+        if let Some(dir) = full.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        std::fs::write(&full, text).map_err(|e| format!("cannot write {}: {e}", full.display()))?;
+        Ok(self.render_textures.insert(path.to_owned(), rt.clone()))
+    }
+
     pub fn load_audio(&mut self, path: &str) -> Result<Handle<AudioClip>, String> {
         let bytes = self.read(path)?;
         let name = Path::new(path)
@@ -215,6 +263,11 @@ impl AssetServer {
             "mat" => {
                 if self.materials.handle_of(file).is_none() {
                     self.load_material(file)?;
+                }
+            }
+            "rendertexture" => {
+                if self.render_textures.handle_of(file).is_none() {
+                    self.load_render_texture(file)?;
                 }
             }
             "wav" | "ogg" | "mp3" | "flac" => {

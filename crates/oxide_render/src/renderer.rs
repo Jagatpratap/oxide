@@ -226,6 +226,8 @@ pub struct SceneRenderer {
     terrain_prepass: wgpu::RenderPipeline,
     /// Per view: (frame index, view-projection this frame, last frame's), for motion blur.
     view_prev: HashMap<(u64, u32, u32), (u64, Matrix4x4, Matrix4x4)>,
+    /// Frame each Render Texture was last rendered in.
+    rt_frames: HashMap<AssetId, u64>,
     frame_buffers: Vec<wgpu::Buffer>,
     /// Per camera: cluster cells and light index list (Forward+).
     cluster_buffers: Vec<(wgpu::Buffer, wgpu::Buffer)>,
@@ -594,6 +596,7 @@ impl SceneRenderer {
             prepass_pipelines: HashMap::new(),
             terrain_prepass,
             view_prev: HashMap::new(),
+            rt_frames: HashMap::new(),
             frame_buffers: Vec::new(),
             cluster_buffers: Vec::new(),
             frame_groups: Vec::new(),
@@ -1168,11 +1171,56 @@ impl SceneRenderer {
         width: u32,
         height: u32,
     ) -> RenderStats {
-        let (w, h) = (width.max(1), height.max(1));
         let captures = self.update_reflections(gpu, assets, frame);
-        let (mut encoder, mut stats, out) = self.render_scene(gpu, assets, frame, w, h, None);
+        self.render_texture_cameras(gpu, assets, frame);
+        let mut stats = self.render_view(gpu, assets, frame, target, format, width, height);
         stats.reflection_probes = self.reflections.active_count();
         stats.probe_captures = captures;
+        self.last_stats = stats;
+        stats
+    }
+
+    /// Cameras with a target texture render into it (once per frame each).
+    fn render_texture_cameras(&mut self, gpu: &Gpu, assets: &AssetServer, frame: &RenderFrame) {
+        for (rt, cam) in &frame.texture_cameras {
+            if self.rt_frames.get(rt) == Some(&frame.frame_index) {
+                continue;
+            }
+            self.rt_frames.insert(*rt, frame.frame_index);
+            let Some((view, w, h)) = self.gpu_assets.render_target(&gpu.device, assets, *rt) else {
+                continue;
+            };
+            let sub = RenderFrame {
+                cameras: vec![cam.clone()],
+                texture_cameras: Vec::new(),
+                ..frame.clone()
+            };
+            self.render_view(
+                gpu,
+                assets,
+                &sub,
+                &view,
+                crate::gpu_assets::RENDER_TEXTURE_FORMAT,
+                w,
+                h,
+            );
+        }
+    }
+
+    /// Scene, anti-aliasing and post-processing of `frame`'s cameras into `target`.
+    #[allow(clippy::too_many_arguments)]
+    fn render_view(
+        &mut self,
+        gpu: &Gpu,
+        assets: &AssetServer,
+        frame: &RenderFrame,
+        target: &wgpu::TextureView,
+        format: wgpu::TextureFormat,
+        width: u32,
+        height: u32,
+    ) -> RenderStats {
+        let (w, h) = (width.max(1), height.max(1));
+        let (mut encoder, stats, out) = self.render_scene(gpu, assets, frame, w, h, None);
 
         // ---- post-processing into the target ------------------------------------------
         let key = (w, h, out.samples);
@@ -1288,7 +1336,6 @@ impl SceneRenderer {
             );
         }
         gpu.queue.submit([encoder.finish()]);
-        self.last_stats = stats;
         stats
     }
 

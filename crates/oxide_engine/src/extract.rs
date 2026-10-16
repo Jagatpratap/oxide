@@ -53,11 +53,29 @@ pub fn camera_view(world: &World, id: oxide_scene::GameObjectId, c: &Camera) -> 
     }
 }
 
-/// Cameras sorted by `depth` (Unity draws lower depth first).
+/// Screen cameras sorted by `depth` (Unity draws lower depth first). Cameras with a
+/// target texture are in [`texture_cameras`] instead.
 pub fn cameras(world: &World) -> Vec<CameraView> {
     let mut cams: Vec<_> = world
         .query::<Camera>()
+        .filter(|(_, c)| c.target_texture.is_none())
         .map(|(id, c)| (c.depth, camera_view(world, id, c)))
+        .collect();
+    cams.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    cams.into_iter().map(|(_, v)| v).collect()
+}
+
+/// Cameras rendering into Render Textures, by depth.
+pub fn texture_cameras(world: &World) -> Vec<(AssetId, CameraView)> {
+    let mut cams: Vec<_> = world
+        .query::<Camera>()
+        .filter_map(|(id, c)| {
+            let rt = c.target_texture.as_ref()?.id();
+            let mut v = camera_view(world, id, c);
+            // A target texture is the whole viewport.
+            v.viewport = [0.0, 0.0, 1.0, 1.0];
+            Some((c.depth, (rt, v)))
+        })
         .collect();
     cams.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     cams.into_iter().map(|(_, v)| v).collect()
@@ -119,6 +137,7 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
     let post_enabled = cameras_override.is_some()
         || world
             .query::<Camera>()
+            .filter(|(_, c)| c.target_texture.is_none())
             .min_by(|a, b| a.1.depth.total_cmp(&b.1.depth))
             .is_none_or(|(_, c)| c.post_processing);
     let mut frame = RenderFrame {
@@ -126,6 +145,7 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
         environment: environment(&settings),
         time: world.resource::<oxide_core::Time>().time(),
         frame_index: world.resource::<oxide_core::Time>().frame_count(),
+        texture_cameras: texture_cameras(world),
         ..Default::default()
     };
 

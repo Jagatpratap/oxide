@@ -620,7 +620,18 @@ fn assets_of_type(assets: &AssetServer, type_name: Option<&str>) -> Vec<String> 
     let mut v: Vec<String> = match type_name.unwrap_or("") {
         "Mesh" => assets.meshes.iter().map(|(p, _)| p.to_owned()).collect(),
         "Material" => assets.materials.iter().map(|(p, _)| p.to_owned()).collect(),
-        "Texture2D" | "Texture" => assets.textures.iter().map(|(p, _)| p.to_owned()).collect(),
+        // Render Textures work wherever a texture does.
+        "Texture2D" | "Texture" => assets
+            .textures
+            .iter()
+            .map(|(p, _)| p.to_owned())
+            .chain(assets.render_textures.iter().map(|(p, _)| p.to_owned()))
+            .collect(),
+        "RenderTexture" => assets
+            .render_textures
+            .iter()
+            .map(|(p, _)| p.to_owned())
+            .collect(),
         "AudioClip" => assets.audio.iter().map(|(p, _)| p.to_owned()).collect(),
         "AnimationClip" => assets
             .animations

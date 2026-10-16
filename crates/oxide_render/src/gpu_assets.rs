@@ -44,7 +44,14 @@ pub struct GpuTexture {
     pub view: wgpu::TextureView,
     pub wrap: TextureWrapMode,
     pub filter: FilterMode,
+    pub width: u32,
+    pub height: u32,
+    /// A Render Texture's target (cameras render into it).
+    pub render_target: bool,
 }
+
+/// Format of Render Textures (tonemapped color, like Unity's default ARGB32 sRGB).
+pub const RENDER_TEXTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -231,7 +238,7 @@ impl GpuAssets {
         id: AssetId,
     ) -> bool {
         let Some(version) = assets.textures.version(id) else {
-            return false;
+            return self.ensure_render_texture(device, assets, id);
         };
         if self.textures.get(&id).is_some_and(|t| t.version == version) {
             return true;
@@ -244,6 +251,74 @@ impl GpuAssets {
             .insert(id, upload_texture(device, queue, tex, version));
         self.texture_generation += 1;
         true
+    }
+
+    /// Creates (or resizes) the GPU target of a Render Texture asset.
+    fn ensure_render_texture(
+        &mut self,
+        device: &wgpu::Device,
+        assets: &AssetServer,
+        id: AssetId,
+    ) -> bool {
+        let Some(version) = assets.render_textures.version(id) else {
+            return false;
+        };
+        if self.textures.get(&id).is_some_and(|t| t.version == version) {
+            return true;
+        }
+        let rt = assets
+            .render_textures
+            .get_by_id(id)
+            .expect("versioned render texture exists");
+        let (width, height) = (rt.width.max(1), rt.height.max(1));
+        let view = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some(&rt.name),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: RENDER_TEXTURE_FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            })
+            .create_view(&Default::default());
+        self.textures.insert(
+            id,
+            GpuTexture {
+                version,
+                view,
+                wrap: TextureWrapMode::Clamp,
+                filter: FilterMode::Bilinear,
+                width,
+                height,
+                render_target: true,
+            },
+        );
+        self.texture_generation += 1;
+        true
+    }
+
+    /// The target of Render Texture `id` (made if needed): its view and size.
+    pub fn render_target(
+        &mut self,
+        device: &wgpu::Device,
+        assets: &AssetServer,
+        id: AssetId,
+    ) -> Option<(wgpu::TextureView, u32, u32)> {
+        if !self.ensure_render_texture(device, assets, id) {
+            return None;
+        }
+        self.textures
+            .get(&id)
+            .filter(|t| t.render_target)
+            .map(|t| (t.view.clone(), t.width, t.height))
     }
 
     /// GPU view of a texture asset (uploading it if needed), e.g. for UI images.
@@ -501,5 +576,8 @@ fn upload_texture(
         view: tex.create_view(&Default::default()),
         wrap: t.wrap_mode,
         filter: t.filter_mode,
+        width: t.width,
+        height: t.height,
+        render_target: false,
     }
 }

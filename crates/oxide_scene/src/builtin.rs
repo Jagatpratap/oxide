@@ -77,6 +77,8 @@ pub struct Camera {
     /// TAA: history clamp tightness; lower = less ghosting, more flicker.
     #[reflect(range(0.5, 2))]
     pub taa_variance_clamp_scale: f32,
+    /// Render into this texture instead of the screen (Unity `Camera.targetTexture`).
+    pub target_texture: Option<Handle<oxide_assets::RenderTexture>>,
 }
 
 impl Default for Camera {
@@ -99,6 +101,7 @@ impl Default for Camera {
             taa_base_blend_factor: 0.875,
             taa_jitter_scale: 1.0,
             taa_variance_clamp_scale: 0.9,
+            target_texture: None,
         }
     }
 }

@@ -521,6 +521,9 @@ pub struct RenderFrame {
     pub occluder_boxes: Vec<Matrix4x4>,
     pub particles: Vec<ParticleBatch>,
     pub reflection_probes: Vec<ReflectionProbeView>,
+    /// Cameras rendering into Render Textures (Unity `Camera.targetTexture`), drawn before
+    /// the main cameras, at most once per frame each.
+    pub texture_cameras: Vec<(AssetId, CameraView)>,
 
     /// World-space skinning matrices (bone local-to-world × bind pose).
     pub joints: Vec<Matrix4x4>,
