@@ -204,6 +204,13 @@ pub fn menu_items(world: &World) -> Vec<MenuItem> {
         "",
         Action::RecompileScripts,
     ));
+    for size in [100.0, 200.0, 500.0] {
+        v.push(item(
+            &format!("Tools/World Streaming/Split Scene into {size} m Cells"),
+            "",
+            Action::SplitIntoCells(size),
+        ));
+    }
     v.push(sep("Window"));
     v.push(item("Window/Layouts/Default", "", Action::ResetLayout));
     v
@@ -269,6 +276,7 @@ pub fn menu_bar(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
             "Assets",
             "GameObject",
             "Component",
+            "Tools",
             "Window",
         ] {
             let prefix = format!("{top}/");

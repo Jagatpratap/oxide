@@ -144,6 +144,8 @@ pub enum Action {
     BuildSettingsDialog,
     /// Build the player with the saved Build Settings (and run it if `true`).
     BuildPlayer(bool),
+    /// Split the main scene into streaming cells of this size (m).
+    SplitIntoCells(f32),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -584,6 +586,25 @@ impl Editor {
                 }
                 st.selection.clear();
                 format!("Deleted {} object(s)", tops.len())
+            }
+            Action::SplitIntoCells(size) => {
+                if st.play != PlayState::Edit {
+                    return Err("exit Play mode first".into());
+                }
+                st.record(w, "Split Scene into Cells", None, now);
+                let opts = oxide_engine::streaming::SplitOptions {
+                    cell_size: size,
+                    folder: format!("Assets/Scenes/{}_Cells", w.scene_name),
+                    only_static: true,
+                };
+                let r = oxide_engine::streaming::split_scene_into_cells(w, &opts)?;
+                st.selection.clear();
+                format!(
+                    "Moved {} objects into {} cells under {}; save the scene to keep the World Streamer",
+                    r.moved_roots,
+                    r.cells.len(),
+                    opts.folder
+                )
             }
             Action::SelectAll => {
                 st.selection = w.hierarchy_order();

@@ -640,8 +640,15 @@ impl World {
         Ok(file)
     }
 
-    /// Loads every asset a file's components reference.
+    /// Loads every asset a file's components reference, logging failures.
     pub fn ensure_assets(&mut self, file: &SceneFile) {
+        for w in self.load_assets_of(file) {
+            oxide_core::debug_log_warning!("{w}");
+        }
+    }
+
+    /// Loads every asset a file's components reference. Returns what failed to load.
+    pub fn load_assets_of(&mut self, file: &SceneFile) -> Vec<String> {
         fn walk(v: &Value, out: &mut Vec<String>) {
             match v {
                 Value::Asset(p) => out.push(p.clone()),
@@ -656,12 +663,15 @@ impl World {
                 c.fields.values().for_each(|v| walk(v, &mut paths));
             }
         }
-        let assets = self.resource_mut::<oxide_assets::AssetServer>();
-        for p in paths {
-            if let Err(e) = assets.ensure_loaded(&p) {
-                oxide_core::debug_log_warning!("{e}");
-            }
-        }
+        paths.sort();
+        paths.dedup();
+        let Some(assets) = self.try_resource_mut::<oxide_assets::AssetServer>() else {
+            return Vec::new();
+        };
+        paths
+            .into_iter()
+            .filter_map(|p| assets.ensure_loaded(&p).err())
+            .collect()
     }
 
     fn write_prefab(&mut self, path: &str, file: &SceneFile) -> Result<(), String> {

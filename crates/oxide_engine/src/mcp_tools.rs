@@ -331,6 +331,7 @@ pub fn build_server(bus: Arc<Bus>) -> McpServer {
             for _ in 0..n {
                 e.tick(1.0 / 60.0);
                 e.world.resource_mut::<Input>().end_frame();
+                e.pump_scenes();
             }
             ToolResult::json(time_json(e))
         },
@@ -1049,6 +1050,7 @@ pub fn build_server(bus: Arc<Bus>) -> McpServer {
     crate::mcp_audio::register(&mut s, bus);
     crate::mcp_network::register(&mut s, bus);
     crate::mcp_occlusion::register(&mut s, bus);
+    crate::mcp_streaming::register(&mut s, bus);
     crate::mcp_animation::register(&mut s, bus);
     crate::mcp_terrain::register(&mut s, bus);
     crate::mcp_terrain::register_effects(&mut s, bus);

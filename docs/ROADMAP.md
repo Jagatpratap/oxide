@@ -224,7 +224,11 @@ editing, Undo History window, Preferences/Project Settings windows, project laun
 - ☐ Import settings in Inspector; Presets
   ([Presets](https://docs.unity3d.com/Manual/Presets.html))
 - ☐ File watching + background re-import; asset labels
-- ☐ Runtime loading: Resources-style + streaming assets; later addressable bundles
+- ◐ Runtime loading: multi-scene (`SceneHandle`, additive scenes, `MoveGameObjectToScene`),
+  `LoadSceneAsync` / `UnloadSceneAsync` with `allowSceneActivation` (files parsed on a background
+  thread, activated one per frame); `WorldStreamer` cells + Tools → World Streaming → Split Scene
+  into Cells. Missing: background asset decoding (assets still load on the main thread),
+  Resources-style folders, addressable bundles
   ([Managing assets at runtime](https://docs.unity3d.com/Manual/assets-managing-runtime.html))
 - ☐ ScriptableObject-equivalent data assets
 - ☐ Package export/import (`.oxidepackage`)
@@ -438,7 +442,7 @@ needs, and where the engine is:
 | Vehicle physics (WheelCollider) | ✔ | ✔ (vehicles) | ☑ Rapier ray-cast vehicles, CarController |
 | Character controller + animation | | ✔ | ◐ CharacterController, Animator, 1D blend trees; missing 2D blend trees, root motion, IK, humanoid retargeting |
 | Terrain + foliage | ✔ | ✔ | ◐ chunked LOD terrain, trees; missing grass/details, sculpt tools, streaming |
-| Big worlds (8×8 km) | | ✔ | ◐ LOD Groups (+ `_LODn` model import, LOD bias); occlusion culling ✔; world streaming ☐ |
+| Big worlds (8×8 km) | | ✔ | ◐ LOD Groups (+ `_LODn` model import, LOD bias); occlusion culling ✔; world streaming ✔ (scene cells; assets still load on the main thread); floating origin ☐ |
 | Weapons, hits, ragdolls | | ✔ | ◐ raycasts and joints exist; ragdoll wizard, hit boxes ☐ |
 | Game scripts in the editor | ✔ | ✔ | ☑ project Scripts crate, hot reload in Edit and Play mode |
 | HUD, menus | ✔ | ✔ | ◐ Canvas UI + immediate GUI; UI Toolkit-style layout ☐ |
@@ -447,8 +451,7 @@ needs, and where the engine is:
 | Multiplayer | ◐ | ✔ | ◐ UDP netcode: spawning, NetworkTransform with interpolation, NetworkRigidbody, RPCs; prediction, lag compensation, interest management, dedicated server ☐ |
 | Ship the game | ✔ | ✔ | ◐ desktop player builds (macOS/Windows/Linux); Android/iOS ☐ |
 
-Build order from here: big-world rendering (LOD,
-occlusion, streaming) → animation (2D blend trees, root motion, IK, ragdolls) → NavMesh →
+Build order from here: animation (2D blend trees, root motion, IK, ragdolls) → NavMesh →
 netcode (prediction, interest management) and dedicated server → mobile.
 
 ---

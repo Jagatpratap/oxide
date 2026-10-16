@@ -280,3 +280,135 @@ fn static_flags_round_trip_and_read_old_bool() {
         Some(StaticEditorFlags::OCCLUDER_STATIC)
     );
 }
+
+/// A world whose project folder holds `Assets/Cell.scene` (objects `Cell Root` > `Cell
+/// Child`) and `Assets/Other.scene` (`Other`).
+fn streaming_world(tag: &str) -> World {
+    let dir = std::env::temp_dir().join(format!("oxide-scenes-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("Assets")).unwrap();
+    for (file, names) in [
+        ("Cell", &["Cell Root", "Cell Child"][..]),
+        ("Other", &["Other"][..]),
+    ] {
+        let mut w = world();
+        let root = w.create(names[0]);
+        for n in &names[1..] {
+            let c = w.create(n);
+            w.set_parent(c, Some(root), false).unwrap();
+        }
+        let yaml = w.serialize(&[], file).to_yaml().unwrap();
+        std::fs::write(dir.join(format!("Assets/{file}.scene")), yaml).unwrap();
+    }
+    let mut w = world();
+    w.resources.insert(oxide_assets::AssetServer::new(dir));
+    w.create("Main Object");
+    w
+}
+
+/// Pumps until `op` is done (the parse runs on another thread).
+fn finish(w: &mut World, op: AsyncOperation) -> SceneOpStatus {
+    for _ in 0..500 {
+        w.pump_scene_operations(8);
+        if let Some(s) = w.scene_operation(op)
+            && s.is_done
+        {
+            return s;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("scene operation did not finish");
+}
+
+#[test]
+fn additive_async_load_and_unload() {
+    let mut w = streaming_world("additive");
+    let op = w.load_scene_async("Assets/Cell.scene", true);
+    let st = finish(&mut w, op);
+    assert_eq!(st.error, None);
+    let cell = st.scene.unwrap();
+    assert_ne!(cell, SceneHandle::MAIN);
+    assert_eq!(w.loaded_scenes().len(), 2);
+    assert_eq!(w.find_scene("Cell"), Some(cell));
+    assert_eq!(w.find_scene("Assets/Cell.scene"), Some(cell));
+    let root = w.find("Cell Root").unwrap();
+    let child = w.find("Cell Child").unwrap();
+    assert_eq!(w.get(child).unwrap().scene(), cell);
+    let main = w.find("Main Object").unwrap();
+    assert_eq!(w.get(main).unwrap().scene(), SceneHandle::MAIN);
+
+    // Saving the main scene leaves the streamed cell out.
+    let names: Vec<String> = w
+        .serialize_scene(SceneHandle::MAIN, "Main")
+        .objects
+        .into_iter()
+        .map(|o| o.name)
+        .collect();
+    assert_eq!(names, ["Main Object"]);
+
+    // Parenting into a cell moves the object to the cell's scene.
+    let extra = w.create("Extra");
+    w.set_parent(extra, Some(root), false).unwrap();
+    assert_eq!(w.get(extra).unwrap().scene(), cell);
+
+    let op = w.unload_scene_async(cell);
+    let st = finish(&mut w, op);
+    assert_eq!(st.error, None);
+    assert!(!w.is_alive(root) && !w.is_alive(child) && !w.is_alive(extra));
+    assert!(w.is_alive(main));
+    assert_eq!(w.loaded_scenes().len(), 1);
+    assert!(w.unload_scene(SceneHandle::MAIN).is_err());
+}
+
+#[test]
+fn activation_waits_in_order_and_single_load_replaces() {
+    let mut w = streaming_world("order");
+    let first = w.load_scene_async("Assets/Cell.scene", true);
+    let second = w.load_scene_async("Assets/Other.scene", true);
+    w.set_allow_scene_activation(first, false);
+    // Both files parse, but neither activates: the second waits behind the first.
+    for _ in 0..100 {
+        w.pump_scene_operations(8);
+        if w.scene_operation(second).unwrap().progress >= 0.9
+            && w.scene_operation(first).unwrap().progress >= 0.9
+        {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(w.scene_operation(first).unwrap().progress, 0.9);
+    assert!(w.find("Cell Root").is_none() && w.find("Other").is_none());
+    w.set_allow_scene_activation(first, true);
+    // One activation per pump spreads the work over frames.
+    let r = w.pump_scene_operations(1);
+    assert_eq!(r.activated.len(), 1);
+    assert!(w.find("Cell Root").is_some() && w.find("Other").is_none());
+    finish(&mut w, second);
+    assert!(w.find("Other").is_some());
+    assert_eq!(w.loaded_scenes().len(), 3);
+
+    // A non-additive load replaces every open scene.
+    let op = w.load_scene_async("Assets/Other.scene", false);
+    let mut replaced = false;
+    for _ in 0..500 {
+        replaced |= w.pump_scene_operations(8).replaced;
+        if w.scene_operation(op).is_some_and(|s| s.is_done) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(replaced);
+    assert_eq!(w.loaded_scenes().len(), 1);
+    assert_eq!(w.scene_name, "Other");
+    assert!(w.find("Main Object").is_none() && w.find("Cell Root").is_none());
+    assert_eq!(
+        w.get(w.find("Other").unwrap()).unwrap().scene(),
+        SceneHandle::MAIN
+    );
+
+    // A missing file reports an error instead of loading.
+    let op = w.load_scene_async("Assets/Missing.scene", true);
+    let st = finish(&mut w, op);
+    assert!(st.error.unwrap().contains("cannot read"));
+    assert_eq!(w.loaded_scenes().len(), 1);
+}

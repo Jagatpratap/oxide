@@ -2607,6 +2607,7 @@ dependencies = [
  "oxide_standard",
  "oxide_terrain",
  "oxide_ui",
+ "serde",
  "serde_json",
  "winit",
 ]

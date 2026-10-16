@@ -72,9 +72,13 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
     let world = &engine.world;
     let query = st.hierarchy.search.trim().to_lowercase();
     let mut rows = Vec::new();
+    let scenes = world.loaded_scenes();
     if query.is_empty() {
-        for &r in world.roots() {
-            collect(world, &st.hierarchy, r, 0, &mut rows);
+        // Grouped by scene, like Unity's multi-scene Hierarchy.
+        for sc in &scenes {
+            for r in world.scene_roots(sc.handle) {
+                collect(world, &st.hierarchy, r, 0, &mut rows);
+            }
         }
     } else {
         for id in world.hierarchy_order() {
@@ -98,21 +102,34 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
-            // Scene header row.
-            let scene = format!("{}{}", world.scene_name, if st.dirty { "*" } else { "" });
-            let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::hover());
-            ui.painter().rect_filled(r, 0.0, Color32::from_gray(48));
-            ui.painter().text(
-                r.left_center() + vec2(6.0, 0.0),
-                egui::Align2::LEFT_CENTER,
-                scene,
-                egui::FontId::proportional(12.5),
-                Color32::from_gray(220),
+            // Scene header rows.
+            let header = |ui: &mut egui::Ui, text: String| {
+                let (r, _) =
+                    ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::hover());
+                ui.painter().rect_filled(r, 0.0, Color32::from_gray(48));
+                ui.painter().text(
+                    r.left_center() + vec2(6.0, 0.0),
+                    egui::Align2::LEFT_CENTER,
+                    text,
+                    egui::FontId::proportional(12.5),
+                    Color32::from_gray(220),
+                );
+            };
+            header(
+                ui,
+                format!("{}{}", world.scene_name, if st.dirty { "*" } else { "" }),
             );
+            let mut current_scene = oxide_scene::SceneHandle::MAIN;
 
             for row in &rows {
                 let id = row.id;
                 let Some(o) = world.get(id) else { continue };
+                if query.is_empty() && o.scene() != current_scene {
+                    current_scene = o.scene();
+                    if let Some(sc) = scenes.iter().find(|s| s.handle == current_scene) {
+                        header(ui, sc.name.clone());
+                    }
+                }
                 let (rect, resp) = ui.allocate_exact_size(
                     vec2(ui.available_width(), ROW_H),
                     Sense::click_and_drag(),

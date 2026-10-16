@@ -13,9 +13,11 @@ pub mod mcp_network;
 pub mod mcp_occlusion;
 pub mod mcp_physics;
 pub mod mcp_prefabs;
+pub mod mcp_streaming;
 pub mod mcp_terrain;
 pub mod mcp_tools;
 pub mod objects;
+pub mod streaming;
 
 pub use app::{App, AppControl, EngineConfig, McpToolsFn};
 pub use engine::{Engine, GameViewport, Plugin, Shell, init_world};
@@ -198,8 +200,9 @@ pub mod prelude {
 
 pub mod json_values;
 
-/// Loads a scene file into the World (replacing the scene unless `additive`).
-/// Returns warnings (e.g. missing script types).
+/// Loads a scene file into the World now: replacing the open scenes, or as a new additive
+/// scene. Returns warnings (e.g. missing script types). For background loading see
+/// [`World::load_scene_async`](oxide_scene::World::load_scene_async).
 pub fn load_scene(
     world: &mut oxide_scene::World,
     path: &str,
@@ -211,51 +214,32 @@ pub fn load_scene(
     let text = std::fs::read_to_string(&full)
         .map_err(|e| format!("cannot read {}: {e}", full.display()))?;
     let file = oxide_scene::SceneFile::from_yaml(&text)?;
-    // Make sure referenced assets are loaded.
-    let mut warnings = Vec::new();
-    for o in &file.objects {
-        for c in &o.components {
-            for v in c.fields.values() {
-                collect_assets(world, v, &mut warnings);
-            }
-        }
-    }
-    if !additive {
-        world.clear(true);
-        world.scene_name = file.name.clone();
-        world.scene_path = Some(path.to_owned());
-        // Lighting settings belong to the scene (Unity's Lighting window).
-        use oxide_core::reflect::Reflect;
-        let mut rs = oxide_scene::RenderSettings::default();
-        for (k, v) in &file.render_settings {
-            if let Err(e) = rs.set_field(k, v.clone()) {
-                warnings.push(format!("render settings {k}: {e}"));
-            }
-        }
-        world.resources.insert(rs);
-    }
-    let (_, w) = world.spawn(&file, None);
-    warnings.extend(w);
-    // Bring in changes made to prefabs since the scene was saved.
-    let updated = world.update_prefab_instances(&file.prefabs);
-    if updated > 0 {
-        oxide_core::debug_log!("Updated {updated} prefab instance(s) from their prefabs");
-    }
+    let (_, warnings) = world.activate_scene_file(&file, path, additive);
     for w in &warnings {
         oxide_core::debug_log_warning!("{w}");
     }
     Ok(warnings)
 }
 
-/// Saves the whole scene as YAML to `path` (relative to the project) and makes it the
+/// Saves the main scene as YAML to `path` (relative to the project) and makes it the
 /// open scene's path. Returns the number of objects written.
 pub fn save_scene(world: &mut oxide_scene::World, path: &str) -> Result<usize, String> {
+    save_scene_as(world, oxide_scene::SceneHandle::MAIN, path)
+}
+
+/// Saves one loaded scene (main or additive) to `path`. Returns the number of objects
+/// written.
+pub fn save_scene_as(
+    world: &mut oxide_scene::World,
+    scene: oxide_scene::SceneHandle,
+    path: &str,
+) -> Result<usize, String> {
     let name = std::path::Path::new(path)
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("Scene")
         .to_owned();
-    let mut file = world.serialize(&[], &name);
+    let mut file = world.serialize_scene(scene, &name);
     use oxide_core::reflect::Reflect;
     for w in world.persist_runtime_assets(&mut file, &oxide_scene::prefab::asset_folder(path)) {
         oxide_core::debug_log_warning!("{w}");
@@ -276,29 +260,6 @@ pub fn save_scene(world: &mut oxide_scene::World, path: &str) -> Result<usize, S
     }
     let yaml = file.to_yaml()?;
     std::fs::write(&full, yaml).map_err(|e| format!("cannot write {}: {e}", full.display()))?;
-    world.scene_name = name;
-    world.scene_path = Some(path.to_owned());
+    world.set_scene_path(scene, &name, path);
     Ok(file.objects.len())
-}
-
-fn collect_assets(
-    world: &mut oxide_scene::World,
-    v: &oxide_core::reflect::Value,
-    warnings: &mut Vec<String>,
-) {
-    use oxide_core::reflect::Value;
-    match v {
-        Value::Asset(p) => {
-            if let Err(e) = world
-                .resource_mut::<oxide_assets::AssetServer>()
-                .ensure_loaded(p)
-            {
-                warnings.push(e);
-            }
-        }
-        Value::List(items) => items
-            .iter()
-            .for_each(|i| collect_assets(world, i, warnings)),
-        _ => {}
-    }
 }

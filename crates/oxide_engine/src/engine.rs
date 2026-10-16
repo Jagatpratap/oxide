@@ -63,6 +63,9 @@ pub fn init_world(world: &mut World, project_root: std::path::PathBuf) {
     world.resources.insert(crate::AppControl::default());
 }
 
+/// Background-loaded scenes activated per frame at most (spreads streaming hitches).
+const MAX_SCENE_ACTIVATIONS: usize = 1;
+
 pub struct Engine {
     pub gui: crate::gui::GuiLayer,
     pub window: Arc<Window>,
@@ -239,6 +242,21 @@ impl Engine {
             .take()
         {
             self.load_requested_scene(&scene);
+        }
+        self.pump_scenes();
+    }
+
+    /// Activates finished background scene loads (LoadSceneAsync, streaming) and runs
+    /// pending unloads. Called at the end of every frame.
+    pub fn pump_scenes(&mut self) {
+        let run = self.world.run_scripts;
+        if self
+            .world
+            .pump_scene_operations(MAX_SCENE_ACTIVATIONS)
+            .replaced
+        {
+            self.world.run_scripts = run;
+            self.start_systems();
         }
     }
 

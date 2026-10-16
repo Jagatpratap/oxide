@@ -5,6 +5,7 @@
 //!   speed-sensitive steering, handbrake, downforce and anti-roll bars.
 //! - [`FollowCamera`], [`OrbitCamera`], [`FlyCamera`]: chase cam, mouse orbit, free fly.
 //! - [`FirstPersonController`], [`ThirdPersonController`]: CharacterController players.
+//! - [`WorldStreamer`]: loads and unloads scene cells around the player (big worlds).
 //! - [`Rotator`], [`Lifetime`]: small utilities.
 
 pub mod ai;
@@ -12,12 +13,14 @@ pub mod cameras;
 pub mod car;
 pub mod car_audio;
 pub mod characters;
+pub mod streaming;
 
 pub use ai::{CarAIControl, WaypointCircuit};
 pub use cameras::{FlyCamera, FollowCamera, OrbitCamera};
 pub use car::{CarController, DriveType};
 pub use car_audio::CarAudio;
 pub use characters::{FirstPersonController, Locomotion, ThirdPersonController};
+pub use streaming::{StreamingCell, WorldStreamer};
 
 use oxide_core::Reflect;
 use oxide_math::Vector3;
@@ -71,4 +74,5 @@ pub fn register(reg: &mut ComponentRegistry) {
     reg.register::<ThirdPersonController>("Characters/Third Person Controller");
     reg.register::<Rotator>("Utility/Rotator");
     reg.register::<Lifetime>("Utility/Lifetime");
+    reg.register::<WorldStreamer>("Scene/World Streamer");
 }

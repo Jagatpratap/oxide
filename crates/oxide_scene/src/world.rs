@@ -95,6 +95,23 @@ impl StaticEditorFlags {
     }
 }
 
+/// Unity `Scene`: one of the loaded scenes. The scene opened first (or by a non-additive
+/// load) is [`SceneHandle::MAIN`]; additive loads add more.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SceneHandle(pub u32);
+
+impl SceneHandle {
+    pub const MAIN: Self = Self(0);
+}
+
+/// A loaded scene (Unity `SceneManager.GetSceneAt`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SceneInfo {
+    pub handle: SceneHandle,
+    pub name: String,
+    pub path: Option<String>,
+}
+
 /// Unity `Space`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Space {
@@ -134,6 +151,8 @@ pub struct GameObject {
     pub prefab_source: Option<String>,
     /// For objects in a prefab instance: the id of the matching object in the prefab asset.
     pub prefab_link: Option<u64>,
+    /// The loaded scene this object belongs to (its root's scene).
+    scene: SceneHandle,
 }
 
 impl GameObject {
@@ -163,6 +182,10 @@ impl GameObject {
     /// Unity `GameObject.isStatic`: any static flag set.
     pub fn is_static(&self) -> bool {
         self.static_flags.0 != 0
+    }
+    /// Unity `GameObject.scene`.
+    pub fn scene(&self) -> SceneHandle {
+        self.scene
     }
     pub fn compare_tag(&self, tag: &str) -> bool {
         self.tag == tag
@@ -253,6 +276,11 @@ pub struct World {
     /// Name of the active scene (Unity `SceneManager.GetActiveScene().name`).
     pub scene_name: String,
     pub scene_path: Option<String>,
+    /// Scenes loaded additively, besides the main one.
+    additive_scenes: Vec<SceneInfo>,
+    next_scene: u32,
+    /// Scene that new objects go into.
+    spawn_scene: SceneHandle,
 }
 
 impl Default for World {
@@ -276,6 +304,9 @@ impl World {
             layers: LayerNames::default(),
             scene_name: "Untitled".into(),
             scene_path: None,
+            additive_scenes: Vec::new(),
+            next_scene: 1,
+            spawn_scene: SceneHandle::MAIN,
         }
     }
 
@@ -387,6 +418,7 @@ impl World {
             destroy_pending: false,
             prefab_source: None,
             prefab_link: None,
+            scene: self.spawn_scene,
         };
         let id = match self.free.pop() {
             Some(i) => {
@@ -1115,6 +1147,14 @@ impl World {
             None => self.roots.push(id),
         }
         self.get_mut(id).expect("checked").parent = parent;
+        // Children live in their root's scene.
+        if let Some(scene) = parent.and_then(|p| self.get(p)).map(|p| p.scene) {
+            for d in self.descendants(id) {
+                if let Some(o) = self.get_mut(d) {
+                    o.scene = scene;
+                }
+            }
+        }
         if let Some((pos, rot, scale)) = world {
             self.set_rotation(id, rot);
             self.set_position(id, pos);
@@ -1408,6 +1448,146 @@ impl World {
                 continue;
             }
             self.destroy_immediate(r);
+        }
+        // Survivors (DontDestroyOnLoad) move to the main scene; additive scenes are gone.
+        self.additive_scenes.clear();
+        self.spawn_scene = SceneHandle::MAIN;
+        for id in self.ids() {
+            if let Some(o) = self.get_mut(id) {
+                o.scene = SceneHandle::MAIN;
+            }
+        }
+    }
+
+    // ---- scenes ----------------------------------------------------------------------
+
+    /// Every loaded scene, the main one first (Unity `SceneManager.GetSceneAt`).
+    pub fn loaded_scenes(&self) -> Vec<SceneInfo> {
+        let mut out = vec![SceneInfo {
+            handle: SceneHandle::MAIN,
+            name: self.scene_name.clone(),
+            path: self.scene_path.clone(),
+        }];
+        out.extend(self.additive_scenes.iter().cloned());
+        out
+    }
+
+    pub fn scene_info(&self, h: SceneHandle) -> Option<SceneInfo> {
+        self.loaded_scenes().into_iter().find(|s| s.handle == h)
+    }
+
+    /// A loaded scene by path, or by name (`Level2` or `Level2.scene`).
+    pub fn find_scene(&self, name_or_path: &str) -> Option<SceneHandle> {
+        let stem = name_or_path.trim_end_matches(".scene");
+        let stem = stem.rsplit('/').next().unwrap_or(stem);
+        let all = self.loaded_scenes();
+        all.iter()
+            .find(|s| s.path.as_deref() == Some(name_or_path))
+            .or_else(|| all.iter().find(|s| s.name == stem))
+            .map(|s| s.handle)
+    }
+
+    /// Renames a loaded scene and sets where it is saved.
+    pub fn set_scene_path(&mut self, h: SceneHandle, name: &str, path: &str) {
+        if h == SceneHandle::MAIN {
+            self.scene_name = name.to_owned();
+            self.scene_path = Some(path.to_owned());
+        } else if let Some(s) = self.additive_scenes.iter_mut().find(|s| s.handle == h) {
+            s.name = name.to_owned();
+            s.path = Some(path.to_owned());
+        }
+    }
+
+    /// Registers a new, empty additive scene (Unity `SceneManager.CreateScene`).
+    pub fn create_scene(&mut self, name: &str, path: Option<&str>) -> SceneHandle {
+        let handle = SceneHandle(self.next_scene);
+        self.next_scene += 1;
+        self.additive_scenes.push(SceneInfo {
+            handle,
+            name: name.to_owned(),
+            path: path.map(str::to_owned),
+        });
+        handle
+    }
+
+    /// Runs `f` with new objects going into scene `h`.
+    pub fn with_spawn_scene<R>(&mut self, h: SceneHandle, f: impl FnOnce(&mut Self) -> R) -> R {
+        let prev = std::mem::replace(&mut self.spawn_scene, h);
+        let r = f(self);
+        self.spawn_scene = prev;
+        r
+    }
+
+    /// Root objects of scene `h`, in Hierarchy order (Unity `Scene.GetRootGameObjects`).
+    pub fn scene_roots(&self, h: SceneHandle) -> Vec<GameObjectId> {
+        self.roots
+            .iter()
+            .copied()
+            .filter(|&r| {
+                self.get(r)
+                    .is_some_and(|o| o.scene == h && !o.destroy_pending)
+            })
+            .collect()
+    }
+
+    /// Unity `SceneManager.MoveGameObjectToScene`: moves a root object (and its children).
+    pub fn move_to_scene(&mut self, id: GameObjectId, h: SceneHandle) -> Result<(), String> {
+        if self.parent(id).is_some() {
+            return Err("only root objects can move to another scene".into());
+        }
+        if self.scene_info(h).is_none() {
+            return Err("that scene is not loaded".into());
+        }
+        for d in self.descendants(id) {
+            if let Some(o) = self.get_mut(d) {
+                o.scene = h;
+            }
+        }
+        Ok(())
+    }
+
+    /// Unloads an additive scene now: its objects are destroyed (OnDisable/OnDestroy run).
+    pub fn unload_scene(&mut self, h: SceneHandle) -> Result<(), String> {
+        if h == SceneHandle::MAIN {
+            return Err("the main scene can't be unloaded; load another scene instead".into());
+        }
+        let Some(i) = self.additive_scenes.iter().position(|s| s.handle == h) else {
+            return Err("that scene is not loaded".into());
+        };
+        for r in self.scene_roots(h) {
+            self.destroy_immediate(r);
+        }
+        self.additive_scenes.remove(i);
+        Ok(())
+    }
+
+    /// Each object's scene, in [`hierarchy_order`](Self::hierarchy_order) (for snapshots).
+    pub fn scene_assignment(&self) -> Vec<SceneHandle> {
+        self.hierarchy_order()
+            .into_iter()
+            .map(|id| self.get(id).map_or(SceneHandle::MAIN, |o| o.scene))
+            .collect()
+    }
+
+    /// Restores the additive scenes and per-object scenes taken with
+    /// [`loaded_scenes`](Self::loaded_scenes) and [`scene_assignment`](Self::scene_assignment).
+    pub fn restore_scenes(&mut self, scenes: &[SceneInfo], assignment: &[SceneHandle]) {
+        self.additive_scenes = scenes
+            .iter()
+            .filter(|s| s.handle != SceneHandle::MAIN)
+            .cloned()
+            .collect();
+        self.next_scene = self
+            .additive_scenes
+            .iter()
+            .map(|s| s.handle.0 + 1)
+            .max()
+            .unwrap_or(1)
+            .max(self.next_scene);
+        for (id, &h) in self.hierarchy_order().into_iter().zip(assignment) {
+            if let Some(o) = self.get_mut(id) {
+                o.scene = h;
+            }
         }
     }
 

@@ -4,7 +4,7 @@
 //! Restoring rebuilds the objects, so GameObject ids change; the selection is carried across
 //! by position in hierarchy order. Reference: <https://docs.unity3d.com/Manual/UndoWindow.html>
 
-use oxide_scene::{GameObjectId, SceneFile, World};
+use oxide_scene::{GameObjectId, SceneFile, SceneHandle, SceneInfo, World};
 
 const MAX_STEPS: usize = 64;
 
@@ -13,6 +13,9 @@ pub struct Snapshot {
     scene: SceneFile,
     scene_name: String,
     scene_path: Option<String>,
+    /// Loaded scenes and each object's scene (multi-scene editing).
+    scenes: Vec<SceneInfo>,
+    scene_assignment: Vec<SceneHandle>,
     /// Selected objects as indices into `World::hierarchy_order`.
     selection: Vec<usize>,
 }
@@ -25,6 +28,8 @@ impl Snapshot {
             scene: world.serialize(&[], &world.scene_name),
             scene_name: world.scene_name.clone(),
             scene_path: world.scene_path.clone(),
+            scenes: world.loaded_scenes(),
+            scene_assignment: world.scene_assignment(),
             selection: selection
                 .iter()
                 .filter_map(|id| order.iter().position(|o| o == id))
@@ -41,6 +46,7 @@ impl Snapshot {
         }
         world.scene_name = self.scene_name.clone();
         world.scene_path = self.scene_path.clone();
+        world.restore_scenes(&self.scenes, &self.scene_assignment);
         let order = world.hierarchy_order();
         self.selection
             .iter()

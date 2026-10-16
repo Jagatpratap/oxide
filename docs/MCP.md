@@ -81,6 +81,8 @@ only when the editor is running (not with `--player`).
 | `audio_info` | Audio device availability, playing voices, master volume and loaded clips | yes |
 | `network` | Multiplayer status (mode, client id, clients, RTT, spawned network objects); optional `start` host/server/client or `stop` | yes |
 | `occlusion` | Occlusion culling stats; with `camera_position` renders the view with occlusion on and off and reports both plus `pixel_difference`; `image` = buffer / render / difference | no |
+| `scenes` | Loaded scenes (handle, name, path, objects), pending background operations and WorldStreamer cell states; optional `load` (additive by default, `background` for LoadSceneAsync), `unload`, `save` | yes |
+| `split_scene_into_cells` | Moves the main scene's (static) root objects into one scene per `cell_size` grid cell, saves them and adds a WorldStreamer | yes (destructive) |
 | `play_sound` | Plays an audio clip once: at a world `position` (3D, like AudioSource.PlayClipAtPoint) or 2D if omitted | yes |
 | `animator` | Reads an object's Animator (states, parameters, current state) and optionally changes it: `parameters` {name: number\|bool} (SetFloat/SetBool), `trigger` name (SetTrigger), `play` state name, `cross_fade` [state, seconds], `speed` | yes |
 | `create_terrain` | Creates a generated terrain (noise heights, auto grass/rock/sand/snow texturing, heightfield collider) | yes |

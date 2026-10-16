@@ -149,6 +149,28 @@ impl<'w> Ctx<'w> {
         }
     }
 
+    /// Unity `SceneManager.LoadSceneAsync`: loads a scene (path, or name of a build scene)
+    /// on a background thread. `additive` adds it to the open scenes (`LoadSceneMode.Additive`);
+    /// otherwise it replaces them. Poll with [`scene_operation`](Self::scene_operation).
+    pub fn load_scene_async(&mut self, scene: &str, additive: bool) -> crate::AsyncOperation {
+        let path = self
+            .world
+            .try_resource::<crate::Application>()
+            .and_then(|a| a.resolve_scene(scene, &[]))
+            .unwrap_or_else(|| scene.to_owned());
+        self.world.load_scene_async(&path, additive)
+    }
+
+    /// Unity `SceneManager.UnloadSceneAsync`: unloads an additive scene at the end of the frame.
+    pub fn unload_scene_async(&mut self, scene: crate::SceneHandle) -> crate::AsyncOperation {
+        self.world.unload_scene_async(scene)
+    }
+
+    /// Progress of a scene load or unload (Unity `AsyncOperation.progress` / `isDone`).
+    pub fn scene_operation(&self, op: crate::AsyncOperation) -> Option<crate::SceneOpStatus> {
+        self.world.scene_operation(op)
+    }
+
     /// Unity `Application.Quit()` (ignored in the editor's Play mode, like Unity).
     pub fn quit(&mut self) {
         if let Some(app) = self.world.try_resource_mut::<crate::Application>() {
