@@ -60,6 +60,8 @@ pub fn init_world(world: &mut World, project_root: std::path::PathBuf) {
     world.resources.insert(Input::new());
     let mut assets = AssetServer::new(project_root);
     crate::builtin_assets::register(&mut assets);
+    // Sprite Atlases are packed up front, like Unity's included atlases.
+    assets.load_sprite_atlases();
     world.resources.insert(assets);
     world.resources.insert(Timers::default());
     world.resources.insert(DebugDraw::default());

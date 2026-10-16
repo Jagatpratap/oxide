@@ -18,6 +18,8 @@ pub struct AssetInspectorState {
     /// Text shown for scripts and shaders, by path and file time.
     text: Option<(String, Option<std::time::SystemTime>, String)>,
     new_label: String,
+    /// Packed atlas preview: (atlas path, texture version, image).
+    atlas_preview: Option<(String, u64, egui::TextureHandle)>,
 }
 
 const TEXT_EXTENSIONS: [&str; 9] = [
@@ -84,6 +86,7 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: &s
                     }
                 }
                 "InputActionAsset" => input_actions(st, engine, ui, path),
+                "SpriteAtlas" => sprite_atlas(st, engine, ui, path),
                 "AnimationClip" => crate::anim_inspectors::clip(st, engine, ui, path),
                 "AnimatorController" => crate::anim_inspectors::controller(st, engine, ui, path),
                 "AnimatorOverrideController" => {
@@ -258,6 +261,59 @@ fn preset(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: &s
     }
     ui.add_space(4.0);
     ui.weak("Apply it from a component's menu (right-click its header) > Apply Preset.");
+}
+
+/// A Sprite Atlas: its settings, Pack Preview and the packed texture.
+fn sprite_atlas(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: &str) {
+    data_asset(st, engine, ui, path);
+    ui.add_space(4.0);
+    if ui.button("Pack Preview").clicked() {
+        st.status = match engine
+            .world
+            .resource_mut::<AssetServer>()
+            .pack_sprite_atlas(path)
+        {
+            Ok(r) => format!(
+                "Packed {} sprite(s) into {}×{}",
+                r.sprites, r.width, r.height
+            ),
+            Err(e) => e,
+        };
+    }
+    let assets = engine.world.resource::<AssetServer>();
+    let tex_path = format!("{path}#Texture");
+    let Some(h) = assets.textures.handle_of(&tex_path) else {
+        ui.weak("Not packed yet.");
+        return;
+    };
+    let version = assets.textures.version(h.id()).unwrap_or(0);
+    let Some(t) = assets.textures.get(&h) else {
+        return;
+    };
+    let packed = assets
+        .atlas_slots
+        .values()
+        .filter(|s| s.atlas == path)
+        .count();
+    ui.weak(format!("{packed} sprite(s), {}×{}", t.width, t.height));
+    let stale = st
+        .asset_inspector
+        .atlas_preview
+        .as_ref()
+        .is_none_or(|(p, v, _)| p != path || *v != version);
+    if stale && let Some(px) = t.mips.first() {
+        let img =
+            egui::ColorImage::from_rgba_unmultiplied([t.width as usize, t.height as usize], px);
+        let handle =
+            ui.ctx()
+                .load_texture(format!("atlas:{path}"), img, egui::TextureOptions::NEAREST);
+        st.asset_inspector.atlas_preview = Some((path.to_owned(), version, handle));
+    }
+    if let Some((_, _, img)) = &st.asset_inspector.atlas_preview {
+        let w = crate::inspector::avail(ui).min(256.0);
+        let h = w * t.height as f32 / t.width.max(1) as f32;
+        ui.add(egui::Image::new((img.id(), egui::vec2(w, h))));
+    }
 }
 
 /// Input Actions: Unity's "Edit Asset" button and a summary of maps and actions.

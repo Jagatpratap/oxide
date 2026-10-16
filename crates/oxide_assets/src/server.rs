@@ -60,6 +60,8 @@ pub struct AssetServer {
     pub shaders: Assets<crate::shader::Shader>,
     /// Sprites made from textures imported as Sprite (`Assets/sheet.png#walk_0`).
     pub sprites: Assets<crate::sprite::Sprite>,
+    /// Sprites packed into a Sprite Atlas: where they live in it.
+    pub atlas_slots: std::collections::HashMap<String, crate::sprite_atlas::AtlasSlot>,
     /// Every asset type the Project window knows (built-in and registered).
     pub types: crate::asset_types::AssetTypeRegistry,
     /// Loaded data assets (Unity ScriptableObjects): Physics Materials, Volume Profiles, ...
@@ -89,6 +91,7 @@ impl AssetServer {
             render_textures: Assets::default(),
             shaders: Assets::default(),
             sprites: Assets::default(),
+            atlas_slots: Default::default(),
             types: Default::default(),
             data: Default::default(),
             mtimes: Default::default(),
@@ -98,6 +101,11 @@ impl AssetServer {
         }
         s.register_data_asset::<crate::preset::Preset>(
             crate::AssetTypeInfo::new("Preset", &["preset"]).color(190, 170, 230),
+        );
+        s.register_data_asset::<crate::sprite_atlas::SpriteAtlas>(
+            crate::AssetTypeInfo::new("SpriteAtlas", &["spriteatlas"])
+                .menu("2D/Sprite Atlas", "New Sprite Atlas", 80)
+                .color(240, 170, 120),
         );
         for p in PrimitiveType::ALL {
             // Built-in primitives have lightmap UVs, like Unity's.
@@ -444,16 +452,22 @@ impl AssetServer {
             crate::sprite::SpriteImportMode::Multiple => imp.sprites.clone(),
         };
         for r in rects {
+            let sprite_path = format!("{path}#{}", r.name);
+            // Packed into an atlas: drawn from the atlas texture.
+            let (texture, rect, texture_size) = match self.atlas_slots.get(&sprite_path) {
+                Some(slot) => (slot.texture.clone(), slot.rect, slot.texture_size),
+                None => (texture.clone(), r.rect, size),
+            };
             self.sprites.insert(
-                format!("{path}#{}", r.name),
+                sprite_path,
                 crate::sprite::Sprite {
                     name: r.name.clone(),
-                    texture: texture.clone(),
-                    rect: r.rect,
+                    texture,
+                    rect,
                     pivot: r.pivot,
                     pixels_per_unit: imp.pixels_per_unit,
                     border: r.border,
-                    texture_size: size,
+                    texture_size,
                 },
             );
         }
