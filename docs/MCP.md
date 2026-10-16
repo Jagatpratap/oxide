@@ -37,7 +37,7 @@ If the engine isn't running, the bridge returns an error that says how to start 
 
 ## Tools
 
-51 tools (generated from the running editor's `tools/list`). Tools named `editor_*` exist
+61 tools (generated from the running editor's `tools/list`). Tools named `editor_*` exist
 only when the editor is running (not with `--player`).
 
 | Tool | What it does | Changes state |
@@ -98,6 +98,11 @@ only when the editor is running (not with `--player`).
 | `editor_set_tool` | Selects the Scene view tool (hand, move, rotate, scale) and handle orientation (global/local) | yes |
 | `editor_scene_camera` | Positions the Scene view camera: `position` + `look_at`, or `pivot`/`yaw`/`pitch`/`distance`, or `frame` (an object to frame, like pressing F) | yes |
 | `editor_capture` | PNG of the whole editor window (menus, Hierarchy, Scene/Game views, Inspector, ...), as the user sees it | no |
+| `reflection_probes` | Lists Reflection Probes (box, mode, refresh mode, importance) and the last frame's reflection stats (`active` = probes with a captured cubemap, up to 15; `captures` = cubemaps captured that frame, sky included). | yes |
+| `create_render_texture` | Creates a `.renderTexture` asset (Unity RenderTexture) for a Camera's `target_texture` and for materials (mirrors, screens, scopes) | yes |
+| `texture_import_settings` | Gets a texture's import settings (its `.meta` file, Unity's Texture Importer) and what the import produced (size, mips, GPU format). | yes |
+| `editor_scripts` | The project's Rust scripts: `status` (compile state, errors, script component types), `recompile`, or `create` a new script component named `name` (Unity Create > Script). | yes |
+| `editor_build` | Unity Build Settings: `status` (default), `settings` (read; or change with `scenes`, `product_name`, `width`, `height`, `fullscreen`, `output`), `build` or `build_and_run` (starts in the background; poll `status`). | yes |
 
 ## Try it with curl
 

@@ -221,9 +221,13 @@ editing, Undo History window, Preferences/Project Settings windows, project laun
 - ◐ Importers: textures (PNG/JPG/TGA/EXR/HDR/PSD-flat), models (glTF, FBX, OBJ), audio (WAV/OGG/MP3/FLAC), fonts, shaders
   ([Asset types](https://docs.unity3d.com/Manual/AssetTypes.html),
   [Importing](https://docs.unity3d.com/Manual/import-assets.html))
-- ☐ Import settings in Inspector; Presets
-  ([Presets](https://docs.unity3d.com/Manual/Presets.html))
-- ☐ File watching + background re-import; asset labels
+- ◐ Import settings: Texture Importer settings in `<texture>.meta` (type, sRGB, max size, mipmaps,
+  wrap/filter/aniso, compression), editable over MCP (`texture_import_settings`); Inspector UI and
+  Presets ☐
+  ([Texture Importer](https://docs.unity3d.com/Manual/class-TextureImporter.html),
+  [Presets](https://docs.unity3d.com/Manual/Presets.html))
+- ◐ File watching: textures (and their .meta), materials, shaders and render textures re-import
+  when edited on disk (polled twice a second); models/audio, background re-import, asset labels ☐
 - ◐ Runtime loading: multi-scene (`SceneHandle`, additive scenes, `MoveGameObjectToScene`),
   `LoadSceneAsync` / `UnloadSceneAsync` with `allowSceneActivation` (files parsed on a background
   thread, activated one per frame); `WorldStreamer` cells + Tools → World Streaming → Split Scene
@@ -237,11 +241,17 @@ editing, Undo History window, Preferences/Project Settings windows, project laun
 **Exit:** drop a glTF + textures into Assets/, it appears in Project window with thumbnail and drags into the scene.
 
 ### P4 — Rendering core (Scriptable Render Pipeline + "URP"-equivalent)
-- ☐ Render graph (pass declaration, resource lifetime, automatic barriers)
-  ([SRP fundamentals](https://docs.unity3d.com/Manual/scriptable-render-pipeline-introduction.html))
-- ☐ `RenderPipeline` trait + pipeline asset (users can write their own pipeline)
-  ([Render pipelines](https://docs.unity3d.com/Manual/render-pipelines.html))
-- ☐ Universal pipeline: Forward+ (clustered lights), Deferred later
+- ◐ Render graph: passes declare reads/writes, unused passes culled, pooled transient textures
+  aliased by lifetime (wgpu handles barriers). Post-processing runs on it; the scene passes don't
+  yet ([SRP fundamentals](https://docs.unity3d.com/Manual/scriptable-render-pipeline-introduction.html))
+- ◐ Extending the pipeline: URP renderer features — Full Screen Pass (user WGSL, validated, hot
+  reloaded) and Render Objects (layer redraw with override material / depth test) at
+  After Opaques / After Transparents / Before / After Post-processing. A whole custom
+  `RenderPipeline` (Rust trait + pipeline asset) ☐
+  ([Render pipelines](https://docs.unity3d.com/Manual/render-pipelines.html),
+  [Custom rendering in URP](https://docs.unity3d.com/Manual/urp/customizing-urp.html))
+- ◐ Universal pipeline: Forward+ (clustered lights: 16×9×24 clusters, up to 1024 lights) ☑;
+  Deferred ☐
   ([URP](https://docs.unity3d.com/Manual/universal-render-pipeline.html),
   [Rendering paths](https://docs.unity3d.com/Manual/rendering-paths-introduction.html))
 - ◐ MeshFilter / MeshRenderer / SkinnedMeshRenderer, submeshes, GPU instancing, SRP-batcher-style persistent buffers, frustum culling, LOD groups
@@ -256,11 +266,14 @@ editing, Undo History window, Preferences/Project Settings windows, project laun
   [Custom shaders](https://docs.unity3d.com/Manual/Shaders.html))
 - ◐ Built-in shaders: Lit (metallic/specular PBR), Simple Lit, Unlit, Particles, Sprite, Skybox
   ([Prebuilt materials and shaders](https://docs.unity3d.com/Manual/built-in-materials-and-shaders.html))
-- ◐ Textures: mipmaps, compression (BC/ASTC/ETC2 via KTX2), sampler states, cubemaps, arrays, render textures
+- ◐ Textures: mipmaps, import-time BC7/BC5/BC1/BC3 compression (Intel ISPC, cached in
+  `Library/TextureCache`), KTX2 load/save (BC1–7, ASTC 4×4, RGBA8, Zstandard), sampler states,
+  Render Textures + `Camera.targetTexture` ☑; ETC2, Basis Universal, user cubemap/array assets ☐
   ([Textures](https://docs.unity3d.com/Manual/Textures-landing.html))
 - ☑ Linear color space, HDR render targets
   ([Color and HDR](https://docs.unity3d.com/Manual/graphics-color.html))
-- ◐ Anti-aliasing: MSAA, FXAA, SMAA, TAA
+- ◐ Anti-aliasing: MSAA (off/2x/4x/8x setting), FXAA, TAA (jitter, motion vectors incl.
+  skinned, variance clipping) ☑; SMAA ☐
   ([URP anti-aliasing](https://docs.unity3d.com/Manual/urp/anti-aliasing.html))
 - ✔ Occlusion culling: runtime CPU occluder depth buffer + min-depth pyramid (no bake, works
   with streaming); Occluder/Occludee Static flags, `Camera.useOcclusionCulling`,
@@ -273,21 +286,30 @@ editing, Undo History window, Preferences/Project Settings windows, project laun
 ### P5 — Lighting, shadows, post-processing
 - ◐ Lights: Directional, Point, Spot, Area (baked); intensity units, cookies, layers
   ([Light sources](https://docs.unity3d.com/Manual/lighting-light-sources.html))
-- ◐ Shadows: cascaded shadow maps, soft shadows (PCF), point/spot shadow atlas, shadow distance/bias
+- ☑ Shadows: 4 sun cascades, soft PCF, point/spot shadows in a 4096 atlas (nearest lights
+  first), shadow distance/bias/normal bias
   ([Shadows](https://docs.unity3d.com/Manual/Shadows.html))
-- ◐ Environment: skybox (6-sided, cubemap, procedural, panoramic), ambient (SH), fog
+- ◐ Environment: procedural skybox, sky captured to a prefiltered cubemap, ambient from L2
+  spherical harmonics, fog ☑; 6-sided / cubemap / panoramic skyboxes ☐
   ([Sky](https://docs.unity3d.com/Manual/sky-landing.html))
-- ☐ Reflection probes (baked/realtime, box projection, blending)
+- ◐ Reflection probes: Realtime (On Awake / Every Frame / Via Scripting) and Baked (static
+  objects only; captured at load, not saved to disk), importance, blend distance, box
+  projection, up to 15 + sky, GGX-prefiltered cube array ☑; custom cubemap probes ☐
   ([Reflections](https://docs.unity3d.com/Manual/reflections-landing.html))
-- ☐ Global illumination: lightmapper (GPU path tracer → lightmaps + light probes), Adaptive Probe Volumes later; SSAO
+- ◐ SSAO (depth prepass, normals from depth, blur, Direct Lighting Strength) ☑; lightmapper
+  (lightmaps + light probes), Adaptive Probe Volumes ☐
   ([Direct and indirect lighting](https://docs.unity3d.com/Manual/direct-and-indirect-lighting.html))
 - ☐ Lighting window + Light Explorer
   ([Light Explorer](https://docs.unity3d.com/Manual/LightingExplorer-landing.html))
-- ☐ Volume framework (global/local volumes, blend weights, profiles)
-- ◐ Post FX: Bloom, Tonemapping (ACES/Neutral), Color Adjustments, Color Curves, Lift Gamma Gain, White Balance, Channel Mixer, Vignette, Chromatic Aberration, Film Grain, Lens Distortion, Depth of Field, Motion Blur, Panini, Split Toning, Shadows/Midtones/Highlights, LUT
+- ☑ Volume framework: global and local (collider) Volumes, weight, priority, blend distance,
+  per-parameter override checkboxes; the overrides on the Volume's object are its profile
+- ◐ Post FX ☑: Bloom (scatter, tint, clamp), Tonemapping (None/Neutral/ACES), Color
+  Adjustments, Lift Gamma Gain, White Balance, Channel Mixer, Vignette, Chromatic Aberration,
+  Film Grain, Lens Distortion, Depth of Field (Gaussian/Bokeh), Motion Blur, Split Toning,
+  Shadows/Midtones/Highlights. ☐: Color Curves, Panini Projection, LUT texture, bloom dirt
   ([Post-processing in URP](https://docs.unity3d.com/Manual/urp/post-processing-and-full-screen-effects-urp.html),
   [Effect availability](https://docs.unity3d.com/Manual/post-processing-effect-availability-reference.html))
-- ☐ Custom full-screen passes / renderer features
+- ☑ Custom full-screen passes / renderer features (see P4)
   ([Custom rendering in URP](https://docs.unity3d.com/Manual/urp/customizing-urp.html))
 
 **Exit:** day/night outdoor scene with CSM, baked GI, reflection probes and a post-FX volume matching a Unity reference screenshot side-by-side.
