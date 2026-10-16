@@ -1,5 +1,73 @@
 // ---- lighting -------------------------------------------------------------------------
 
+// Clustered lights (Forward+): per cluster `[offset, count]` into the light index list.
+@group(0) @binding(9) var<storage, read> cluster_cells: array<vec2u>;
+@group(0) @binding(10) var<storage, read> cluster_lights: array<u32>;
+
+const CLUSTER_X: i32 = 16;
+const CLUSTER_Y: i32 = 9;
+const CLUSTER_Z: i32 = 24;
+
+fn cluster_of(frag_xy: vec2f, view_z: f32) -> vec2u {
+    let vp = frame.cluster_viewport;
+    let t = vec2i(floor((frag_xy - vp.xy) / vp.zw * vec2f(f32(CLUSTER_X), f32(CLUSTER_Y))));
+    let tc = clamp(t, vec2i(0), vec2i(CLUSTER_X - 1, CLUSTER_Y - 1));
+    let s = clamp(i32(floor(log(max(view_z, 1e-4)) * frame.cluster_params.x + frame.cluster_params.y)), 0, CLUSTER_Z - 1);
+    return cluster_cells[(s * CLUSTER_Y + tc.y) * CLUSTER_X + tc.x];
+}
+
+// Point/spot light shadows: tiles of one atlas (8 × 8 tiles of 512 px).
+@group(0) @binding(11) var<storage, read> shadow_tiles: array<mat4x4f>;
+@group(0) @binding(12) var shadow_atlas: texture_depth_2d;
+
+const ATLAS_PER_ROW: u32 = 8u;
+const ATLAS_TILE_PX: f32 = 512.0;
+
+fn punctual_shadow(L: PunctualLight, world_pos: vec3f, n: vec3f, dist: f32) -> f32 {
+    var tile = u32(L.spot.z) - 1u;
+    if (L.color.w < 0.5) {
+        // Point light: the cube face (tile) facing the fragment.
+        let d = world_pos - L.pos_range.xyz;
+        let a = abs(d);
+        if (a.x >= a.y && a.x >= a.z) {
+            tile += select(1u, 0u, d.x > 0.0);
+        } else if (a.y >= a.z) {
+            tile += select(3u, 2u, d.y > 0.0);
+        } else {
+            tile += select(5u, 4u, d.z > 0.0);
+        }
+    }
+    // Normal offset scaled by the shadow texel size at this distance.
+    let texel = dist * L.shadow.w;
+    let p = shadow_tiles[tile] * vec4f(world_pos + n * L.shadow.y * texel * 1.5, 1.0);
+    if (p.w <= 0.0) {
+        return 1.0;
+    }
+    let ndc = p.xyz / p.w;
+    if (ndc.z > 1.0) {
+        return 1.0;
+    }
+    let border = 2.0 / ATLAS_TILE_PX;
+    let local = clamp(vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5), vec2f(border), vec2f(1.0 - border));
+    let tile_uv = 1.0 / f32(ATLAS_PER_ROW);
+    let uv = (vec2f(f32(tile % ATLAS_PER_ROW), f32(tile / ATLAS_PER_ROW)) + local) * tile_uv;
+    let depth = ndc.z - L.shadow.x * 1e-5;
+    var lit: f32;
+    if (L.shadow.z > 0.5) {
+        let ts = tile_uv / ATLAS_TILE_PX;
+        lit = 0.0;
+        for (var y = -1; y <= 1; y++) {
+            for (var x = -1; x <= 1; x++) {
+                lit += textureSampleCompareLevel(shadow_atlas, shadow_sampler, uv + vec2f(f32(x), f32(y)) * ts, depth);
+            }
+        }
+        lit /= 9.0;
+    } else {
+        lit = textureSampleCompareLevel(shadow_atlas, shadow_sampler, uv, depth);
+    }
+    return mix(1.0, lit, L.spot.w);
+}
+
 // Screen-space ambient occlusion of this camera (white when off).
 @group(2) @binding(0) var ssao_tex: texture_2d<f32>;
 
@@ -174,9 +242,10 @@ fn shade(world_pos: vec3f, n: vec3f, geo_n: vec3f, albedo: vec3f, metallic: f32,
         }
         color += brdf(n, v, sun_to_light(), albedo, f0, rough, metallic) * frame.sun_color.rgb * shadow * direct_ao;
     }
-    let count = u32(frame.misc.x);
-    for (var i = 0u; i < count; i++) {
-        let L = lights[i];
+    let view_z = (frame.view * vec4f(world_pos, 1.0)).z;
+    let cluster = cluster_of(frag_xy, view_z);
+    for (var j = 0u; j < cluster.y; j++) {
+        let L = lights[cluster_lights[cluster.x + j]];
         let to_l = L.pos_range.xyz - world_pos;
         let d2 = dot(to_l, to_l);
         let r = L.pos_range.w;
@@ -192,6 +261,9 @@ fn shade(world_pos: vec3f, n: vec3f, geo_n: vec3f, albedo: vec3f, metallic: f32,
             let cd = dot(L.dir.xyz, -l);
             let s = clamp((cd - L.spot.x) * L.spot.y, 0.0, 1.0);
             atten *= s * s;
+        }
+        if (L.spot.z > 0.5 && receive_shadows && atten > 0.0) {
+            atten *= punctual_shadow(L, world_pos, geo_n, sqrt(d2));
         }
         color += brdf(n, v, l, albedo, f0, rough, metallic) * L.color.rgb * atten * direct_ao;
     }

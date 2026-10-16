@@ -146,6 +146,8 @@ pub struct PunctualLight {
     pub color: [f32; 3],
     /// `(direction, outer angle°, inner angle°)` for spot lights.
     pub spot: Option<(Vector3, f32, f32)>,
+    /// Shadow settings when the light casts shadows (rendered into the shadow atlas).
+    pub shadow: Option<ShadowSettings>,
 }
 
 #[derive(Clone, Debug)]

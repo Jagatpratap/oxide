@@ -9,6 +9,7 @@
 
 pub mod aa;
 pub mod capture;
+pub mod clusters;
 pub mod frame;
 pub mod gpu;
 pub mod gpu_assets;

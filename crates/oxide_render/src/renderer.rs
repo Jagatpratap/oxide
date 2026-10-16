@@ -21,7 +21,8 @@ pub const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const SHADOW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 pub const CASCADES: usize = 4;
-const MAX_LIGHTS: usize = 256;
+/// Point and spot lights per frame (clustered, so each pixel only visits nearby ones).
+const MAX_LIGHTS: usize = 1024;
 /// Occluder triangles rasterized per camera per frame at most.
 const OCCLUDER_TRIANGLE_BUDGET: u32 = 60_000;
 /// Meshes with more triangles than this don't occlude (use a simpler LOD as the occluder).
@@ -50,6 +51,8 @@ struct FrameUniform {
     clear_color: [f32; 4],
     cascade_texel: [f32; 4],
     ssao: [f32; 4],
+    cluster_viewport: [f32; 4],
+    cluster_params: [f32; 4],
 }
 
 #[repr(C)]
@@ -58,7 +61,24 @@ struct LightUniform {
     pos_range: [f32; 4],
     color: [f32; 4],
     dir: [f32; 4],
+    /// x cos(outer/2), y 1/(cos(inner/2) - cos(outer/2)), z first shadow tile + 1 (0 = none),
+    /// w shadow strength.
     spot: [f32; 4],
+    /// x depth bias, y normal bias, z soft, w world texel size per metre of distance.
+    shadow: [f32; 4],
+}
+
+/// Additional-light shadow atlas: square tiles, a spot light takes one, a point light six.
+const ATLAS_SIZE: u32 = 4096;
+const ATLAS_TILE: u32 = 512;
+const ATLAS_TILES: usize = ((ATLAS_SIZE / ATLAS_TILE) * (ATLAS_SIZE / ATLAS_TILE)) as usize;
+
+/// A shadowed point/spot light's atlas tiles this frame.
+struct ShadowTiles {
+    light: usize,
+    first: usize,
+    matrices: Vec<Matrix4x4>,
+    texel: f32,
 }
 
 #[repr(C)]
@@ -207,6 +227,8 @@ pub struct SceneRenderer {
     /// Per view: (frame index, view-projection this frame, last frame's), for motion blur.
     view_prev: HashMap<(u64, u32, u32), (u64, Matrix4x4, Matrix4x4)>,
     frame_buffers: Vec<wgpu::Buffer>,
+    /// Per camera: cluster cells and light index list (Forward+).
+    cluster_buffers: Vec<(wgpu::Buffer, wgpu::Buffer)>,
     frame_groups: Vec<wgpu::BindGroup>,
     light_buffer: wgpu::Buffer,
     joint_buffer: wgpu::Buffer,
@@ -218,6 +240,11 @@ pub struct SceneRenderer {
     shadow_sampler: wgpu::Sampler,
     shadow_buffers: Vec<wgpu::Buffer>,
     shadow_groups: Vec<wgpu::BindGroup>,
+    /// Point/spot shadow atlas and one uniform + group per tile.
+    atlas: wgpu::TextureView,
+    atlas_buffers: Vec<wgpu::Buffer>,
+    atlas_groups: Vec<wgpu::BindGroup>,
+    atlas_matrices: wgpu::Buffer,
     groups_dirty: bool,
     /// Render targets per output size (Scene and Game views render at different sizes).
     targets: HashMap<(u32, u32, u32), Targets>,
@@ -362,6 +389,19 @@ impl SceneRenderer {
                     count: None,
                 },
                 storage_entry(8, wgpu::ShaderStages::FRAGMENT),
+                storage_entry(9, wgpu::ShaderStages::FRAGMENT),
+                storage_entry(10, wgpu::ShaderStages::FRAGMENT),
+                storage_entry(11, wgpu::ShaderStages::FRAGMENT),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 12,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
         let shadow_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -555,10 +595,11 @@ impl SceneRenderer {
             terrain_prepass,
             view_prev: HashMap::new(),
             frame_buffers: Vec::new(),
+            cluster_buffers: Vec::new(),
             frame_groups: Vec::new(),
             light_buffer: buf(
                 "lights",
-                (MAX_LIGHTS * 64) as u64,
+                (MAX_LIGHTS * std::mem::size_of::<LightUniform>()) as u64,
                 wgpu::BufferUsages::STORAGE,
             ),
             joint_buffer: buf("joints", 64 * 256, wgpu::BufferUsages::STORAGE),
@@ -570,6 +611,32 @@ impl SceneRenderer {
             shadow_sampler,
             shadow_buffers,
             shadow_groups: Vec::new(),
+            atlas: device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("additional light shadow atlas"),
+                    size: wgpu::Extent3d {
+                        width: ATLAS_SIZE,
+                        height: ATLAS_SIZE,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: SHADOW_FORMAT,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                })
+                .create_view(&Default::default()),
+            atlas_buffers: (0..ATLAS_TILES)
+                .map(|_| buf("shadow tile view", 64, wgpu::BufferUsages::UNIFORM))
+                .collect(),
+            atlas_groups: Vec::new(),
+            atlas_matrices: buf(
+                "shadow tile matrices",
+                (ATLAS_TILES * 64) as u64,
+                wgpu::BufferUsages::STORAGE,
+            ),
             groups_dirty: true,
             targets: HashMap::new(),
             frame_index: 0,
@@ -945,6 +1012,21 @@ impl SceneRenderer {
     }
 
     fn rebuild_groups(&mut self, device: &wgpu::Device, cameras: usize) {
+        while self.cluster_buffers.len() < cameras {
+            let buf = |label: &str, size: u64| {
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some(label),
+                    size,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })
+            };
+            self.cluster_buffers.push((
+                buf("cluster cells", (crate::clusters::CLUSTERS * 8) as u64),
+                buf("cluster lights", 64 * 1024),
+            ));
+            self.groups_dirty = true;
+        }
         while self.frame_buffers.len() < cameras {
             self.frame_buffers
                 .push(device.create_buffer(&wgpu::BufferDescriptor {
@@ -961,7 +1043,8 @@ impl SceneRenderer {
         self.frame_groups = self
             .frame_buffers
             .iter()
-            .map(|b| {
+            .zip(&self.cluster_buffers)
+            .map(|(b, (cells, cluster_lights))| {
                 device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("frame bind group"),
                     layout: &self.frame_layout,
@@ -1003,6 +1086,42 @@ impl SceneRenderer {
                         wgpu::BindGroupEntry {
                             binding: 8,
                             resource: self.reflections.sh_buffer.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 9,
+                            resource: cells.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 10,
+                            resource: cluster_lights.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 11,
+                            resource: self.atlas_matrices.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 12,
+                            resource: wgpu::BindingResource::TextureView(&self.atlas),
+                        },
+                    ],
+                })
+            })
+            .collect();
+        self.atlas_groups = self
+            .atlas_buffers
+            .iter()
+            .map(|b| {
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("shadow tile bind group"),
+                    layout: &self.shadow_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: b.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: self.joint_buffer.as_entire_binding(),
                         },
                     ],
                 })
@@ -1429,11 +1548,68 @@ impl SceneRenderer {
         }
 
         // ---- lights and joints --------------------------------------------------------
+        // Atlas tiles for shadowed point/spot lights, nearest to the camera first.
+        let view_pos = frame.cameras.first().map_or(Vector3::ZERO, |c| c.position);
+        let mut shadowed: Vec<usize> = frame
+            .lights
+            .iter()
+            .take(MAX_LIGHTS)
+            .enumerate()
+            .filter(|(_, l)| l.shadow.is_some_and(|s| s.strength > 0.0))
+            .map(|(i, _)| i)
+            .collect();
+        shadowed.sort_by(|&a, &b| {
+            let d =
+                |i: usize| (frame.lights[i].position - view_pos).length() - frame.lights[i].range;
+            d(a).total_cmp(&d(b))
+        });
+        let mut tiles: Vec<ShadowTiles> = Vec::new();
+        let mut next_tile = 0;
+        for i in shadowed {
+            let l = &frame.lights[i];
+            let near = (l.range * 0.01).max(0.05);
+            let far = l.range.max(near + 0.1);
+            let (rotations, fov): (Vec<oxide_math::Quaternion>, f32) = match l.spot {
+                Some((dir, outer, _)) => {
+                    let dir = dir.normalize_or(Vector3::Z);
+                    let up = if dir.y.abs() > 0.99 {
+                        Vector3::Z
+                    } else {
+                        Vector3::Y
+                    };
+                    (
+                        vec![oxide_math::QuaternionExt::look_rotation(dir, up)],
+                        (outer + 4.0).clamp(2.0, 170.0).to_radians(),
+                    )
+                }
+                // Faces a little wider than 90° so filtering never reads past a tile edge.
+                None => (
+                    crate::reflection::face_rotations().to_vec(),
+                    2.0 * (1.0 + 4.0 / ATLAS_TILE as f32).atan(),
+                ),
+            };
+            if next_tile + rotations.len() > ATLAS_TILES {
+                continue;
+            }
+            let proj = Matrix4x4::perspective(fov, 1.0, near, far);
+            let matrices = rotations
+                .iter()
+                .map(|r| proj * Matrix4x4::look_to(l.position, *r * Vector3::Z, *r * Vector3::Y))
+                .collect::<Vec<_>>();
+            tiles.push(ShadowTiles {
+                light: i,
+                first: next_tile,
+                texel: 2.0 * (fov * 0.5).tan() / ATLAS_TILE as f32,
+                matrices,
+            });
+            next_tile += rotations.len();
+        }
         let lights: Vec<LightUniform> = frame
             .lights
             .iter()
             .take(MAX_LIGHTS)
-            .map(|l| {
+            .enumerate()
+            .map(|(li, l)| {
                 let (dir, spot, ty) = match l.spot {
                     Some((d, outer, inner)) => {
                         let co = (outer.to_radians() * 0.5).cos();
@@ -1446,11 +1622,19 @@ impl SceneRenderer {
                     }
                     None => (Vector3::Z, [0.0; 4], 0.0),
                 };
+                let mut spot = spot;
+                let mut shadow = [0.0; 4];
+                if let (Some(t), Some(s)) = (tiles.iter().find(|t| t.light == li), l.shadow) {
+                    spot[2] = (t.first + 1) as f32;
+                    spot[3] = s.strength.clamp(0.0, 1.0);
+                    shadow = [s.bias, s.normal_bias, s.soft as u32 as f32, t.texel];
+                }
                 LightUniform {
                     pos_range: l.position.extend(l.range.max(0.01)).to_array(),
                     color: [l.color[0], l.color[1], l.color[2], ty],
                     dir: dir.extend(0.0).to_array(),
                     spot,
+                    shadow,
                 }
             })
             .collect();
@@ -1475,7 +1659,56 @@ impl SceneRenderer {
                 .collect();
             queue.write_buffer(&self.joint_buffer, 0, bytemuck::cast_slice(&flat));
         }
+        // Forward+: light lists per cluster for each camera.
+        let light_spheres: Vec<(Vector3, f32)> = frame
+            .lights
+            .iter()
+            .take(MAX_LIGHTS)
+            .map(|l| (l.position, l.range.max(0.01)))
+            .collect();
+        let aspect_of =
+            |c: &CameraView| (w as f32 * c.viewport[2]) / (h as f32 * c.viewport[3]).max(1.0);
+        let grids: Vec<crate::clusters::ClusterGrid> = frame
+            .cameras
+            .iter()
+            .map(|c| {
+                crate::clusters::assign(
+                    &c.view(),
+                    &c.projection(aspect_of(c)),
+                    c.near,
+                    c.far,
+                    &light_spheres,
+                )
+            })
+            .collect();
         self.rebuild_groups(device, frame.cameras.len().max(1));
+        for (i, g) in grids.iter().enumerate() {
+            let needed = (g.indices.len().max(1) * 4) as u64;
+            if self.cluster_buffers[i].1.size() < needed {
+                self.cluster_buffers[i].1 = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("cluster lights"),
+                    size: needed.next_power_of_two(),
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                self.groups_dirty = true;
+            }
+        }
+        self.rebuild_groups(device, frame.cameras.len().max(1));
+        for (i, g) in grids.iter().enumerate() {
+            queue.write_buffer(
+                &self.cluster_buffers[i].0,
+                0,
+                bytemuck::cast_slice(&g.cells),
+            );
+            if !g.indices.is_empty() {
+                queue.write_buffer(
+                    &self.cluster_buffers[i].1,
+                    0,
+                    bytemuck::cast_slice(&g.indices),
+                );
+            }
+        }
 
         let env = &frame.environment;
         let mut instances: Vec<Instance> = Vec::with_capacity(resolved.len());
@@ -1498,6 +1731,48 @@ impl SceneRenderer {
                     r.probes[1],
                 ],
             }
+        };
+
+        // Sorts shadow casters into instanced batches (instances appended to `instances`).
+        let batch_casters = |mut casters: Vec<&Resolved>, instances: &mut Vec<Instance>| {
+            casters.sort_by_key(|r| {
+                (
+                    r.cutout,
+                    r.item.joint_offset.is_some(),
+                    r.material,
+                    r.item.mesh,
+                    r.item.submesh,
+                )
+            });
+            let mut list: Vec<ShadowBatch> = Vec::new();
+            for r in casters {
+                let key = ShadowKey {
+                    cutout: r.cutout,
+                    double_sided: r.double_sided,
+                    skinned: r.item.joint_offset.is_some(),
+                };
+                let idx = instances.len() as u32;
+                instances.push(make_instance(r));
+                if let Some(last) = list.last_mut()
+                    && !key.skinned
+                    && last.key == key
+                    && last.mesh == r.item.mesh
+                    && last.submesh == r.item.submesh
+                    && (!key.cutout || last.material == r.material)
+                    && last.instances.end == idx
+                {
+                    last.instances.end += 1;
+                    continue;
+                }
+                list.push(ShadowBatch {
+                    key,
+                    material: r.material,
+                    mesh: r.item.mesh,
+                    submesh: r.item.submesh,
+                    instances: idx..idx + 1,
+                });
+            }
+            list
         };
 
         // ---- shadows (from the first camera) ------------------------------------------
@@ -1534,49 +1809,48 @@ impl SceneRenderer {
                     0,
                     bytemuck::cast_slice(&c.view_proj.to_cols_array()),
                 );
-                let mut casters: Vec<&Resolved> = resolved
+                let casters = resolved
                     .iter()
                     .filter(|r| r.cast && !r.transparent && c.overlaps(r.center, r.radius))
                     .collect();
-                casters.sort_by_key(|r| {
-                    (
-                        r.cutout,
-                        r.item.joint_offset.is_some(),
-                        r.material,
-                        r.item.mesh,
-                        r.item.submesh,
-                    )
-                });
-                let mut list: Vec<ShadowBatch> = Vec::new();
-                for r in casters {
-                    let key = ShadowKey {
-                        cutout: r.cutout,
-                        double_sided: r.double_sided,
-                        skinned: r.item.joint_offset.is_some(),
-                    };
-                    let idx = instances.len() as u32;
-                    instances.push(make_instance(r));
-                    if let Some(last) = list.last_mut()
-                        && !key.skinned
-                        && last.key == key
-                        && last.mesh == r.item.mesh
-                        && last.submesh == r.item.submesh
-                        && (!key.cutout || last.material == r.material)
-                        && last.instances.end == idx
-                    {
-                        last.instances.end += 1;
-                        continue;
-                    }
-                    list.push(ShadowBatch {
-                        key,
-                        material: r.material,
-                        mesh: r.item.mesh,
-                        submesh: r.item.submesh,
-                        instances: idx..idx + 1,
-                    });
-                }
+                let list = batch_casters(casters, &mut instances);
                 shadow_batches[i] = list;
             }
+        }
+
+        // Additional-light shadow casters per atlas tile.
+        let mut tile_batches: Vec<(usize, Vec<ShadowBatch>)> = Vec::new();
+        let mut tile_matrices = vec![[0.0f32; 16]; ATLAS_TILES];
+        for t in &tiles {
+            let l = &frame.lights[t.light];
+            for (f, m) in t.matrices.iter().enumerate() {
+                let tile = t.first + f;
+                tile_matrices[tile] = m.to_cols_array();
+                queue.write_buffer(
+                    &self.atlas_buffers[tile],
+                    0,
+                    bytemuck::cast_slice(&m.to_cols_array()),
+                );
+                let planes = frustum_planes(m);
+                let casters = resolved
+                    .iter()
+                    .filter(|r| {
+                        r.cast
+                            && !r.transparent
+                            && (!r.radius.is_finite()
+                                || ((r.center - l.position).length() < r.radius + l.range
+                                    && sphere_visible(&planes, r.center, r.radius)))
+                    })
+                    .collect();
+                tile_batches.push((tile, batch_casters(casters, &mut instances)));
+            }
+        }
+        if !tiles.is_empty() {
+            queue.write_buffer(
+                &self.atlas_matrices,
+                0,
+                bytemuck::cast_slice(&tile_matrices),
+            );
         }
 
         // ---- per-camera culling and batching -------------------------------------------
@@ -1876,6 +2150,17 @@ impl SceneRenderer {
                     0.0,
                     0.0,
                 ],
+                cluster_viewport: {
+                    let [vx, vy, vw, vh] = cam.viewport;
+                    let ph = vh * h as f32;
+                    [
+                        vx * w as f32,
+                        h as f32 - vy * h as f32 - ph,
+                        (vw * w as f32).max(1.0),
+                        ph.max(1.0),
+                    ]
+                },
+                cluster_params: [grids[ci].scale, grids[ci].bias, 0.0, 0.0],
             };
             queue.write_buffer(&self.frame_buffers[ci], 0, bytemuck::bytes_of(&u));
         }
@@ -1910,7 +2195,10 @@ impl SceneRenderer {
                 self.main_pipeline(device, b.key);
             }
         }
-        for list in &shadow_batches {
+        for list in shadow_batches
+            .iter()
+            .chain(tile_batches.iter().map(|(_, l)| l))
+        {
             for b in list {
                 self.shadow_pipeline(device, b.key);
             }
@@ -1947,6 +2235,50 @@ impl SceneRenderer {
                 });
                 pass.set_bind_group(0, &self.shadow_groups[i], &[]);
                 pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+                for b in list {
+                    let mesh = &self.gpu_assets.meshes[&b.mesh];
+                    let mat = &self.gpu_assets.materials[&b.material];
+                    pass.set_pipeline(&self.shadow_pipelines[&b.key]);
+                    pass.set_bind_group(1, &mat.bind_group, &[]);
+                    pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                    if b.key.skinned {
+                        let Some(skin) = &mesh.skin else { continue };
+                        pass.set_vertex_buffer(2, skin.slice(..));
+                    }
+                    pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(
+                        mesh.submeshes[b.submesh as usize].clone(),
+                        0,
+                        b.instances.clone(),
+                    );
+                    stats.shadow_draw_calls += 1;
+                }
+            }
+        }
+
+        // ---- point/spot shadow atlas ------------------------------------------------------
+        if !tile_batches.is_empty() {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("shadow atlas"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.atlas,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+            pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+            let per_row = ATLAS_SIZE / ATLAS_TILE;
+            for (tile, list) in &tile_batches {
+                let (tx, ty) = (*tile as u32 % per_row, *tile as u32 / per_row);
+                let (x, y) = ((tx * ATLAS_TILE) as f32, (ty * ATLAS_TILE) as f32);
+                pass.set_viewport(x, y, ATLAS_TILE as f32, ATLAS_TILE as f32, 0.0, 1.0);
+                pass.set_scissor_rect(x as u32, y as u32, ATLAS_TILE, ATLAS_TILE);
+                pass.set_bind_group(0, &self.atlas_groups[*tile], &[]);
                 for b in list {
                     let mesh = &self.gpu_assets.meshes[&b.mesh];
                     let mat = &self.gpu_assets.materials[&b.material];

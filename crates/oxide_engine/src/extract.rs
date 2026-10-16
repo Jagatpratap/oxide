@@ -164,6 +164,12 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
                 color,
                 spot: (l.light_type == LightType::Spot)
                     .then(|| (world.forward(id), l.spot_angle, l.inner_spot_angle)),
+                shadow: (l.shadows != LightShadows::None).then_some(ShadowSettings {
+                    soft: l.shadows == LightShadows::Soft,
+                    strength: l.shadow_strength,
+                    bias: l.shadow_bias,
+                    normal_bias: l.shadow_normal_bias,
+                }),
             }),
         }
     }
