@@ -54,6 +54,14 @@ mod keys {
     pub const BUILD_RUN: &str = "⌘B";
     pub const PREFS: &str = "⌘,";
     pub const REFRESH: &str = "⌘R";
+    pub const SEL_BACK: &str = "⌘[";
+    pub const SEL_FWD: &str = "⌘]";
+    pub const SAVE_SEL: [&str; 9] = [
+        "⌥⌘1", "⌥⌘2", "⌥⌘3", "⌥⌘4", "⌥⌘5", "⌥⌘6", "⌥⌘7", "⌥⌘8", "⌥⌘9",
+    ];
+    pub const LOAD_SEL: [&str; 9] = [
+        "⇧⌘1", "⇧⌘2", "⇧⌘3", "⇧⌘4", "⇧⌘5", "⇧⌘6", "⇧⌘7", "⇧⌘8", "⇧⌘9",
+    ];
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -76,6 +84,30 @@ mod keys {
     pub const BUILD_RUN: &str = "Ctrl+B";
     pub const PREFS: &str = "";
     pub const REFRESH: &str = "Ctrl+R";
+    pub const SEL_BACK: &str = "Ctrl+[";
+    pub const SEL_FWD: &str = "Ctrl+]";
+    pub const SAVE_SEL: [&str; 9] = [
+        "Ctrl+Alt+1",
+        "Ctrl+Alt+2",
+        "Ctrl+Alt+3",
+        "Ctrl+Alt+4",
+        "Ctrl+Alt+5",
+        "Ctrl+Alt+6",
+        "Ctrl+Alt+7",
+        "Ctrl+Alt+8",
+        "Ctrl+Alt+9",
+    ];
+    pub const LOAD_SEL: [&str; 9] = [
+        "Ctrl+Shift+1",
+        "Ctrl+Shift+2",
+        "Ctrl+Shift+3",
+        "Ctrl+Shift+4",
+        "Ctrl+Shift+5",
+        "Ctrl+Shift+6",
+        "Ctrl+Shift+7",
+        "Ctrl+Shift+8",
+        "Ctrl+Shift+9",
+    ];
 }
 
 fn create_items(prefix: &str) -> Vec<MenuItem> {
@@ -181,6 +213,13 @@ pub fn menu_items(world: &World) -> Vec<MenuItem> {
         item("Edit/Delete", keys::DEL, Action::Delete),
         item("Edit/Rename", "F2", Action::Rename),
         item("Edit/Frame Selected", "F", Action::FrameSelected),
+        item("Edit/Selection/Back", keys::SEL_BACK, Action::SelectionBack),
+        item(
+            "Edit/Selection/Forward",
+            keys::SEL_FWD,
+            Action::SelectionForward,
+        ),
+        sep("Edit/Selection"),
         sep("Edit"),
         item("Edit/Play", keys::PLAY, Action::TogglePlay),
         item("Edit/Pause", keys::PAUSE, Action::TogglePause),
@@ -198,6 +237,20 @@ pub fn menu_items(world: &World) -> Vec<MenuItem> {
         ),
         item("Edit/Preferences...", keys::PREFS, Action::OpenPreferences),
     ];
+    for n in 1..=9 {
+        v.push(item(
+            &format!("Edit/Selection/Save Selection {n}"),
+            keys::SAVE_SEL[n - 1],
+            Action::SaveSelection(n),
+        ));
+    }
+    for n in 1..=9 {
+        v.push(item(
+            &format!("Edit/Selection/Load Selection {n}"),
+            keys::LOAD_SEL[n - 1],
+            Action::LoadSelection(n),
+        ));
+    }
     v.extend(create_items("GameObject/"));
     v.push(sep("GameObject"));
     v.push(item(
@@ -536,6 +589,39 @@ pub fn shortcuts(st: &mut EditorState, engine: &mut Engine, ctx: &egui::Context)
             st.actions.push(a);
             return;
         }
+    }
+    let nums = [
+        Key::Num1,
+        Key::Num2,
+        Key::Num3,
+        Key::Num4,
+        Key::Num5,
+        Key::Num6,
+        Key::Num7,
+        Key::Num8,
+        Key::Num9,
+    ];
+    for (i, k) in nums.into_iter().enumerate() {
+        if fire(cmd | Modifiers::ALT, k) {
+            st.actions.push(Action::SaveSelection(i + 1));
+            return;
+        }
+        if fire(cmd | Modifiers::SHIFT, k) {
+            st.actions.push(Action::LoadSelection(i + 1));
+            return;
+        }
+    }
+    if fire(cmd, Key::OpenBracket) {
+        st.actions.push(Action::SelectionBack);
+        return;
+    }
+    if fire(cmd, Key::CloseBracket) {
+        st.actions.push(Action::SelectionForward);
+        return;
+    }
+    if fire(cmd, Key::R) {
+        st.actions.push(Action::RefreshAssets);
+        return;
     }
     let plain = |k: Key| ctx.input(|i| i.modifiers.is_none() && i.key_pressed(k));
     if plain(Key::Backspace) {

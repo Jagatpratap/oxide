@@ -9,6 +9,7 @@
 //! <https://docs.unity3d.com/Manual/GameView.html>, <https://docs.unity3d.com/Manual/UndoWindow.html>
 
 mod console;
+pub(crate) mod game_view;
 mod hierarchy;
 mod inspector;
 pub mod launch;
@@ -35,6 +36,7 @@ use oxide_input::{CursorLockMode, Input};
 use oxide_math::{Color, Quaternion, QuaternionExt, Vector3};
 use oxide_scene::{GameObjectId, Light, LightType, World};
 use oxide_ui::Gui;
+use std::collections::HashMap;
 
 /// A dockable editor window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -47,16 +49,19 @@ pub enum Tab {
     Console,
     ProjectSettings,
     Preferences,
+    UndoHistory,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 6] = [
+    /// Window → General.
+    pub const ALL: [Tab; 7] = [
         Tab::Scene,
         Tab::Game,
         Tab::Hierarchy,
         Tab::Inspector,
         Tab::Project,
         Tab::Console,
+        Tab::UndoHistory,
     ];
 
     pub fn title(self) -> &'static str {
@@ -69,6 +74,7 @@ impl Tab {
             Tab::Console => "Console",
             Tab::ProjectSettings => "Project Settings",
             Tab::Preferences => "Preferences",
+            Tab::UndoHistory => "Undo History",
         }
     }
 }
@@ -114,6 +120,25 @@ pub enum Create {
     BoxVolume,
     SphereVolume,
     Camera,
+}
+
+impl Create {
+    /// What gets created (for the undo step).
+    fn label(self) -> &'static str {
+        match self {
+            Create::Empty | Create::EmptyChild => "GameObject",
+            Create::Primitive(p) => p.name(),
+            Create::DirectionalLight => "Directional Light",
+            Create::PointLight => "Point Light",
+            Create::SpotLight => "Spot Light",
+            Create::ReflectionProbe => "Reflection Probe",
+            Create::LightProbeGroup => "Light Probe Group",
+            Create::GlobalVolume => "Global Volume",
+            Create::BoxVolume => "Box Volume",
+            Create::SphereVolume => "Sphere Volume",
+            Create::Camera => "Camera",
+        }
+    }
 }
 
 /// Everything the menus, shortcuts and MCP can ask the editor to do.
@@ -167,6 +192,14 @@ pub enum Action {
     OpenPreferences,
     /// Assets → Refresh: reimport files changed on disk.
     RefreshAssets,
+    /// Undo History: undo or redo until this many steps are applied.
+    UndoTo(usize),
+    /// Edit → Selection → Back / Forward through previous selections.
+    SelectionBack,
+    SelectionForward,
+    /// Edit → Selection → Save / Load Selection N (1..9).
+    SaveSelection(usize),
+    LoadSelection(usize),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -207,9 +240,7 @@ pub struct EditorState {
     console: console::ConsoleState,
     project: project::ProjectState,
     scene_ui: scene_view::SceneViewState,
-    /// Game view aspect (`None` = free aspect).
-    game_aspect: Option<f32>,
-    game_stats: bool,
+    pub(crate) game: game_view::GameViewState,
     modal: Option<Modal>,
     title: String,
     /// Status messages from actions (shown in the status bar).
@@ -223,6 +254,11 @@ pub struct EditorState {
     pub(crate) prefs_page: prefs::Page,
     pub(crate) prefs_changed: bool,
     pub(crate) settings: settings_window::SettingsState,
+    /// Previous selections (Back / Forward) and the position in that list.
+    sel_history: Vec<Vec<GameObjectId>>,
+    sel_pos: usize,
+    /// Edit → Selection → Save Selection 1..9.
+    saved_selections: [Vec<GameObjectId>; 9],
 }
 
 impl EditorState {
@@ -246,8 +282,7 @@ impl EditorState {
             console: Default::default(),
             project: Default::default(),
             scene_ui: Default::default(),
-            game_aspect: None,
-            game_stats: false,
+            game: Default::default(),
             modal: None,
             title: String::new(),
             status: String::new(),
@@ -258,6 +293,9 @@ impl EditorState {
             prefs_page: Default::default(),
             prefs_changed: false,
             settings: Default::default(),
+            sel_history: Vec::new(),
+            sel_pos: 0,
+            saved_selections: Default::default(),
         }
     }
 
@@ -316,6 +354,55 @@ impl EditorState {
     fn playing(&self) -> bool {
         self.play == PlayState::Playing
     }
+
+    /// Paths of the objects in the selection history and saved selections, taken before
+    /// the scene is rebuilt (undo, redo, Stop) so they can be found again afterwards.
+    fn remember_paths(&self, w: &World) -> HashMap<GameObjectId, ObjectPath> {
+        self.sel_history
+            .iter()
+            .chain(self.saved_selections.iter())
+            .flatten()
+            .filter(|&&id| w.is_alive(id))
+            .map(|&id| (id, object_path(w, id)))
+            .collect()
+    }
+
+    /// Points the selection history and saved selections at the rebuilt objects.
+    fn remap_paths(&mut self, w: &World, before: &HashMap<GameObjectId, ObjectPath>) {
+        let now: HashMap<ObjectPath, GameObjectId> = w
+            .hierarchy_order()
+            .into_iter()
+            .map(|id| (object_path(w, id), id))
+            .collect();
+        let map = |list: &mut Vec<GameObjectId>| {
+            *list = list
+                .iter()
+                .filter_map(|id| before.get(id).and_then(|p| now.get(p)).copied())
+                .collect();
+        };
+        self.sel_history.iter_mut().for_each(map);
+        self.saved_selections.iter_mut().for_each(map);
+    }
+
+    /// Adds the selection to the Back / Forward history when it changed.
+    fn track_selection(&mut self, world: &World) {
+        for s in &mut self.sel_history {
+            s.retain(|&id| world.is_alive(id));
+        }
+        self.sel_history.dedup();
+        self.sel_history.retain(|s| !s.is_empty());
+        self.sel_pos = self.sel_pos.min(self.sel_history.len().saturating_sub(1));
+        if self.selection.is_empty() || self.sel_history.get(self.sel_pos) == Some(&self.selection)
+        {
+            return;
+        }
+        self.sel_history.truncate(self.sel_pos + 1);
+        self.sel_history.push(self.selection.clone());
+        if self.sel_history.len() > 50 {
+            self.sel_history.remove(0);
+        }
+        self.sel_pos = self.sel_history.len() - 1;
+    }
 }
 
 /// The editor shell. Install with `App::shell(Box::new(Editor::new()))`.
@@ -326,6 +413,8 @@ pub struct Editor {
     /// Last saved layout (JSON) and when it was last checked.
     saved_layout: Option<String>,
     layout_checked: f64,
+    /// The layout from before Play while Maximize On Play shows only the Game view.
+    unmaximized: Option<DockState<Tab>>,
     /// Compiles and hot-reloads the project's Scripts (only in a project editor that links
     /// the engine dynamically).
     pub scripts: Option<scripting::ScriptHost>,
@@ -366,13 +455,14 @@ impl egui_dock::TabViewer for Viewer<'_> {
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
         match tab {
             Tab::Scene => scene_view::ui(self.st, self.engine, ui),
-            Tab::Game => game_view_ui(self.st, self.engine, ui),
+            Tab::Game => game_view::ui(self.st, self.engine, ui),
             Tab::Hierarchy => hierarchy::ui(self.st, self.engine, ui),
             Tab::Inspector => inspector::ui(self.st, self.engine, ui),
             Tab::Project => project::ui(self.st, self.engine, ui),
             Tab::Console => console::ui(self.st, self.engine, ui),
             Tab::ProjectSettings => settings_window::ui(self.st, self.engine, ui),
             Tab::Preferences => prefs::ui(self.st, self.engine, ui),
+            Tab::UndoHistory => undo::window_ui(self.st, ui),
         }
     }
 
@@ -393,6 +483,7 @@ impl Editor {
             styled: false,
             saved_layout: None,
             layout_checked: 0.0,
+            unmaximized: None,
             scripts: None,
         }
     }
@@ -433,6 +524,9 @@ impl Editor {
 
     /// Saves the layout when it changed (checked every couple of seconds).
     fn save_layout(&mut self, engine: &Engine) {
+        if self.unmaximized.is_some() {
+            return;
+        }
         let now = oxide_core::time::realtime_since_startup();
         if now - self.layout_checked < 2.0 {
             return;
@@ -542,24 +636,25 @@ impl Editor {
                 st.modal = Some(Modal::Open);
                 String::new()
             }
-            Action::Undo => match st.undo.undo(w, &st.selection) {
-                Some((label, sel)) => {
-                    st.selection = sel;
-                    st.dirty = true;
-                    engine.start_systems();
-                    format!("Undo {label}")
-                }
-                None => return Err("nothing to undo".into()),
-            },
-            Action::Redo => match st.undo.redo(w, &st.selection) {
-                Some((label, sel)) => {
-                    st.selection = sel;
-                    st.dirty = true;
-                    engine.start_systems();
-                    format!("Redo {label}")
-                }
-                None => return Err("nothing to redo".into()),
-            },
+            Action::Undo | Action::Redo => {
+                let undo = action == Action::Undo;
+                let paths = st.remember_paths(w);
+                let step = if undo {
+                    st.undo.undo(w, &st.selection)
+                } else {
+                    st.undo.redo(w, &st.selection)
+                };
+                let (label, sel) = step.ok_or(if undo {
+                    "nothing to undo"
+                } else {
+                    "nothing to redo"
+                })?;
+                st.remap_paths(w, &paths);
+                st.selection = sel;
+                st.dirty = true;
+                engine.start_systems();
+                format!("{} {label}", if undo { "Undo" } else { "Redo" })
+            }
             Action::TogglePlay => {
                 if st.playing() {
                     self.exit_play(engine);
@@ -582,7 +677,7 @@ impl Editor {
                 "Step".into()
             }
             Action::Create(kind) => {
-                st.record(w, "Create Object", None, now);
+                st.record(w, &format!("Create {}", kind.label()), None, now);
                 let id = create(w, kind, st.active());
                 // Unity places new root objects at the Scene view pivot.
                 if w.parent(id).is_none()
@@ -728,6 +823,62 @@ impl Editor {
                 st.project.cache = None;
                 format!("Refreshed assets ({n} reimported)")
             }
+            Action::UndoTo(target) => {
+                let paths = st.remember_paths(w);
+                let mut label = String::new();
+                while st.undo.depth() > target {
+                    let Some((l, sel)) = st.undo.undo(w, &st.selection) else {
+                        break;
+                    };
+                    st.selection = sel;
+                    label = format!("Undo {l}");
+                }
+                while st.undo.depth() < target {
+                    let Some((l, sel)) = st.undo.redo(w, &st.selection) else {
+                        break;
+                    };
+                    st.selection = sel;
+                    label = format!("Redo {l}");
+                }
+                st.remap_paths(w, &paths);
+                st.dirty = true;
+                engine.start_systems();
+                label
+            }
+            Action::SelectionBack | Action::SelectionForward => {
+                st.track_selection(w);
+                let back = action == Action::SelectionBack;
+                let n = st.sel_history.len();
+                let pos = if back {
+                    st.sel_pos.checked_sub(1)
+                } else {
+                    (st.sel_pos + 1 < n).then_some(st.sel_pos + 1)
+                };
+                let pos = pos.ok_or("no more selections in history")?;
+                st.sel_pos = pos;
+                st.selection = st.sel_history[pos].clone();
+                format!("Selected {} object(s)", st.selection.len())
+            }
+            Action::SaveSelection(n) => {
+                let slot = st
+                    .saved_selections
+                    .get_mut(n.wrapping_sub(1))
+                    .ok_or("selection slots are 1..9")?;
+                *slot = st.selection.clone();
+                format!("Saved selection {n}")
+            }
+            Action::LoadSelection(n) => {
+                let sel = st
+                    .saved_selections
+                    .get(n.wrapping_sub(1))
+                    .ok_or("selection slots are 1..9")?;
+                let sel: Vec<_> = sel.iter().copied().filter(|&id| w.is_alive(id)).collect();
+                if sel.is_empty() {
+                    return Err(format!("selection {n} is empty"));
+                }
+                st.selection = sel;
+                format!("Loaded selection {n}")
+            }
             Action::ResetLayout => {
                 self.dock = default_layout();
                 return Ok("Layout reset".into());
@@ -857,6 +1008,12 @@ impl Editor {
         engine.paused = false;
         st.play = PlayState::Playing;
         st.game_focused = true;
+        if st.game.maximize_on_play {
+            self.unmaximized = Some(std::mem::replace(
+                &mut self.dock,
+                DockState::new(vec![Tab::Game]),
+            ));
+        }
         self.focus_tab(Tab::Game);
     }
 
@@ -867,11 +1024,13 @@ impl Editor {
         engine.pending_steps = 0;
         let w = &mut engine.world;
         // Scripts see OnDisable/OnDestroy as the play-mode objects go away.
+        let paths = st.remember_paths(w);
         w.clear(false);
         w.run_scripts = false;
         if let Some(snap) = st.play_snapshot.take() {
             st.selection = snap.restore(w);
         }
+        st.remap_paths(w, &paths);
         st.undo.truncate(st.play_undo_depth);
         let input = w.resource_mut::<Input>();
         input.release_all();
@@ -880,6 +1039,9 @@ impl Editor {
         engine.start_systems();
         st.play = PlayState::Edit;
         st.game_focused = false;
+        if let Some(dock) = self.unmaximized.take() {
+            self.dock = dock;
+        }
     }
 
     fn modal_ui(&mut self, ctx: &egui::Context, engine: &mut Engine) {
@@ -1060,16 +1222,34 @@ impl Editor {
                 width: r.width() * ppp,
                 height: r.height() * ppp,
                 focused,
+                scale: st.game.pixel_scale,
             },
             None => GameViewport::default(),
         });
         let input = engine.world.resource_mut::<Input>();
         input.enabled = focused;
         if let Some(r) = rect {
-            input.screen_height = r.height() * ppp;
+            input.screen_height = r.height() * ppp * st.game.pixel_scale;
         }
         engine.world.resource_mut::<Gui>().viewport = Some(rect.unwrap_or(egui::Rect::ZERO));
     }
+}
+
+/// An object's place in the hierarchy: (sibling index, name) from the root down.
+type ObjectPath = Vec<(usize, String)>;
+
+fn object_path(w: &World, id: GameObjectId) -> ObjectPath {
+    let mut path = Vec::new();
+    let mut cur = Some(id);
+    while let Some(x) = cur {
+        path.push((
+            w.sibling_index(x),
+            w.get(x).map(|o| o.name.clone()).unwrap_or_default(),
+        ));
+        cur = w.parent(x);
+    }
+    path.reverse();
+    path
 }
 
 /// `Cube` → `Cube (1)` → `Cube (2)`, like Unity's duplicate naming.
@@ -1172,108 +1352,6 @@ fn create(w: &mut World, kind: Create, active: Option<GameObjectId>) -> GameObje
     }
 }
 
-fn game_view_ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
-    ui.horizontal(|ui| {
-        ui.label("Display 1");
-        let label = match st.game_aspect {
-            None => "Free Aspect".to_owned(),
-            Some(a) => GAME_ASPECTS
-                .iter()
-                .find(|(_, v)| (*v - a).abs() < 1e-3)
-                .map_or_else(|| format!("{a:.2}"), |(n, _)| (*n).to_owned()),
-        };
-        egui::ComboBox::from_id_salt("game-aspect")
-            .selected_text(label)
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut st.game_aspect, None, "Free Aspect");
-                for (name, a) in GAME_ASPECTS {
-                    ui.selectable_value(&mut st.game_aspect, Some(*a), *name);
-                }
-            });
-        ui.toggle_value(&mut st.game_stats, "Stats");
-    });
-    let avail = ui.available_rect_before_wrap();
-    let rect = match st.game_aspect {
-        None => avail,
-        Some(a) => {
-            let (w, h) = if avail.width() / avail.height().max(1.0) > a {
-                (avail.height() * a, avail.height())
-            } else {
-                (avail.width(), avail.width() / a)
-            };
-            egui::Rect::from_center_size(avail.center(), egui::vec2(w, h))
-        }
-    };
-    let resp = ui.allocate_rect(avail, egui::Sense::click());
-    ui.painter().rect_filled(avail, 0.0, egui::Color32::BLACK);
-    if rect.width() < 2.0 || rect.height() < 2.0 {
-        return;
-    }
-    let ppp = ui.ctx().pixels_per_point();
-    let id = st.game_view.texture_id(
-        engine,
-        (rect.width() * ppp).round() as u32,
-        (rect.height() * ppp).round() as u32,
-    );
-    st.game_view.rect = Some(rect);
-    ui.painter().image(
-        id,
-        rect,
-        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-        egui::Color32::WHITE,
-    );
-    if oxide_engine::extract::cameras(&engine.world).is_empty() {
-        ui.painter().text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            "Display 1\nNo cameras rendering",
-            egui::FontId::proportional(16.0),
-            egui::Color32::from_gray(200),
-        );
-    }
-    if resp.clicked() || resp.secondary_clicked() {
-        st.game_focused = true;
-    }
-    if st.playing() && st.game_focused {
-        ui.painter().rect_stroke(
-            avail.shrink(0.5),
-            0.0,
-            egui::Stroke::new(1.0, egui::Color32::from_rgb(58, 121, 187)),
-            egui::StrokeKind::Inside,
-        );
-    }
-    if st.game_stats {
-        let s = &engine.stats;
-        let text = format!(
-            "{:.0} FPS ({:.1} ms)\nDraw calls: {}\nTris: {}",
-            engine.fps,
-            1000.0 / engine.fps.max(1.0),
-            s.draw_calls,
-            s.triangles
-        );
-        let pos = rect.right_top() + egui::vec2(-8.0, 8.0);
-        let galley =
-            ui.painter()
-                .layout_no_wrap(text, egui::FontId::monospace(12.0), egui::Color32::WHITE);
-        let bg = egui::Rect::from_min_size(
-            pos - egui::vec2(galley.size().x + 8.0, 0.0),
-            galley.size() + egui::vec2(8.0, 6.0),
-        );
-        ui.painter()
-            .rect_filled(bg, 3.0, egui::Color32::from_black_alpha(170));
-        ui.painter()
-            .galley(bg.min + egui::vec2(4.0, 3.0), galley, egui::Color32::WHITE);
-    }
-}
-
-const GAME_ASPECTS: &[(&str, f32)] = &[
-    ("16:9", 16.0 / 9.0),
-    ("16:10", 16.0 / 10.0),
-    ("4:3", 4.0 / 3.0),
-    ("21:9", 21.0 / 9.0),
-    ("9:16 Portrait", 9.0 / 16.0),
-];
-
 impl Shell for Editor {
     fn install(&mut self, world: &mut World) {
         // Edit mode: components are added but no script callbacks run until Play.
@@ -1349,6 +1427,7 @@ impl Shell for Editor {
                 self.st.status = e;
             }
         }
+        self.st.track_selection(&engine.world);
         self.update_game_viewport(engine, &ctx);
         self.save_layout(engine);
         settings_window::flush(
@@ -1390,5 +1469,44 @@ impl Shell for Editor {
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selection_history_tracks_and_drops_dead_objects() {
+        let mut w = World::new();
+        let a = w.create("A");
+        let b = w.create("B");
+        let mut st = EditorState::new();
+        st.select(a);
+        st.track_selection(&w);
+        st.select(b);
+        st.track_selection(&w);
+        st.track_selection(&w);
+        assert_eq!(st.sel_history, vec![vec![a], vec![b]]);
+        assert_eq!(st.sel_pos, 1);
+        w.destroy_immediate(a);
+        st.track_selection(&w);
+        assert_eq!(st.sel_history, vec![vec![b]]);
+        assert_eq!(st.sel_pos, 0);
+
+        // A snapshot restore (Undo, Stop) recreates every object; history follows by path.
+        let c = w.create("C");
+        w.set_parent(c, Some(b), false).unwrap();
+        st.select(c);
+        st.track_selection(&w);
+        st.saved_selections[0] = vec![b];
+        let snap = undo::Snapshot::take(&w, "x", &[]);
+        let paths = st.remember_paths(&w);
+        snap.restore(&mut w);
+        st.remap_paths(&w, &paths);
+        let (b2, c2) = (w.find("B").unwrap(), w.find("C").unwrap());
+        assert_ne!(b2, b);
+        assert_eq!(st.sel_history, vec![vec![b2], vec![c2]]);
+        assert_eq!(st.saved_selections[0], vec![b2]);
     }
 }

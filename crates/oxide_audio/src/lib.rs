@@ -147,6 +147,8 @@ pub struct Audio {
     pub master_volume: f32,
     /// Unity `AudioListener.pause`.
     pub paused: bool,
+    /// The editor's Game view "Mute Audio" (separate from the game's own settings).
+    pub mute: bool,
     applied_master: f32,
 }
 
@@ -171,6 +173,7 @@ impl Audio {
             one_shots: Vec::new(),
             master_volume: 1.0,
             paused: false,
+            mute: false,
             applied_master: 1.0,
         }
     }
@@ -353,12 +356,12 @@ fn sync(world: &mut World, audio: &mut Audio) {
             }
         }
     }
-    if (audio.master_volume - audio.applied_master).abs() > 1e-4 || audio.paused {
-        let v = if audio.paused {
-            0.0
-        } else {
-            audio.master_volume
-        };
+    let v = if audio.paused || audio.mute {
+        0.0
+    } else {
+        audio.master_volume
+    };
+    if (v - audio.applied_master).abs() > 1e-4 {
         if let Some(m) = audio.manager.as_mut() {
             m.main_track().set_volume(db(v), Tween::default());
         }

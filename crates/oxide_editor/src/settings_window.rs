@@ -60,17 +60,13 @@ pub fn two_pane<P: Copy + PartialEq>(
     let (left, right) = rect.split_left_right_at_x(rect.left() + list_w);
     ui.painter().rect_filled(left, 0.0, Color32::from_gray(48));
     ui.scope_builder(egui::UiBuilder::new().max_rect(left.shrink(4.0)), |ui| {
-        for (p, name) in pages {
-            if ui
-                .add_sized(
-                    vec2(ui.available_width(), 20.0),
-                    egui::Button::selectable(*current == *p, *name),
-                )
-                .clicked()
-            {
-                *current = *p;
+        ui.with_layout(egui::Layout::top_down_justified(egui::Align::LEFT), |ui| {
+            for (p, name) in pages {
+                if ui.selectable_label(*current == *p, *name).clicked() {
+                    *current = *p;
+                }
             }
-        }
+        });
     });
     let title = pages
         .iter()

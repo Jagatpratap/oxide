@@ -317,8 +317,10 @@ impl ApplicationHandler<Wake> for Runner {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
-                let (ox, oy) = viewport.map_or((0.0, 0.0), |v| (v.x, v.y));
-                input.mouse_move(position.x as f32 - ox, position.y as f32 - oy)
+                let (ox, oy, s) = viewport.map_or((0.0, 0.0, 1.0), |v| {
+                    (v.x, v.y, if v.scale > 0.0 { v.scale } else { 1.0 })
+                });
+                input.mouse_move((position.x as f32 - ox) * s, (position.y as f32 - oy) * s)
             }
             WindowEvent::MouseWheel { delta, .. } => match delta {
                 MouseScrollDelta::LineDelta(x, y) => input.scroll_event(x, y),

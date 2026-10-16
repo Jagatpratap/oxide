@@ -140,6 +140,44 @@ impl UndoStack {
     }
 }
 
+/// Undo History window: the initial state, every undo step, then the redo steps (greyed).
+/// Clicking an entry undoes or redoes to just after it.
+pub fn window_ui(st: &mut crate::EditorState, ui: &mut egui::Ui) {
+    let (done, undone) = st.undo.labels();
+    let depth = done.len();
+    let mut go_to = None;
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .stick_to_bottom(true)
+        .show(ui, |ui| {
+            ui.style_mut().spacing.item_spacing.y = 0.0;
+            let rows = std::iter::once("Scene opened")
+                .chain(done.iter().copied())
+                .chain(undone.iter().copied());
+            for (i, label) in rows.enumerate() {
+                let current = i == depth;
+                let text = if i > depth {
+                    egui::RichText::new(label).color(egui::Color32::from_gray(120))
+                } else {
+                    egui::RichText::new(label)
+                };
+                if ui
+                    .with_layout(egui::Layout::top_down_justified(egui::Align::LEFT), |ui| {
+                        ui.selectable_label(current, text)
+                    })
+                    .inner
+                    .clicked()
+                    && !current
+                {
+                    go_to = Some(i);
+                }
+            }
+        });
+    if let Some(i) = go_to {
+        st.actions.push(crate::Action::UndoTo(i));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

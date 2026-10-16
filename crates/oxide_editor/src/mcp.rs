@@ -336,6 +336,62 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
         },
     );
 
+    let sizes: Vec<&str> = crate::game_view::SIZES.iter().map(|(n, _)| *n).collect();
+    tool(
+        s,
+        bus,
+        ToolDef::new(
+            "editor_game_view",
+            "Game view settings",
+            "Game view control bar: `size` (aspect or fixed resolution, e.g. \"Full HD (1920x1080)\"), `scale` \
+             (zoom, 1 = fit), `maximize_on_play`, `mute_audio`, `stats`. Returns the current settings.",
+            schema(
+                json!({
+                    "size": { "type": "string", "enum": sizes },
+                    "scale": { "type": "number", "minimum": 1, "maximum": 5 },
+                    "maximize_on_play": { "type": "boolean" },
+                    "mute_audio": { "type": "boolean" },
+                    "stats": { "type": "boolean" }
+                }),
+                &[],
+            ),
+        ),
+        |args, e| {
+            with_editor(e, |ed, _| {
+                let g = &mut ed.st.game;
+                if let Some(n) = args.get("size").and_then(Json::as_str) {
+                    match crate::game_view::SIZES
+                        .iter()
+                        .find(|(s, _)| s.eq_ignore_ascii_case(n))
+                    {
+                        Some((_, sz)) => g.size = *sz,
+                        None => return ToolResult::error(format!("unknown size `{n}`")),
+                    }
+                }
+                if let Some(v) = args.get("scale").and_then(Json::as_f64) {
+                    g.scale = (v as f32).clamp(1.0, 5.0);
+                }
+                for (k, f) in [
+                    ("maximize_on_play", &mut g.maximize_on_play),
+                    ("mute_audio", &mut g.mute_audio),
+                    ("stats", &mut g.stats),
+                ] {
+                    if let Some(v) = args.get(k).and_then(Json::as_bool) {
+                        *f = v;
+                    }
+                }
+                let size = crate::game_view::SIZES
+                    .iter()
+                    .find(|(_, s)| *s == g.size)
+                    .map_or("custom", |(n, _)| *n);
+                ToolResult::json(json!({
+                    "size": size, "scale": g.scale, "maximize_on_play": g.maximize_on_play,
+                    "mute_audio": g.mute_audio, "stats": g.stats,
+                }))
+            })
+        },
+    );
+
     tool(
         s,
         bus,

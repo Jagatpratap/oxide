@@ -43,6 +43,8 @@ pub struct GameViewport {
     pub width: f32,
     pub height: f32,
     pub focused: bool,
+    /// Game pixels per window pixel (a fixed Game view resolution shown scaled); 0 means 1.
+    pub scale: f32,
 }
 
 impl GameViewport {
