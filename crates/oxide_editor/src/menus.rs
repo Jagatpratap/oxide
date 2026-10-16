@@ -69,6 +69,10 @@ fn create_items(prefix: &str) -> Vec<MenuItem> {
         ));
     }
     v.push(item(
+        &format!("{prefix}2D Object/Tilemap/Rectangular"),
+        Action::Create(Create::Tilemap),
+    ));
+    v.push(item(
         &format!("{prefix}Light/Directional Light"),
         Action::Create(Create::DirectionalLight),
     ));

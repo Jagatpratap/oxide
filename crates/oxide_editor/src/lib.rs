@@ -35,6 +35,7 @@ pub mod settings_window;
 pub mod shortcuts;
 mod sprite_editor;
 mod theme;
+mod tile_palette;
 mod undo;
 mod view;
 mod visibility;
@@ -69,6 +70,7 @@ pub enum Tab {
     Animation,
     AudioMixer,
     SpriteEditor,
+    TilePalette,
 }
 
 impl Tab {
@@ -100,6 +102,7 @@ impl Tab {
             Tab::Animation => "Animation",
             Tab::AudioMixer => "Audio Mixer",
             Tab::SpriteEditor => "Sprite Editor",
+            Tab::TilePalette => "Tile Palette",
         }
     }
 }
@@ -162,6 +165,8 @@ pub enum Create {
     Camera,
     /// GameObject → 2D Object → Sprites → (built-in sprite name).
     Sprite(&'static str),
+    /// GameObject → 2D Object → Tilemap → Rectangular.
+    Tilemap,
 }
 
 impl Create {
@@ -180,6 +185,7 @@ impl Create {
             Create::SphereVolume => "Sphere Volume",
             Create::Camera => "Camera",
             Create::Sprite(n) => n,
+            Create::Tilemap => "Tilemap",
         }
     }
 }
@@ -303,6 +309,9 @@ pub struct EditorState {
     mask: anim_inspectors::MaskState,
     audio_mixer: audio_mixer_window::AudioMixerWindow,
     sprite_editor: sprite_editor::SpriteEditorWindow,
+    tile_palette: tile_palette::TilePaletteWindow,
+    /// The Tile Palette window is open (its tools then paint in the Scene view).
+    tile_palette_open: bool,
     pub(crate) search: search_window::SearchState,
     scene_ui: scene_view::SceneViewState,
     pub(crate) game: game_view::GameViewState,
@@ -358,6 +367,8 @@ impl EditorState {
             mask: Default::default(),
             audio_mixer: Default::default(),
             sprite_editor: Default::default(),
+            tile_palette: Default::default(),
+            tile_palette_open: false,
             search: Default::default(),
             scene_ui: Default::default(),
             game: Default::default(),
@@ -557,6 +568,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::Animation => animation_window::window_ui(self.st, self.engine, ui),
             Tab::AudioMixer => audio_mixer_window::window_ui(self.st, self.engine, ui),
             Tab::SpriteEditor => sprite_editor::window_ui(self.st, self.engine, ui),
+            Tab::TilePalette => tile_palette::window_ui(self.st, self.engine, ui),
         }
     }
 
@@ -1499,6 +1511,7 @@ fn create(w: &mut World, kind: Create, active: Option<GameObjectId>) -> GameObje
             }
             id
         }
+        Create::Tilemap => tile_palette::create_tilemap(w, None),
         Create::Camera => {
             let id = objects::create_camera(w, "Camera");
             if let Some(o) = w.get_mut(id) {
@@ -1540,6 +1553,10 @@ impl Shell for Editor {
         }
         project::sync_asset_types(&engine.world.resource::<oxide_assets::AssetServer>().types);
         let animation_open = self.dock.iter_all_tabs().any(|(_, t)| *t == Tab::Animation);
+        self.st.tile_palette_open = self
+            .dock
+            .iter_all_tabs()
+            .any(|(_, t)| *t == Tab::TilePalette);
         animation_window::end_preview_if(&mut self.st, engine, animation_open);
         shortcuts::dispatch(&mut self.st, engine, &ctx);
         self.st.previews.update(engine, &ctx);

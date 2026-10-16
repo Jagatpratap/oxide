@@ -19,6 +19,7 @@ pub mod resources;
 pub mod scene_manager;
 pub mod serialize;
 pub mod system;
+pub mod tilemap;
 pub mod timers;
 pub mod volume;
 pub mod world;
@@ -35,6 +36,10 @@ pub use resources::Resources;
 pub use scene_manager::{AsyncOperation, PumpResult, SceneOpStatus, SceneOperations};
 pub use serialize::{ComponentData, ObjectData, SceneFile};
 pub use system::{DebugDraw, DebugLine, System};
+pub use tilemap::{
+    AnimatedTile, Grid, RuleNeighbor, RuleOutput, RuleTile, Tile, TileBase, TileCell, TilePalette,
+    Tilemap, TilemapRenderer, TilingRule,
+};
 pub use timers::Timers;
 pub use volume::*;
 pub use world::{
@@ -58,6 +63,9 @@ pub fn register_builtin(reg: &mut ComponentRegistry) {
     reg.register::<RenderObjectsRendererFeature>("Rendering/Renderer Features/Render Objects");
     reg.register::<player_input::PlayerInput>("Input/Player Input");
     reg.register::<SpriteRenderer>("Rendering/Sprite Renderer");
+    reg.register::<tilemap::Grid>("Tilemap/Grid");
+    reg.register::<tilemap::Tilemap>("Tilemap/Tilemap");
+    reg.register::<tilemap::TilemapRenderer>("Tilemap/Tilemap Renderer");
 }
 
 #[cfg(test)]

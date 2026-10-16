@@ -191,6 +191,11 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
         Vec::new()
     };
     draw_selection(st, world, &proj, &painter);
+    // A Tile Palette tool paints instead of selecting.
+    let palette_open = st.tile_palette_open;
+    if crate::tile_palette::scene_paint(st, engine, ui, &resp, &proj, &painter, palette_open) {
+        return;
+    }
     let over_handle = handles(st, engine, ui, &resp, &proj, &painter);
 
     // Click to select (Shift/Cmd adds or removes).

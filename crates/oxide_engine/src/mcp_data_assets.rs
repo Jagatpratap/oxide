@@ -165,4 +165,111 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
             ToolResult::json(json!({ "actions": list }))
         },
     );
+
+    tool(
+        s,
+        bus,
+        ToolDef::new(
+            "tilemap",
+            "Tilemap",
+            "Edits a Tilemap (Unity Tilemap API): `set` [{x, y, tile}] sets cells (tile = a .tile/.ruletile/\
+             .animatedtile path, or null to erase), `box_fill` {from: [x, y], to: [x, y], tile}, `flood_fill` \
+             {x, y, tile}, `clear` true. Returns the painted cells.",
+            schema(
+                json!({ "object": {}, "set": { "type": "array" }, "box_fill": { "type": "object" },
+                        "flood_fill": { "type": "object" }, "clear": { "type": "boolean" } }),
+                &["object"],
+            ),
+        ),
+        |args, e| {
+            use oxide_scene::{TileBase, Tilemap};
+            let Some(id) = args
+                .get("object")
+                .and_then(|o| crate::json_values::resolve_object(&e.world, o))
+            else {
+                return ToolResult::error("no such GameObject");
+            };
+            let tile = |v: Option<&Json>| -> Option<oxide_assets::Handle<TileBase>> {
+                v.and_then(Json::as_str)
+                    .map(|p| oxide_assets::Handle::from_path(p.to_owned()))
+            };
+            // Tiles must be loaded to draw.
+            let mut paths: Vec<String> = Vec::new();
+            for c in args
+                .get("set")
+                .and_then(Json::as_array)
+                .into_iter()
+                .flatten()
+            {
+                if let Some(p) = c.get("tile").and_then(Json::as_str) {
+                    paths.push(p.to_owned());
+                }
+            }
+            for k in ["box_fill", "flood_fill"] {
+                if let Some(p) = args
+                    .get(k)
+                    .and_then(|b| b.get("tile"))
+                    .and_then(Json::as_str)
+                {
+                    paths.push(p.to_owned());
+                }
+            }
+            for p in paths {
+                if let Err(err) = e.world.resource_mut::<AssetServer>().ensure_loaded(&p) {
+                    return ToolResult::error(err);
+                }
+            }
+            let Some(m) = e.world.get_component_mut::<Tilemap>(id) else {
+                return ToolResult::error("the object has no Tilemap");
+            };
+            if args.get("clear").and_then(Json::as_bool) == Some(true) {
+                m.clear_all_tiles();
+            }
+            for c in args
+                .get("set")
+                .and_then(Json::as_array)
+                .into_iter()
+                .flatten()
+            {
+                let (Some(x), Some(y)) = (
+                    c.get("x").and_then(Json::as_i64),
+                    c.get("y").and_then(Json::as_i64),
+                ) else {
+                    continue;
+                };
+                m.set_tile(x as i32, y as i32, tile(c.get("tile")));
+            }
+            let pair = |v: Option<&Json>| -> Option<(i32, i32)> {
+                let a = v?.as_array()?;
+                Some((a.first()?.as_i64()? as i32, a.get(1)?.as_i64()? as i32))
+            };
+            if let Some(b) = args.get("box_fill")
+                && let (Some(a), Some(z)) = (pair(b.get("from")), pair(b.get("to")))
+            {
+                m.box_fill(a, z, tile(b.get("tile")));
+            }
+            if let Some(f) = args.get("flood_fill")
+                && let (Some(x), Some(y)) = (
+                    f.get("x").and_then(Json::as_i64),
+                    f.get("y").and_then(Json::as_i64),
+                )
+            {
+                let c = (x as i32, y as i32);
+                let b = m.cell_bounds().unwrap_or((c, c));
+                let bounds = (
+                    (b.0.0.min(c.0), b.0.1.min(c.1)),
+                    (b.1.0.max(c.0), b.1.1.max(c.1)),
+                );
+                m.flood_fill(c.0, c.1, tile(f.get("tile")), bounds);
+            }
+            let cells: Vec<Json> = m
+                .tiles
+                .iter()
+                .map(|c| json!({ "x": c.x, "y": c.y, "tile": c.tile.as_ref().map(|t| t.path().to_owned()) }))
+                .collect();
+            ToolResult::json(
+                json!({ "count": cells.len(), "bounds": m.cell_bounds(), "cells": cells }),
+            )
+        },
+    );
 }

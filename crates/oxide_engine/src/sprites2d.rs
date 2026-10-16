@@ -4,7 +4,7 @@
 use oxide_assets::{AssetServer, Sprite};
 use oxide_math::{Matrix4x4, Vector2, Vector3};
 use oxide_render::{SpriteDraw, SpriteInstance};
-use oxide_scene::{SpriteDrawMode, SpriteRenderer, World};
+use oxide_scene::{Grid, SpriteDrawMode, SpriteRenderer, Tilemap, TilemapRenderer, World};
 
 /// A quad of `size` at `offset` (local units) under `model`, showing sprite pixels
 /// `(x, y, w, h)`.
@@ -95,7 +95,77 @@ pub fn sprite_quads(
     }
 }
 
+/// Tilemaps: every painted cell becomes a sprite quad at its cell (Grid cell size and
+/// gap, Tilemap tile anchor), sorted by the TilemapRenderer.
+fn extract_tilemaps(world: &World, out: &mut Vec<SpriteDraw>) {
+    let assets = world.resource::<AssetServer>();
+    let time = world
+        .try_resource::<oxide_core::Time>()
+        .map_or(0.0, |t| t.time());
+    for (id, map) in world.query::<Tilemap>() {
+        if !world.get(id).is_some_and(|o| o.active_in_hierarchy()) {
+            continue;
+        }
+        let Some(r) = world.get_component::<TilemapRenderer>(id) else {
+            continue;
+        };
+        let grid = world
+            .ancestor_with::<Grid>(id)
+            .and_then(|g| world.get_component::<Grid>(g))
+            .cloned()
+            .unwrap_or_default();
+        let (cs, gap) = (grid.cell_size, grid.cell_gap);
+        let model = world.local_to_world(id);
+        let layer = world.sorting_layer_index(&r.sorting_layer);
+        let cells = map.cell_map();
+        let tint = map.color;
+        for c in &map.tiles {
+            let Some(tile) = &c.tile else { continue };
+            let Some((sh, color)) = oxide_scene::tilemap::tile_sprite(
+                assets,
+                &cells,
+                tile.path(),
+                c.x,
+                c.y,
+                time * map.animation_frame_rate,
+            ) else {
+                continue;
+            };
+            let Some(s) = assets.sprites.get(&sh) else {
+                continue;
+            };
+            let at = Vector3::new(
+                c.x as f32 * (cs.x + gap.x) + map.tile_anchor.x * cs.x,
+                c.y as f32 * (cs.y + gap.y) + map.tile_anchor.y * cs.y,
+                0.0,
+            );
+            let m = model * Matrix4x4::from_translation(at);
+            let col = Color4::mul(tint, color);
+            for mut inst in sprite_quads(m, s, SpriteDrawMode::Simple, Vector2::ONE) {
+                inst.color = col;
+                out.push(SpriteDraw {
+                    texture: Some(s.texture.id()),
+                    sorting_layer: layer,
+                    order: r.order_in_layer,
+                    instance: inst,
+                });
+            }
+        }
+    }
+}
+
+struct Color4;
+
+impl Color4 {
+    /// Linear RGB and alpha of two multiplied sRGB tints.
+    fn mul(a: oxide_math::Color, b: oxide_math::Color) -> [f32; 4] {
+        let c = oxide_math::Color::new(a.r * b.r, a.g * b.g, a.b * b.b, a.a * b.a).linear();
+        [c.r, c.g, c.b, a.a * b.a]
+    }
+}
+
 pub fn extract(world: &World, out: &mut Vec<SpriteDraw>) {
+    extract_tilemaps(world, out);
     let assets = world.resource::<AssetServer>();
     for (id, r) in world.query::<SpriteRenderer>() {
         if !world.get(id).is_some_and(|o| o.active_in_hierarchy()) {

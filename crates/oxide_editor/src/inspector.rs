@@ -1160,6 +1160,10 @@ fn assets_of_type(assets: &AssetServer, type_name: Option<&str>) -> Vec<String> 
         "TerrainData" => assets.terrains.iter().map(|(p, _)| p.to_owned()).collect(),
         "Shader" => assets.shaders.iter().map(|(p, _)| p.to_owned()).collect(),
         "Sprite" => assets.sprite_paths(),
+        "TileBase" => ["Tile", "AnimatedTile", "RuleTile"]
+            .into_iter()
+            .flat_map(|t| assets.paths_of_type(t))
+            .collect(),
         // Audio Source Output: every group of every mixer (`Main.mixer#SFX`).
         "AudioMixerGroup" => assets
             .paths_of_type("AudioMixer")

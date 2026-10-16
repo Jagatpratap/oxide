@@ -7,6 +7,26 @@ use oxide_input::{Input, InputActionAsset};
 use oxide_scene::{PlayerInput, World};
 
 pub fn register(assets: &mut AssetServer) {
+    assets.register_data_asset::<oxide_scene::Tile>(
+        AssetTypeInfo::new("Tile", &["tile"])
+            .menu("2D/Tiles/Tile", "New Tile", 81)
+            .color(140, 200, 120),
+    );
+    assets.register_data_asset::<oxide_scene::AnimatedTile>(
+        AssetTypeInfo::new("AnimatedTile", &["animatedtile"])
+            .menu("2D/Tiles/Animated Tile", "New Animated Tile", 82)
+            .color(140, 200, 160),
+    );
+    assets.register_data_asset::<oxide_scene::RuleTile>(
+        AssetTypeInfo::new("RuleTile", &["ruletile"])
+            .menu("2D/Tiles/Rule Tile", "New Rule Tile", 83)
+            .color(120, 190, 140),
+    );
+    assets.register_data_asset::<oxide_scene::TilePalette>(
+        AssetTypeInfo::new("TilePalette", &["palette"])
+            .menu("2D/Tile Palette", "New Palette", 84)
+            .color(170, 210, 120),
+    );
     assets.register_data_asset::<InputActionAsset>(
         AssetTypeInfo::new("InputActionAsset", &["inputactions"])
             .menu("Input Actions", "New Actions", 50)
