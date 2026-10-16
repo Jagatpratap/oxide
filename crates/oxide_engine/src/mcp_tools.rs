@@ -1079,6 +1079,7 @@ pub fn build_server(bus: Arc<Bus>) -> McpServer {
     crate::mcp_data_assets::register(&mut s, bus);
     crate::mcp_network::register(&mut s, bus);
     crate::mcp_occlusion::register(&mut s, bus);
+    crate::navigation::register(&mut s, bus);
     crate::project_settings::register(&mut s, bus);
     crate::mcp_rendering::register(&mut s, bus);
     crate::mcp_streaming::register(&mut s, bus);

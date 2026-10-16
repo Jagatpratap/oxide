@@ -23,6 +23,7 @@ mod inspector;
 pub mod launch;
 pub mod mcp;
 mod menus;
+mod navigation_window;
 pub mod player_build;
 pub mod prefs;
 mod previews;
@@ -71,6 +72,7 @@ pub enum Tab {
     AudioMixer,
     SpriteEditor,
     TilePalette,
+    Navigation,
 }
 
 impl Tab {
@@ -103,6 +105,7 @@ impl Tab {
             Tab::AudioMixer => "Audio Mixer",
             Tab::SpriteEditor => "Sprite Editor",
             Tab::TilePalette => "Tile Palette",
+            Tab::Navigation => "Navigation",
         }
     }
 }
@@ -167,6 +170,9 @@ pub enum Create {
     Sprite(&'static str),
     /// GameObject → 2D Object → Tilemap → Rectangular.
     Tilemap,
+    NavMeshSurface,
+    NavMeshModifierVolume,
+    NavMeshLink,
 }
 
 impl Create {
@@ -186,6 +192,9 @@ impl Create {
             Create::Camera => "Camera",
             Create::Sprite(n) => n,
             Create::Tilemap => "Tilemap",
+            Create::NavMeshSurface => "NavMesh Surface",
+            Create::NavMeshModifierVolume => "NavMesh Modifier Volume",
+            Create::NavMeshLink => "NavMesh Link",
         }
     }
 }
@@ -233,6 +242,10 @@ pub enum Action {
     SplitIntoCells(f32),
     /// Ragdoll Wizard on the active (humanoid) object.
     CreateRagdoll,
+    /// Bake one NavMeshSurface, or every active one.
+    BakeNavMesh(Option<GameObjectId>),
+    CancelNavMeshBake,
+    ClearNavMesh(GameObjectId),
     /// Lighting window: bake lightmaps and light probes in the background.
     GenerateLighting,
     ClearBakedLighting,
@@ -293,6 +306,9 @@ pub struct EditorState {
     pub dirty: bool,
     /// Requested from inside window code; applied after the UI pass.
     pub actions: Vec<Action>,
+    /// Scene view NavMesh display options (Navigation window).
+    pub nav_display: oxide_engine::navigation::NavMeshDisplay,
+    nav_window: navigation_window::NavigationWindow,
     hierarchy: hierarchy::HierarchyState,
     pub(crate) inspector: inspector::InspectorState,
     console: console::ConsoleState,
@@ -353,6 +369,8 @@ impl EditorState {
             game_focused: false,
             dirty: false,
             actions: Vec::new(),
+            nav_display: Default::default(),
+            nav_window: Default::default(),
             hierarchy: Default::default(),
             inspector: Default::default(),
             console: Default::default(),
@@ -569,6 +587,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::AudioMixer => audio_mixer_window::window_ui(self.st, self.engine, ui),
             Tab::SpriteEditor => sprite_editor::window_ui(self.st, self.engine, ui),
             Tab::TilePalette => tile_palette::window_ui(self.st, self.engine, ui),
+            Tab::Navigation => navigation_window::window_ui(self.st, self.engine, ui),
         }
     }
 
@@ -902,6 +921,21 @@ impl Editor {
                 st.record(w, "Clear Baked Data", None, now);
                 oxide_engine::lighting::clear(w);
                 "Cleared baked lighting".into()
+            }
+            Action::BakeNavMesh(only) => {
+                st.record(w, "Bake NavMesh", None, now);
+                let ids = only.map(|i| vec![i]);
+                let n = oxide_engine::nav::bake::start(w, ids.as_deref(), true)?;
+                format!("Baking {n} NavMesh surface(s)…")
+            }
+            Action::CancelNavMeshBake => {
+                oxide_engine::nav::bake::cancel(w);
+                "Cancelling NavMesh bake".into()
+            }
+            Action::ClearNavMesh(id) => {
+                st.record(w, "Clear NavMesh", None, now);
+                oxide_engine::nav::bake::clear(w, id)?;
+                "Cleared NavMesh".into()
             }
             Action::CreateRagdoll => {
                 let id = st.active().ok_or("select a humanoid character first")?;
@@ -1471,6 +1505,21 @@ fn create(w: &mut World, kind: Create, active: Option<GameObjectId>) -> GameObje
         Create::LightProbeGroup => {
             let id = w.create("Light Probe Group");
             w.add_component(id, oxide_scene::LightProbeGroup::default());
+            id
+        }
+        Create::NavMeshSurface => {
+            let id = w.create("NavMesh Surface");
+            w.add_component(id, oxide_engine::nav::NavMeshSurface::default());
+            id
+        }
+        Create::NavMeshModifierVolume => {
+            let id = w.create("NavMesh Modifier Volume");
+            w.add_component(id, oxide_engine::nav::NavMeshModifierVolume::default());
+            id
+        }
+        Create::NavMeshLink => {
+            let id = w.create("NavMesh Link");
+            w.add_component(id, oxide_engine::nav::NavMeshLink::default());
             id
         }
         Create::GlobalVolume => {

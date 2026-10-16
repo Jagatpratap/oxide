@@ -26,6 +26,7 @@ oxide/                       Cargo workspace
 │   ├── oxide_asset          AssetDatabase, GUIDs + .meta files, importers, hot reload
 │   ├── oxide_render         wgpu backend, RenderGraph, Scriptable Render Pipeline, shaders
 │   ├── oxide_physics        3D (rapier3d) + 2D (rapier2d), Rigidbody/Collider/Joint components
+│   ├── oxide_navigation     AI Navigation: NavMesh baking (Recast-style), agents, obstacles, links
 │   ├── oxide_input          keyboard/mouse/gamepad/touch, Input System action maps
 │   ├── oxide_audio          AudioSource/Listener/Mixer, 3D spatialization
 │   ├── oxide_anim           Animator, AnimationClip, state machines, blend trees, skinning
@@ -377,6 +378,8 @@ runner, native plugins.
   [Physics Debug](https://docs.unity3d.com/Manual/PhysicsDebugVisualization.html))
 - ☑ Curves and gradients (AnimationCurve, Gradient, MinMaxCurve) with Curve and Gradient Editors, used by
   WheelCollider friction curves, the CarController torque/steering curves, particles and audio rolloff
+- ◐ AI Navigation: NavMeshSurface baking (Recast-style voxelization, tiled, multi-threaded, from render meshes/terrain or colliders; `.navmesh` files) ☑, agent types and 32 areas with costs ☑, NavMeshModifier / Modifier Volume ☑, NavMeshAgent (path following, braking, area masks/costs, avoidance with priorities, `update_position`/`update_rotation`, off-mesh link traversal) ☑, NavMeshObstacle with carving ☑, NavMeshLink ☑, `NavMesh.CalculatePath / SamplePosition / Raycast / FindClosestEdge` ☑, runtime `BuildNavMesh` ☑, Navigation window + Scene view display ☑; auto-generated jump/drop links, height mesh, async carving, NavMesh Components for 2D ☐
+  ([AI Navigation](https://docs.unity3d.com/Packages/com.unity.ai.navigation@2.0/manual/index.html))
 - ☑ Collision callbacks: `OnCollisionEnter/Stay/Exit`, `OnTriggerEnter/Stay/Exit`
   ([Collision](https://docs.unity3d.com/Manual/collision-section.html))
 - ◐ Input: legacy axes + action-map system, rebinding, gamepad, touch, IME text input
@@ -498,11 +501,11 @@ needs, and where the engine is:
 | Game scripts in the editor | ✔ | ✔ | ☑ project Scripts crate, hot reload in Edit and Play mode |
 | HUD, menus | ✔ | ✔ | ◐ Canvas UI + immediate GUI; UI Toolkit-style layout ☐ |
 | Audio (engine, 3D, mixer) | ✔ | ✔ | ◐ 3D sources, car audio; mixer ☐ |
-| AI (opponents, bots) | ✔ | ✔ | ◐ WaypointCircuit + CarAIControl racing AI; NavMesh ☐ |
+| AI (opponents, bots) | ✔ | ✔ | ☑ WaypointCircuit + CarAIControl racing AI; NavMesh baking over terrain, NavMeshAgent with avoidance, obstacles with carving, links (50 agents at 60 FPS in a debug build); behaviour trees / perception ☐ |
 | Multiplayer | ◐ | ✔ | ◐ UDP netcode: spawning, NetworkTransform with interpolation, NetworkRigidbody, RPCs; prediction, lag compensation, interest management, dedicated server ☐ |
 | Ship the game | ✔ | ✔ | ◐ desktop player builds (macOS/Windows/Linux); Android/iOS ☐ |
 
-Build order from here: NavMesh → netcode (prediction, interest management) and dedicated server → mobile.
+Build order from here: netcode (prediction, interest management) and dedicated server → mobile.
 
 ---
 

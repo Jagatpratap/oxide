@@ -1859,6 +1859,12 @@ pub fn render(st: &mut EditorState, engine: &mut Engine) {
         for (a, b, c) in engine.world.collect_gizmos().lines {
             rf.line(a, b, c);
         }
+        oxide_engine::navigation::draw_overlay(
+            &mut engine.world,
+            &mut rf,
+            &st.nav_display,
+            &st.selection,
+        );
     }
     let assets = engine.world.resource::<AssetServer>();
     engine

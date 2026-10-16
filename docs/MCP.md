@@ -81,6 +81,7 @@ only when the editor is running (not with `--player`).
 | `audio_info` | Audio device availability, playing voices, master volume and loaded clips | yes |
 | `network` | Multiplayer status (mode, client id, clients, RTT, spawned network objects); optional `start` host/server/client or `stop` | yes |
 | `occlusion` | Occlusion culling stats; with `camera_position` renders the view with occlusion on and off and reports both plus `pixel_difference`; `image` = buffer / render / difference | no |
+| `navmesh` | AI Navigation: `status`; `bake` (background, saves `.navmesh` files) / `build` (blocking, not saved) / `cancel` / `clear`; queries `calculate_path`, `sample_position`, `raycast`, `closest_edge` (with `agent_type`, `area_mask`); `agents` lists every NavMeshAgent; `agent` sets a destination, stops/resumes, warps or resets one | no |
 | `scenes` | Loaded scenes (handle, name, path, objects), pending background operations and WorldStreamer cell states; optional `load` (additive by default, `background` for LoadSceneAsync), `unload`, `save` | yes |
 | `split_scene_into_cells` | Moves the main scene's (static) root objects into one scene per `cell_size` grid cell, saves them and adds a WorldStreamer | yes (destructive) |
 | `play_sound` | Plays an audio clip once: at a world `position` (3D, like AudioSource.PlayClipAtPoint) or 2D if omitted | yes |
@@ -90,7 +91,7 @@ only when the editor is running (not with `--player`).
 | `terrain_height` | Unity Terrain.SampleHeight: world Y of the terrain surface at `x`, `z` (null off-terrain) | no |
 | `spawn_effect` | Creates a ParticleSystem from a preset (smoke, fire, explosion, muzzle_flash, dust, rain) at `position` | yes |
 | `log_message` | Logs a message like Unity's Debug.Log / LogWarning / LogError (errors also record a stack trace) | yes |
-| `project_settings` | Unity Project Settings (tags, layers, sorting layers, physics, quality, ...), saved in ProjectSettings/*.yaml | yes |
+| `project_settings` | Unity Project Settings (tags, layers, sorting layers, physics, quality, navigation agent types and areas, ...), saved in ProjectSettings/*.yaml | yes |
 | `asset_types` | Every asset type the project knows (the asset type registry): type name, file extensions, Create menu path, whether it is a data asset (ScriptableObject, edited with `data_asset`) and, for data assets, the fields of a new one | no |
 | `data_asset` | Creates, reads or changes a data asset file (Unity ScriptableObject: Physics Material, Volume Profile, Lighting Settings, Input Actions, Tiles, Sprite Atlas, Sprite Library, script-defined data) | yes |
 | `input_actions` | Live Input System action states (what scripts read with `ctx.input().action("Move")`): value, phase, pressed and this-frame flags for every action enabled by a PlayerInput component | no |

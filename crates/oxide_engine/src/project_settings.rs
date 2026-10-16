@@ -162,16 +162,19 @@ pub struct ProjectSettings {
     pub quality: QualityFile,
     pub input: InputSettings,
     pub player: PlayerSettings,
+    /// Navigation agent types and areas (Unity's Navigation window).
+    pub navigation: oxide_navigation::NavigationSettings,
 }
 
 /// The pages and their files, for MCP and error messages.
-pub const SECTIONS: [(&str, &str); 6] = [
+pub const SECTIONS: [(&str, &str); 7] = [
     ("tags_and_layers", "TagManager.yaml"),
     ("time", "TimeManager.yaml"),
     ("physics", "DynamicsManager.yaml"),
     ("quality", "QualitySettings.yaml"),
     ("input", "InputManager.yaml"),
     ("player", "PlayerSettings.yaml"),
+    ("navigation", "NavMeshAreas.yaml"),
 ];
 
 fn read<T: DeserializeOwned + Default>(dir: &Path, file: &str, warnings: &mut Vec<String>) -> T {
@@ -198,6 +201,7 @@ impl ProjectSettings {
             quality: read(&dir, SECTIONS[3].1, &mut w),
             input: read(&dir, SECTIONS[4].1, &mut w),
             player: read(&dir, SECTIONS[5].1, &mut w),
+            navigation: read(&dir, SECTIONS[6].1, &mut w),
         };
         (s, w)
     }
@@ -213,6 +217,7 @@ impl ProjectSettings {
             serde_yaml_ng::to_string(&self.quality),
             serde_yaml_ng::to_string(&self.input),
             serde_yaml_ng::to_string(&self.player),
+            serde_yaml_ng::to_string(&self.navigation),
         ];
         for ((_, file), text) in SECTIONS.iter().zip(texts) {
             let text = text.map_err(|e| e.to_string())?;
@@ -264,6 +269,10 @@ impl ProjectSettings {
                 product_name: app.product_name.clone(),
                 version: app.version.clone(),
             },
+            navigation: world
+                .try_resource::<oxide_navigation::NavigationSettings>()
+                .cloned()
+                .unwrap_or_default(),
         }
     }
 
@@ -313,6 +322,12 @@ impl ProjectSettings {
         app.company_name = self.player.company_name.clone();
         app.product_name = self.player.product_name.clone();
         app.version = self.player.version.clone();
+        let mut nav = self.navigation.clone();
+        if nav.agents.is_empty() {
+            nav.agents = oxide_navigation::NavigationSettings::default().agents;
+        }
+        nav.areas.resize(32, oxide_navigation::NavArea::default());
+        world.resources.insert(nav);
     }
 
     /// One page as JSON (MCP).
@@ -325,6 +340,7 @@ impl ProjectSettings {
                 "quality" => serde_json::to_value(&self.quality),
                 "input" => serde_json::to_value(&self.input),
                 "player" => serde_json::to_value(&self.player),
+                "navigation" => serde_json::to_value(&self.navigation),
                 _ => return None,
             }
             .unwrap_or_default(),
@@ -354,6 +370,7 @@ impl ProjectSettings {
             "physics" => self.physics = parse(current)?,
             "quality" => self.quality = parse(current)?,
             "input" => self.input = parse(current)?,
+            "navigation" => self.navigation = parse(current)?,
             _ => self.player = parse(current)?,
         }
         Ok(())

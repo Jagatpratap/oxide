@@ -1,0 +1,18 @@
+[package]
+name = "oxide_navigation"
+description = "Oxide navigation (Unity AI Navigation): NavMesh baking, NavMeshAgent, obstacles, links, pathfinding queries"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+oxide_math.workspace = true
+oxide_core.workspace = true
+oxide_assets.workspace = true
+oxide_scene.workspace = true
+oxide_physics.workspace = true
+oxide_terrain.workspace = true
+serde.workspace = true
+
+[lints]
+workspace = true

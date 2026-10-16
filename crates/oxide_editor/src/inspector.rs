@@ -990,16 +990,11 @@ fn components(
                         if let Some(t) = f.tooltip {
                             lr.on_hover_text(t);
                         }
-                        value_ui(
-                            ui,
-                            w,
-                            &f,
-                            f.kind,
-                            f.type_name,
-                            &mut v2,
-                            mixed,
-                            &format!("{}{}", cid.0, f.name),
-                        )
+                        let salt = format!("{}{}", cid.0, f.name);
+                        match nav_field(ui, w, type_name, f.name, &mut v2, &salt) {
+                            Some(changed) => changed,
+                            None => value_ui(ui, w, &f, f.kind, f.type_name, &mut v2, mixed, &salt),
+                        }
                     })
                     .inner
                 };
@@ -1009,6 +1004,9 @@ fn components(
                         key(id, &format!("{}.{}", cid.0, f.name)),
                     ));
                 }
+            }
+            if type_name == "NavMeshSurface" && targets.len() == 1 {
+                navmesh_surface_footer(ui, w, id, &mut st.actions);
             }
         });
         // Right-click anywhere on the header row (Unity), or the ⋮ button.
@@ -1024,6 +1022,187 @@ fn components(
         ui.weak(format!(
             "{hidden} component(s) not on every selected object are hidden."
         ));
+    }
+}
+
+/// Bake / Clear buttons and the baked data's size under a NavMeshSurface (Unity's
+/// NavMeshSurface Inspector).
+fn navmesh_surface_footer(
+    ui: &mut egui::Ui,
+    w: &World,
+    id: GameObjectId,
+    actions: &mut Vec<Action>,
+) {
+    use oxide_engine::nav::{NavMeshData, NavMeshSurface, NavigationRuntime};
+    let Some(s) = w.get_component::<NavMeshSurface>(id) else {
+        return;
+    };
+    ui.add_space(4.0);
+    let status = oxide_engine::nav::bake::status(w);
+    let data: Option<std::sync::Arc<NavMeshData>> = s.runtime.data.clone().or_else(|| {
+        let p = s.navmesh_data.as_ref()?.path();
+        w.try_resource::<NavigationRuntime>()?.cache.get(p).cloned()
+    });
+    match (&data, &s.navmesh_data) {
+        (Some(d), _) => {
+            ui.weak(format!(
+                "NavMesh: {} polygons in {} tiles",
+                d.polygon_count(),
+                d.tiles.len()
+            ));
+        }
+        (None, Some(h)) => {
+            ui.weak(format!("NavMesh data {} could not be loaded", h.path()));
+        }
+        (None, None) => {
+            ui.label(RichText::new("No NavMesh baked yet").color(Color32::from_rgb(230, 180, 60)));
+        }
+    }
+    ui.horizontal(|ui| {
+        if status.running {
+            ui.add(
+                egui::ProgressBar::new(status.progress)
+                    .desired_width(140.0)
+                    .show_percentage(),
+            );
+            if ui.button("Cancel").clicked() {
+                actions.push(Action::CancelNavMeshBake);
+            }
+        } else {
+            if ui
+                .add_enabled(
+                    data.is_some() || s.navmesh_data.is_some(),
+                    egui::Button::new("Clear"),
+                )
+                .clicked()
+            {
+                actions.push(Action::ClearNavMesh(id));
+            }
+            if ui.button("Bake").clicked() {
+                actions.push(Action::BakeNavMesh(Some(id)));
+            }
+        }
+    });
+}
+
+/// Agent type, area and mask fields of the navigation components, as named dropdowns.
+fn nav_field(
+    ui: &mut egui::Ui,
+    w: &World,
+    type_name: &str,
+    field: &str,
+    v: &mut Value,
+    salt: &str,
+) -> Option<bool> {
+    use oxide_engine::nav::NavigationSettings;
+    if !type_name.starts_with("NavMesh") {
+        return None;
+    }
+    let Value::Int(i) = v else {
+        return None;
+    };
+    let settings = w
+        .try_resource::<NavigationSettings>()
+        .cloned()
+        .unwrap_or_default();
+    let width = avail(ui);
+    match field {
+        "agent_type_id" => {
+            let name = settings
+                .agent(*i as i32)
+                .map_or_else(|| format!("Unknown ({i})"), |a| a.name.clone());
+            let mut changed = false;
+            egui::ComboBox::from_id_salt(salt)
+                .selected_text(name)
+                .width(width)
+                .show_ui(ui, |ui| {
+                    for a in &settings.agents {
+                        changed |= ui.selectable_value(i, a.id as i64, &a.name).changed();
+                    }
+                });
+            Some(changed)
+        }
+        "area" | "default_area" => {
+            let name = |k: usize| {
+                settings
+                    .areas
+                    .get(k)
+                    .map(|a| a.name.clone())
+                    .filter(|n| !n.is_empty())
+            };
+            let cur = name(*i as usize).unwrap_or_else(|| format!("Area {i}"));
+            let mut changed = false;
+            egui::ComboBox::from_id_salt(salt)
+                .selected_text(cur)
+                .width(width)
+                .show_ui(ui, |ui| {
+                    for k in 0..32 {
+                        if let Some(n) = name(k) {
+                            changed |= ui.selectable_value(i, k as i64, n).changed();
+                        }
+                    }
+                });
+            Some(changed)
+        }
+        "area_mask" | "layer_mask" => {
+            let names: Vec<(usize, String)> = if field == "area_mask" {
+                settings
+                    .areas
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, a)| !a.name.is_empty())
+                    .map(|(k, a)| (k, a.name.clone()))
+                    .collect()
+            } else {
+                w.layers
+                    .0
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, n)| !n.is_empty())
+                    .map(|(k, n)| (k, n.clone()))
+                    .collect()
+            };
+            let mut m = *i as u32;
+            let all = names.iter().all(|(k, _)| m & (1 << k) != 0);
+            let text = if m == 0 {
+                "Nothing".to_owned()
+            } else if all {
+                "Everything".to_owned()
+            } else {
+                let on: Vec<&str> = names
+                    .iter()
+                    .filter(|(k, _)| m & (1 << k) != 0)
+                    .map(|(_, n)| n.as_str())
+                    .collect();
+                if on.len() == 1 {
+                    on[0].to_owned()
+                } else {
+                    "Mixed…".to_owned()
+                }
+            };
+            let before = m;
+            egui::ComboBox::from_id_salt(salt)
+                .selected_text(text)
+                .width(width)
+                .show_ui(ui, |ui| {
+                    if ui.selectable_label(m == 0, "Nothing").clicked() {
+                        m = 0;
+                    }
+                    if ui.selectable_label(m == u32::MAX, "Everything").clicked() {
+                        m = u32::MAX;
+                    }
+                    ui.separator();
+                    for (k, n) in &names {
+                        let mut on = m & (1 << k) != 0;
+                        if ui.checkbox(&mut on, n).changed() {
+                            m ^= 1 << k;
+                        }
+                    }
+                });
+            *i = m as i64;
+            Some(m != before)
+        }
+        _ => None,
     }
 }
 

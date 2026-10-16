@@ -21,6 +21,7 @@ pub mod mcp_rendering;
 pub mod mcp_streaming;
 pub mod mcp_terrain;
 pub mod mcp_tools;
+pub mod navigation;
 pub mod objects;
 pub mod project_settings;
 pub mod sprites2d;
@@ -37,6 +38,7 @@ pub use oxide_audio as audio;
 pub use oxide_core as core;
 pub use oxide_input as input;
 pub use oxide_math as math;
+pub use oxide_navigation as nav;
 pub use oxide_network as network;
 pub use oxide_particles as particles;
 pub use oxide_physics as physics;
@@ -124,6 +126,19 @@ impl Plugin for ParticlesPlugin {
     }
 }
 
+/// AI Navigation: NavMeshSurface baking, NavMeshAgent, NavMeshObstacle, NavMeshLink.
+pub struct NavigationPlugin;
+
+impl Plugin for NavigationPlugin {
+    fn build(
+        &self,
+        world: &mut oxide_scene::World,
+        systems: &mut Vec<Box<dyn oxide_scene::System>>,
+    ) {
+        systems.push(oxide_navigation::install(world));
+    }
+}
+
 /// Multiplayer: NetworkManager, NetworkObject, NetworkTransform, RPCs.
 pub struct NetworkPlugin;
 
@@ -155,6 +170,7 @@ pub fn default_plugins() -> Vec<Box<dyn Plugin>> {
         Box::new(UiPlugin),
         Box::new(TerrainPlugin),
         Box::new(ParticlesPlugin),
+        Box::new(NavigationPlugin),
         Box::new(NetworkPlugin),
         Box::new(StandardAssetsPlugin),
     ]
@@ -181,6 +197,11 @@ pub mod prelude {
     };
     pub use oxide_assets::{TerrainData, TerrainLayer, TreeInstance, TreePrototype};
     pub use oxide_audio::{Audio, AudioExt, AudioListener, AudioSource};
+    pub use oxide_navigation::{
+        NavMesh, NavMeshAgent, NavMeshExt, NavMeshHit, NavMeshLink, NavMeshModifier,
+        NavMeshModifierVolume, NavMeshObstacle, NavMeshObstacleShape, NavMeshPath,
+        NavMeshPathStatus, NavMeshSurface, ObstacleAvoidanceType, OffMeshLinkData, QueryFilter,
+    };
     pub use oxide_network::{
         HOST_CLIENT_ID, NetMode, Network, NetworkExt, NetworkManager, NetworkObject,
         NetworkTransform,

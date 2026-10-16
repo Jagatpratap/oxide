@@ -102,6 +102,13 @@ fn create_items(prefix: &str) -> Vec<MenuItem> {
             Action::Create(kind),
         ));
     }
+    for (name, kind) in [
+        ("NavMesh Surface", Create::NavMeshSurface),
+        ("NavMesh Modifier Volume", Create::NavMeshModifierVolume),
+        ("NavMesh Link", Create::NavMeshLink),
+    ] {
+        v.push(item(&format!("{prefix}AI/{name}"), Action::Create(kind)));
+    }
     v.push(item(
         &format!("{prefix}Camera"),
         Action::Create(Create::Camera),
@@ -213,6 +220,10 @@ pub fn menu_items(world: &World, keymap: &Keymap) -> Vec<MenuItem> {
             Action::SplitIntoCells(size),
         ));
     }
+    v.push(item(
+        "Window/AI/Navigation",
+        Action::OpenTab(Tab::Navigation),
+    ));
     v.push(item(
         "Window/Rendering/Lighting/Generate Lighting",
         Action::GenerateLighting,

@@ -2644,6 +2644,7 @@ dependencies = [
  "oxide_lightmapper",
  "oxide_math",
  "oxide_mcp",
+ "oxide_navigation",
  "oxide_network",
  "oxide_particles",
  "oxide_physics",
@@ -2705,6 +2706,19 @@ version = "0.1.0"
 dependencies = [
  "oxide_mcp",
  "serde_json",
+]
+
+[[package]]
+name = "oxide_navigation"
+version = "0.1.0"
+dependencies = [
+ "oxide_assets",
+ "oxide_core",
+ "oxide_math",
+ "oxide_physics",
+ "oxide_scene",
+ "oxide_terrain",
+ "serde",
 ]
 
 [[package]]
