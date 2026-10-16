@@ -150,7 +150,11 @@ fn texture(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: &
     ui.add_space(4.0);
     let mut apply = false;
     let mut revert = false;
+    let mut sprite_editor = false;
     ui.horizontal(|ui| {
+        if imp.texture_type == oxide_assets::TextureImporterType::Sprite {
+            sprite_editor = ui.button("Sprite Editor").clicked();
+        }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             apply = ui
                 .add_enabled(changed, egui::Button::new("Apply"))
@@ -160,8 +164,12 @@ fn texture(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: &
                 .clicked();
         });
     });
+    if sprite_editor {
+        st.sprite_editor.open(path);
+        st.actions.push(Action::OpenTab(crate::Tab::SpriteEditor));
+    }
     if revert {
-        ia.importer = Some((path.to_owned(), saved));
+        st.asset_inspector.importer = Some((path.to_owned(), saved));
     } else if apply {
         let imp = imp.clone();
         match engine

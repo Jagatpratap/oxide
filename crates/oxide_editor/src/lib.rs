@@ -33,6 +33,7 @@ pub mod scripting;
 mod search_window;
 pub mod settings_window;
 pub mod shortcuts;
+mod sprite_editor;
 mod theme;
 mod undo;
 mod view;
@@ -67,6 +68,7 @@ pub enum Tab {
     Animator,
     Animation,
     AudioMixer,
+    SpriteEditor,
 }
 
 impl Tab {
@@ -97,6 +99,7 @@ impl Tab {
             Tab::Animator => "Animator",
             Tab::Animation => "Animation",
             Tab::AudioMixer => "Audio Mixer",
+            Tab::SpriteEditor => "Sprite Editor",
         }
     }
 }
@@ -299,6 +302,7 @@ pub struct EditorState {
     animation: animation_window::AnimationWindow,
     mask: anim_inspectors::MaskState,
     audio_mixer: audio_mixer_window::AudioMixerWindow,
+    sprite_editor: sprite_editor::SpriteEditorWindow,
     pub(crate) search: search_window::SearchState,
     scene_ui: scene_view::SceneViewState,
     pub(crate) game: game_view::GameViewState,
@@ -353,6 +357,7 @@ impl EditorState {
             animation: Default::default(),
             mask: Default::default(),
             audio_mixer: Default::default(),
+            sprite_editor: Default::default(),
             search: Default::default(),
             scene_ui: Default::default(),
             game: Default::default(),
@@ -551,6 +556,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::Animator => animator_window::window_ui(self.st, self.engine, ui),
             Tab::Animation => animation_window::window_ui(self.st, self.engine, ui),
             Tab::AudioMixer => audio_mixer_window::window_ui(self.st, self.engine, ui),
+            Tab::SpriteEditor => sprite_editor::window_ui(self.st, self.engine, ui),
         }
     }
 
@@ -602,6 +608,7 @@ impl Editor {
                     Tab::Preferences,
                     Tab::Shortcuts,
                     Tab::InputActions,
+                    Tab::SpriteEditor,
                 ] {
                     while let Some(path) = dock.find_tab(&tab) {
                         dock.remove_tab(path);
@@ -654,11 +661,15 @@ impl Editor {
             let _ = self.dock.set_active_tab(path);
         } else if matches!(
             tab,
-            Tab::ProjectSettings | Tab::Preferences | Tab::Shortcuts | Tab::InputActions
+            Tab::ProjectSettings
+                | Tab::Preferences
+                | Tab::Shortcuts
+                | Tab::InputActions
+                | Tab::SpriteEditor
         ) {
             // Unity opens its settings (and the Input Actions editor) in their own window.
             let surface = self.dock.add_window(vec![tab]);
-            let size = if tab == Tab::InputActions {
+            let size = if matches!(tab, Tab::InputActions | Tab::SpriteEditor) {
                 egui::vec2(980.0, 560.0)
             } else {
                 egui::vec2(760.0, 560.0)

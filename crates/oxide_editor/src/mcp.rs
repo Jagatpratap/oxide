@@ -296,6 +296,7 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
             crate::Tab::Animator,
             crate::Tab::Animation,
             crate::Tab::AudioMixer,
+            crate::Tab::SpriteEditor,
         ])
         .map(|t| t.title())
         .collect();
@@ -325,6 +326,7 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
                     crate::Tab::Animator,
                     crate::Tab::Animation,
                     crate::Tab::AudioMixer,
+                    crate::Tab::SpriteEditor,
                 ]);
                 let Some(tab) = all
                     .into_iter()
@@ -332,6 +334,11 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
                 else {
                     return ToolResult::error(format!("unknown window `{name}`"));
                 };
+                if tab == crate::Tab::SpriteEditor
+                    && let Some(a) = args.get("asset").and_then(Json::as_str)
+                {
+                    ed.st.sprite_editor.open(a);
+                }
                 if tab == crate::Tab::InputActions {
                     match args.get("asset").and_then(Json::as_str) {
                         Some(a) => ed.st.input_actions.open(e, a),

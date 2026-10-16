@@ -200,20 +200,21 @@ pub fn json_to_value(f: &FieldInfo, v: &Json, world: &World) -> Result<Value, St
     // Structs, and lists of structs, are parsed against a fresh default of the struct.
     if (f.kind == ValueKind::Object
         || (f.kind == ValueKind::List && f.element == Some(ValueKind::Object)))
-        && let Some(template) = (f.new_item)() {
-            if f.kind == ValueKind::List {
-                let items = v.as_array().ok_or("expected an array")?;
-                return items
-                    .iter()
-                    .map(|i| json_like(&template, i, world))
-                    .collect::<Result<Vec<_>, _>>()
-                    .map(Value::List);
-            }
-            if v.is_null() {
-                return Ok(Value::Null);
-            }
-            return json_like(&template, v, world);
+        && let Some(template) = (f.new_item)()
+    {
+        if f.kind == ValueKind::List {
+            let items = v.as_array().ok_or("expected an array")?;
+            return items
+                .iter()
+                .map(|i| json_like(&template, i, world))
+                .collect::<Result<Vec<_>, _>>()
+                .map(Value::List);
         }
+        if v.is_null() {
+            return Ok(Value::Null);
+        }
+        return json_like(&template, v, world);
+    }
     if f.kind == ValueKind::List {
         let elem = f.element.unwrap_or(ValueKind::Float);
         let items = v.as_array().ok_or("expected an array")?;
