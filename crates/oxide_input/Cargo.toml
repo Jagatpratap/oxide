@@ -7,6 +7,8 @@ license.workspace = true
 
 [dependencies]
 oxide_math.workspace = true
+oxide_core.workspace = true
+oxide_assets.workspace = true
 serde.workspace = true
 
 [lints]

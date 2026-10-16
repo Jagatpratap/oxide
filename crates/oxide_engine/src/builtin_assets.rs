@@ -3,8 +3,15 @@
 //! their own (Physics Material in `oxide_physics`).
 
 use oxide_assets::{AssetServer, AssetTypeInfo};
+use oxide_input::{Input, InputActionAsset};
+use oxide_scene::{PlayerInput, World};
 
 pub fn register(assets: &mut AssetServer) {
+    assets.register_data_asset::<InputActionAsset>(
+        AssetTypeInfo::new("InputActionAsset", &["inputactions"])
+            .menu("Input Actions", "New Actions", 50)
+            .color(240, 150, 120),
+    );
     assets.register_data_asset::<oxide_scene::VolumeProfile>(
         AssetTypeInfo::new("VolumeProfile", &["volumeProfile"])
             .menu("Rendering/Volume Profile", "New Volume Profile", 61)
@@ -24,4 +31,41 @@ pub fn register(assets: &mut AssetServer) {
             )
             .color(230, 200, 140),
     );
+}
+
+/// Evaluates the action maps enabled by `PlayerInput` components into the Input resource
+/// (once per frame, before scripts run).
+pub fn update_input_actions(world: &mut World, dt: f32) {
+    let wanted: Vec<(oxide_assets::Handle<InputActionAsset>, String, String)> = world
+        .query::<PlayerInput>()
+        .filter(|(id, _)| world.get(*id).is_some_and(|o| o.active_in_hierarchy()))
+        .filter_map(|(_, p)| {
+            Some((
+                p.actions.clone()?,
+                p.default_map.clone(),
+                p.default_scheme.clone(),
+            ))
+        })
+        .collect();
+    let assets = world.resource_mut::<AssetServer>();
+    let mut loaded: Vec<(InputActionAsset, String, String)> = Vec::new();
+    for (h, map, scheme) in wanted {
+        if let Some(a) = assets.data_asset(&h) {
+            loaded.push((a.clone(), map, scheme));
+        }
+    }
+    let maps: Vec<_> = loaded
+        .iter()
+        .flat_map(|(a, map, scheme)| {
+            let scheme = a
+                .control_schemes
+                .iter()
+                .find(|s| !scheme.is_empty() && s.name.eq_ignore_ascii_case(scheme));
+            a.maps
+                .iter()
+                .filter(move |m| map.is_empty() || m.name.eq_ignore_ascii_case(map))
+                .map(move |m| (m, scheme))
+        })
+        .collect();
+    world.resource_mut::<Input>().update_actions(&maps, dt);
 }

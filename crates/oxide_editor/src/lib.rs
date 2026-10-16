@@ -14,6 +14,7 @@ mod console;
 mod curve_editor;
 pub(crate) mod game_view;
 mod hierarchy;
+mod input_actions_window;
 mod inspector;
 pub mod launch;
 pub mod mcp;
@@ -58,6 +59,7 @@ pub enum Tab {
     Preferences,
     UndoHistory,
     Shortcuts,
+    InputActions,
 }
 
 impl Tab {
@@ -84,6 +86,7 @@ impl Tab {
             Tab::Preferences => "Preferences",
             Tab::UndoHistory => "Undo History",
             Tab::Shortcuts => "Shortcuts",
+            Tab::InputActions => "Input Actions",
         }
     }
 }
@@ -278,6 +281,7 @@ pub struct EditorState {
     /// Shortcut bindings (defaults plus the user's changes from Preferences).
     pub keymap: shortcuts::Keymap,
     shortcuts_ui: shortcuts::ShortcutsWindow,
+    input_actions: input_actions_window::InputActionsWindow,
     pub(crate) search: search_window::SearchState,
     scene_ui: scene_view::SceneViewState,
     pub(crate) game: game_view::GameViewState,
@@ -327,6 +331,7 @@ impl EditorState {
             asset_inspector: Default::default(),
             keymap: Default::default(),
             shortcuts_ui: Default::default(),
+            input_actions: Default::default(),
             search: Default::default(),
             scene_ui: Default::default(),
             game: Default::default(),
@@ -521,6 +526,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::Preferences => prefs::ui(self.st, self.engine, ui),
             Tab::UndoHistory => undo::window_ui(self.st, ui),
             Tab::Shortcuts => shortcuts::window_ui(self.st, ui),
+            Tab::InputActions => input_actions_window::window_ui(self.st, self.engine, ui),
         }
     }
 
@@ -567,7 +573,12 @@ impl Editor {
         match serde_json::from_str::<DockState<Tab>>(&text) {
             Ok(mut dock) if dock.iter_all_tabs().next().is_some() => {
                 // Settings windows open on demand at full size (floating sizes aren't saved).
-                for tab in [Tab::ProjectSettings, Tab::Preferences, Tab::Shortcuts] {
+                for tab in [
+                    Tab::ProjectSettings,
+                    Tab::Preferences,
+                    Tab::Shortcuts,
+                    Tab::InputActions,
+                ] {
                     while let Some(path) = dock.find_tab(&tab) {
                         dock.remove_tab(path);
                     }
@@ -619,13 +630,17 @@ impl Editor {
             let _ = self.dock.set_active_tab(path);
         } else if matches!(
             tab,
-            Tab::ProjectSettings | Tab::Preferences | Tab::Shortcuts
+            Tab::ProjectSettings | Tab::Preferences | Tab::Shortcuts | Tab::InputActions
         ) {
-            // Unity opens its settings in their own window.
+            // Unity opens its settings (and the Input Actions editor) in their own window.
             let surface = self.dock.add_window(vec![tab]);
+            let size = if tab == Tab::InputActions {
+                egui::vec2(980.0, 560.0)
+            } else {
+                egui::vec2(760.0, 560.0)
+            };
             if let Some(ws) = self.dock.get_window_state_mut(surface) {
-                ws.set_position(egui::pos2(220.0, 110.0))
-                    .set_size(egui::vec2(760.0, 560.0));
+                ws.set_position(egui::pos2(220.0, 110.0)).set_size(size);
             }
         } else {
             self.dock.push_to_focused_leaf(tab);

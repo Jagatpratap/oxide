@@ -192,22 +192,28 @@ pub mod prelude {
         Anchor, Canvas, Gui, GuiExt, TextAlign, UIButton, UIImage, UISlider, UIText, UIToggle, egui,
     };
 
-    pub use oxide_core::{Reflect, Time, debug_log, debug_log_error, debug_log_warning};
+    pub use oxide_core::{
+        AnimationCurve, Gradient, MinMaxCurve, MinMaxGradient, Reflect, Time, debug_log,
+        debug_log_error, debug_log_warning,
+    };
     pub use oxide_input::{
-        CursorLockMode, GamepadAxis, GamepadButton, Input, KeyCode, MouseButton,
+        ActionState, CursorLockMode, GamepadAxis, GamepadButton, Input, InputActionAsset,
+        InputActionPhase, KeyCode, MouseButton,
     };
     pub use oxide_math::prelude::*;
     pub use oxide_physics::{
         BoxCollider, CapsuleCollider, CharacterController, CharacterExt, CharacterJoint,
         CollisionDetectionMode, DEFAULT_RAYCAST_LAYERS, FixedJoint, ForceMode, HingeJoint,
-        MeshCollider, Physics, PhysicsExt, RaycastHit, Rigidbody, RigidbodyInterpolation,
-        SphereCollider, TerrainCollider, WheelCollider,
+        MeshCollider, Physics, PhysicsExt, PhysicsMaterial, PhysicsMaterialCombine, RaycastHit,
+        Rigidbody, RigidbodyInterpolation, SphereCollider, TerrainCollider, WheelCollider,
+        WheelFrictionCurve,
     };
     pub use oxide_scene::{
         Camera, CameraClearFlags, Collision, Component, Ctx, GameObjectId, Light, LightShadows,
-        LightType, MeshFilter, MeshRenderer, OcclusionPortal, Projection, ReflectionProbe,
-        ReflectionProbeClearFlags, ReflectionProbeMode, ReflectionProbeRefreshMode, RenderSettings,
-        ShadowCastingMode, SkinnedMeshRenderer, Space, StaticEditorFlags, World,
+        LightType, MeshFilter, MeshRenderer, OcclusionPortal, PlayerInput, Projection,
+        ReflectionProbe, ReflectionProbeClearFlags, ReflectionProbeMode,
+        ReflectionProbeRefreshMode, RenderSettings, ShadowCastingMode, SkinnedMeshRenderer, Space,
+        StaticEditorFlags, World,
     };
     pub use oxide_standard::*;
 }

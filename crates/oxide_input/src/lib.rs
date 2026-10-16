@@ -7,6 +7,12 @@
 //! References: <https://docs.unity3d.com/Manual/class-InputManager.html>,
 //! <https://docs.unity3d.com/Manual/InputLegacy.html>
 
+pub mod actions;
+
+pub use actions::{
+    ActionState, InputAction, InputActionAsset, InputActionMap, InputActionPhase, InputActionType,
+    InputBinding, InputComposite, InputControlScheme, InputControlType,
+};
 use oxide_math::Vector2;
 use std::collections::{HashMap, HashSet};
 
@@ -415,6 +421,8 @@ pub struct Input {
     pub screen_height: f32,
     /// False while the editor (not the game) has keyboard focus.
     pub enabled: bool,
+    /// Input System action states this frame, by `Map/Action` (see [`Input::action`]).
+    action_states: HashMap<String, ActionState>,
 }
 
 impl Default for Input {
@@ -519,6 +527,7 @@ impl Input {
             cursor_visible: true,
             screen_height: 0.0,
             enabled: true,
+            action_states: HashMap::new(),
         }
     }
 
@@ -790,6 +799,45 @@ impl Input {
             |i| self.mouse_up[i],
             |g, b| g.buttons_up.contains(b),
         )
+    }
+
+    // ---- Input System actions ------------------------------------------------------
+
+    /// An action's state this frame (Unity `InputAction`), by `"Map/Action"` or just
+    /// `"Action"` (the first map that has it). Unknown actions read as idle.
+    pub fn action(&self, name: &str) -> ActionState {
+        if let Some(s) = self.action_states.get(name) {
+            return *s;
+        }
+        let suffix = format!("/{name}");
+        let mut keys: Vec<&String> = self
+            .action_states
+            .keys()
+            .filter(|k| k.ends_with(&suffix) || k.eq_ignore_ascii_case(name))
+            .collect();
+        keys.sort();
+        keys.first()
+            .and_then(|k| self.action_states.get(*k))
+            .copied()
+            .unwrap_or_default()
+    }
+
+    /// Every action's state, by `Map/Action`.
+    pub fn action_states(&self) -> &HashMap<String, ActionState> {
+        &self.action_states
+    }
+
+    /// Evaluates enabled action maps (called once per frame by the engine).
+    pub fn update_actions(
+        &mut self,
+        maps: &[(&InputActionMap, Option<&InputControlScheme>)],
+        dt: f32,
+    ) {
+        self.action_states = if self.enabled {
+            actions::evaluate(self, maps, &self.action_states, dt)
+        } else {
+            HashMap::new()
+        };
     }
 
     pub fn axes(&self) -> &[InputAxis] {

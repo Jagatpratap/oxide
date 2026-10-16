@@ -1255,7 +1255,7 @@ pub fn renamed_path(root: &Path, path: &str, name: &str) -> Result<String, Strin
 /// open in the grid, and everything else opens in its app (scripts in the script editor).
 pub fn open(
     st: &mut EditorState,
-    _engine: &mut Engine,
+    engine: &mut Engine,
     root: &Path,
     path: &str,
 ) -> Result<(), String> {
@@ -1270,6 +1270,15 @@ pub fn open(
         "Model" => st.actions.push(Action::InstantiateModel(path.to_owned())),
         "Prefab" => st.actions.push(Action::InstantiatePrefab(path.to_owned())),
         "Material" | "RenderTexture" => {
+            st.project.selected = Some(path.to_owned());
+            st.project.inspecting = true;
+        }
+        "InputActionAsset" => {
+            st.input_actions.open(engine, path);
+            st.actions.push(Action::OpenTab(crate::Tab::InputActions));
+        }
+        // Other data assets are edited in the Inspector.
+        t if engine.world.resource::<AssetServer>().types.is_data(t) => {
             st.project.selected = Some(path.to_owned());
             st.project.inspecting = true;
         }

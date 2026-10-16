@@ -83,6 +83,7 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: &s
                         st.actions.push(Action::OpenScene(path.to_owned()));
                     }
                 }
+                "InputActionAsset" => input_actions(st, engine, ui, path),
                 t if engine.world.resource::<AssetServer>().types.is_data(t) => {
                     data_asset(st, engine, ui, path)
                 }
@@ -200,6 +201,33 @@ fn edit_fields(ui: &mut egui::Ui, engine: &mut Engine, obj: &mut dyn Reflect, sa
         }
     }
     changed
+}
+
+/// Input Actions: Unity's "Edit Asset" button and a summary of maps and actions.
+fn input_actions(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: &str) {
+    if ui.button("Edit Asset").clicked() {
+        st.input_actions.open(engine, path);
+        st.actions.push(Action::OpenTab(crate::Tab::InputActions));
+    }
+    let h = oxide_assets::Handle::<oxide_input::InputActionAsset>::from_path(path);
+    let Some(a) = engine
+        .world
+        .resource_mut::<AssetServer>()
+        .data_asset(&h)
+        .cloned()
+    else {
+        return;
+    };
+    ui.add_space(4.0);
+    for m in &a.maps {
+        let names: Vec<&str> = m.actions.iter().map(|x| x.name.as_str()).collect();
+        ui.label(RichText::new(&m.name).strong());
+        ui.weak(names.join(", "));
+    }
+    if !a.control_schemes.is_empty() {
+        let s: Vec<&str> = a.control_schemes.iter().map(|x| x.name.as_str()).collect();
+        ui.weak(format!("Control schemes: {}", s.join(", ")));
+    }
 }
 
 /// A data asset (ScriptableObject): its reflected fields, saved to the file on every edit.

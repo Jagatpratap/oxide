@@ -12,6 +12,7 @@ pub mod builtin;
 pub mod component;
 pub mod ctx;
 pub mod id;
+pub mod player_input;
 pub mod prefab;
 pub mod quality;
 pub mod resources;
@@ -27,6 +28,7 @@ pub use builtin::*;
 pub use component::{Collision, Component, ComponentRegistry, ContactPoint, Gizmos};
 pub use ctx::{Ctx, TransformRef};
 pub use id::{ComponentId, GameObjectId};
+pub use player_input::PlayerInput;
 pub use prefab::{ObjectProperty, PrefabOverride, is_prefab_path};
 pub use quality::{QualityLevel, QualitySettings, ShadowQuality};
 pub use resources::Resources;
@@ -54,6 +56,7 @@ pub fn register_builtin(reg: &mut ComponentRegistry) {
     volume::register(reg);
     reg.register::<FullScreenPassRendererFeature>("Rendering/Renderer Features/Full Screen Pass");
     reg.register::<RenderObjectsRendererFeature>("Rendering/Renderer Features/Render Objects");
+    reg.register::<player_input::PlayerInput>("Input/Player Input");
 }
 
 #[cfg(test)]

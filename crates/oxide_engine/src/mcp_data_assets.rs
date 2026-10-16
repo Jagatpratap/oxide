@@ -142,4 +142,27 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
             }))
         },
     );
+
+    tool(
+        s,
+        bus,
+        ToolDef::new(
+            "input_actions",
+            "Input System actions",
+            "Live Input System action states (what scripts read with ctx.input().action(\"Move\")): value, \
+             phase, pressed and this-frame flags for every action enabled by a PlayerInput component.",
+            schema(json!({}), &[]),
+        ),
+        |_args, e| {
+            let input = e.world.resource::<oxide_input::Input>();
+            let mut states: Vec<(&String, &oxide_input::ActionState)> =
+                input.action_states().iter().collect();
+            states.sort_by(|a, b| a.0.cmp(b.0));
+            let list: serde_json::Map<String, Json> = states
+                .into_iter()
+                .map(|(k, v)| (k.clone(), serde_json::to_value(v).unwrap_or(Json::Null)))
+                .collect();
+            ToolResult::json(json!({ "actions": list }))
+        },
+    );
 }

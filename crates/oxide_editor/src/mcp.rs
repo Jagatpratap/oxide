@@ -288,7 +288,12 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
 
     let windows: Vec<&str> = crate::Tab::ALL
         .iter()
-        .chain(&[crate::Tab::ProjectSettings, crate::Tab::Preferences])
+        .chain(&[
+            crate::Tab::ProjectSettings,
+            crate::Tab::Preferences,
+            crate::Tab::Shortcuts,
+            crate::Tab::InputActions,
+        ])
         .map(|t| t.title())
         .collect();
     tool(
@@ -299,9 +304,10 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
             "Open editor window",
             "Opens (or focuses) an editor window. For Project Settings and Preferences, `page` picks the page \
              (e.g. \"Physics\", \"Quality\", \"Tags and Layers\", \"Input Manager\"; Preferences: \"General\", \
-             \"Console\", \"Scene View\", \"Colors\", \"External Tools\").",
+             \"Console\", \"Scene View\", \"Colors\", \"External Tools\"). For Input Actions, `asset` is the \
+             .inputactions file to edit.",
             schema(
-                json!({ "window": { "type": "string", "enum": windows }, "page": { "type": "string" } }),
+                json!({ "window": { "type": "string", "enum": windows }, "page": { "type": "string" }, "asset": { "type": "string" } }),
                 &["window"],
             ),
         ),
@@ -312,6 +318,7 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
                     crate::Tab::ProjectSettings,
                     crate::Tab::Preferences,
                     crate::Tab::Shortcuts,
+                    crate::Tab::InputActions,
                 ]);
                 let Some(tab) = all
                     .into_iter()
@@ -319,6 +326,17 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
                 else {
                     return ToolResult::error(format!("unknown window `{name}`"));
                 };
+                if tab == crate::Tab::InputActions {
+                    match args.get("asset").and_then(Json::as_str) {
+                        Some(a) => ed.st.input_actions.open(e, a),
+                        None if ed.st.input_actions.path().is_none() => {
+                            return ToolResult::error(
+                                "Input Actions needs `asset`: an .inputactions file",
+                            );
+                        }
+                        None => {}
+                    }
+                }
                 if let Some(page) = args.get("page").and_then(Json::as_str) {
                     let find = |n: &str| n.eq_ignore_ascii_case(page);
                     match tab {

@@ -203,6 +203,7 @@ impl Engine {
         w.resource_mut::<Time>().begin_frame(dt);
         let unscaled = w.resource::<Time>().unscaled_delta_time();
         w.resource_mut::<Input>().update_axes(unscaled);
+        crate::builtin_assets::update_input_actions(w, unscaled);
         w.run_start();
         while w.resource_mut::<Time>().next_fixed_step() {
             w.run_phase(Phase::FixedUpdate);
