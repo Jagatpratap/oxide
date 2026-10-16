@@ -1339,6 +1339,10 @@ pub fn open(
             st.animation.open_clip(path);
             st.actions.push(Action::OpenTab(crate::Tab::Animation));
         }
+        "AudioMixer" => {
+            st.audio_mixer.open(path);
+            st.actions.push(Action::OpenTab(crate::Tab::AudioMixer));
+        }
         "AnimatorOverrideController" | "AvatarMask" => {
             st.project.selected = Some(path.to_owned());
             st.project.inspecting = true;

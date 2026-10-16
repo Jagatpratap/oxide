@@ -1159,6 +1159,16 @@ fn assets_of_type(assets: &AssetServer, type_name: Option<&str>) -> Vec<String> 
         "Model" => assets.models.iter().map(|(p, _)| p.to_owned()).collect(),
         "TerrainData" => assets.terrains.iter().map(|(p, _)| p.to_owned()).collect(),
         "Shader" => assets.shaders.iter().map(|(p, _)| p.to_owned()).collect(),
+        // Audio Source Output: every group of every mixer (`Main.mixer#SFX`).
+        "AudioMixerGroup" => assets
+            .paths_of_type("AudioMixer")
+            .into_iter()
+            .flat_map(|m| {
+                crate::audio_mixer_window::mixer_groups(assets, &m)
+                    .into_iter()
+                    .map(move |g| format!("{m}#{g}"))
+            })
+            .collect(),
         _ => Vec::new(),
     };
     // Project files of the type too, loaded or not (they load when picked).

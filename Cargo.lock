@@ -2611,6 +2611,7 @@ dependencies = [
  "libloading 0.9.0",
  "oxide_animation",
  "oxide_assets",
+ "oxide_audio",
  "oxide_core",
  "oxide_engine",
  "oxide_input",

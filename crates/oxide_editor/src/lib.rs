@@ -13,6 +13,7 @@ mod animation_window;
 mod animator_window;
 mod asset_inspector;
 mod asset_ops;
+mod audio_mixer_window;
 mod console;
 mod curve_editor;
 pub(crate) mod game_view;
@@ -65,6 +66,7 @@ pub enum Tab {
     InputActions,
     Animator,
     Animation,
+    AudioMixer,
 }
 
 impl Tab {
@@ -94,6 +96,7 @@ impl Tab {
             Tab::InputActions => "Input Actions",
             Tab::Animator => "Animator",
             Tab::Animation => "Animation",
+            Tab::AudioMixer => "Audio Mixer",
         }
     }
 }
@@ -292,6 +295,7 @@ pub struct EditorState {
     animator: animator_window::AnimatorWindow,
     animation: animation_window::AnimationWindow,
     mask: anim_inspectors::MaskState,
+    audio_mixer: audio_mixer_window::AudioMixerWindow,
     pub(crate) search: search_window::SearchState,
     scene_ui: scene_view::SceneViewState,
     pub(crate) game: game_view::GameViewState,
@@ -345,6 +349,7 @@ impl EditorState {
             animator: Default::default(),
             animation: Default::default(),
             mask: Default::default(),
+            audio_mixer: Default::default(),
             search: Default::default(),
             scene_ui: Default::default(),
             game: Default::default(),
@@ -542,6 +547,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::InputActions => input_actions_window::window_ui(self.st, self.engine, ui),
             Tab::Animator => animator_window::window_ui(self.st, self.engine, ui),
             Tab::Animation => animation_window::window_ui(self.st, self.engine, ui),
+            Tab::AudioMixer => audio_mixer_window::window_ui(self.st, self.engine, ui),
         }
     }
 

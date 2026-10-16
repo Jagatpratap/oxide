@@ -6,6 +6,7 @@
 //! If no audio device is available (servers, CI) everything runs silently.
 //! Reference: <https://docs.unity3d.com/Manual/AudioOverview.html>
 
+pub mod mixer;
 pub mod synth;
 
 use kira::sound::PlaybackState;
@@ -47,6 +48,8 @@ pub struct AudioSource {
     pub spatial_blend: f32,
     pub min_distance: f32,
     pub max_distance: f32,
+    /// Audio Mixer group to play through (Unity "Output"): `Assets/Main.mixer#SFX`.
+    pub output: Option<Handle<mixer::AudioMixerGroupRef>>,
     #[reflect(skip)]
     #[doc(hidden)]
     pub commands: Vec<AudioCommand>,
@@ -70,6 +73,7 @@ impl Default for AudioSource {
             spatial_blend: 1.0,
             min_distance: 1.0,
             max_distance: 500.0,
+            output: None,
             commands: Vec::new(),
             playing: false,
             started: false,
@@ -134,6 +138,8 @@ struct Voice {
     pitch: f64,
     looping: bool,
     distances: (f32, f32),
+    /// Mixer path, group and mixer generation it was routed to.
+    route: Option<(String, String, u64)>,
 }
 
 /// The audio resource (Unity's `AudioSettings` + mixer).
@@ -150,6 +156,11 @@ pub struct Audio {
     /// The editor's Game view "Mute Audio" (separate from the game's own settings).
     pub mute: bool,
     applied_master: f32,
+    /// Running Audio Mixers by asset path.
+    mixers: HashMap<String, mixer::MixerRuntime>,
+    /// Snapshot and exposed-parameter state per mixer (kept even without a device).
+    pub mixer_states: HashMap<String, mixer::MixerState>,
+    mixer_generation: u64,
 }
 
 fn db(v: f32) -> f32 {
@@ -175,7 +186,54 @@ impl Audio {
             paused: false,
             mute: false,
             applied_master: 1.0,
+            mixers: HashMap::new(),
+            mixer_states: HashMap::new(),
+            mixer_generation: 0,
         }
+    }
+
+    /// Unity `AudioMixer.SetFloat`: sets an exposed parameter (`"MusicVol"`, dB for
+    /// volumes) of the mixer at `mixer` (`Assets/Main.mixer`).
+    pub fn set_float(&mut self, mixer: &str, name: &str, value: f32) {
+        self.mixer_states
+            .entry(mixer.to_owned())
+            .or_default()
+            .exposed
+            .insert(name.to_owned(), value);
+    }
+
+    /// Unity `AudioMixer.ClearFloat`: the parameter follows the snapshots again.
+    pub fn clear_float(&mut self, mixer: &str, name: &str) {
+        if let Some(s) = self.mixer_states.get_mut(mixer) {
+            s.exposed.remove(name);
+        }
+    }
+
+    /// Unity `AudioMixer.GetFloat`: the value set by a script, if any.
+    pub fn get_float(&self, mixer: &str, name: &str) -> Option<f32> {
+        self.mixer_states.get(mixer)?.exposed.get(name).copied()
+    }
+
+    /// Unity `AudioMixerSnapshot.TransitionTo`: blends to `snapshot` over `seconds`.
+    pub fn transition_to(
+        &mut self,
+        mixer: &str,
+        snapshot: &str,
+        seconds: f32,
+        assets: &AssetServer,
+    ) {
+        let h: Handle<mixer::AudioMixer> = Handle::from_path(mixer);
+        let current = assets.data.get(&h).map(|m| {
+            self.mixer_states
+                .get(mixer)
+                .cloned()
+                .unwrap_or_default()
+                .values(m)
+        });
+        let st = self.mixer_states.entry(mixer.to_owned()).or_default();
+        st.from = current.unwrap_or_default();
+        st.snapshot = snapshot.to_owned();
+        st.transition = Some((0.0, seconds.max(0.0)));
     }
 
     pub fn is_available(&self) -> bool {
@@ -223,6 +281,40 @@ impl Audio {
         max: f32,
         persist: bool,
     ) -> Option<Output> {
+        self.make_output_in(None, spatial, pos, min, max, persist)
+    }
+
+    /// An output track, inside a mixer group's track when `route` names one.
+    fn make_output_in(
+        &mut self,
+        route: Option<(&str, &str)>,
+        spatial: bool,
+        pos: Vector3,
+        min: f32,
+        max: f32,
+        persist: bool,
+    ) -> Option<Output> {
+        if let Some((m, g)) = route
+            && let Some(group) = self.mixers.get_mut(m).and_then(|r| r.groups.get_mut(g))
+        {
+            let t = &mut group.track;
+            return if spatial {
+                let listener = self.listener.as_ref()?.id();
+                let b = SpatialTrackBuilder::new()
+                    .distances(SpatialTrackDistances {
+                        min_distance: min.max(0.01),
+                        max_distance: max.max(min + 0.01),
+                    })
+                    .persist_until_sounds_finish(persist);
+                t.add_spatial_sub_track(listener, pos, b)
+                    .ok()
+                    .map(Output::Spatial)
+            } else {
+                t.add_sub_track(TrackBuilder::new().persist_until_sounds_finish(persist))
+                    .ok()
+                    .map(Output::Flat)
+            };
+        }
         let m = self.manager.as_mut()?;
         if spatial {
             let listener = self.listener.as_ref()?.id();
@@ -371,6 +463,8 @@ fn sync(world: &mut World, audio: &mut Audio) {
         .one_shots
         .retain(|(_, h)| h.state() != PlaybackState::Stopped);
 
+    update_mixers(world, audio);
+
     let sources: Vec<(GameObjectId, ComponentId)> = world.query_ids::<AudioSource>();
     let mut alive = std::collections::HashSet::new();
     for (obj, cid) in sources {
@@ -390,13 +484,49 @@ fn sync(world: &mut World, audio: &mut Audio) {
         let s = src.clone();
         let assets = world.resource::<AssetServer>();
         let spatial = s.spatial_blend >= 0.5;
+        // Mixer routing: the group's track (rebuilt mixers re-route their voices).
+        let route = s.output.as_ref().and_then(|h| {
+            let (m, g) = mixer::split_group_path(h.path());
+            let generation = audio.mixers.get(m)?.generation;
+            Some((m.to_owned(), g.to_owned(), generation))
+        });
+        let mixer_pitch = route.as_ref().map_or(1.0, |(m, g, _)| {
+            let h: Handle<mixer::AudioMixer> = Handle::from_path(m.as_str());
+            match assets.data.get(&h) {
+                Some(mx) => {
+                    let st = audio
+                        .mixer_states
+                        .get(m.as_str())
+                        .cloned()
+                        .unwrap_or_default();
+                    mx.pitch(g.as_str(), &st.values(mx))
+                }
+                None => 1.0,
+            }
+        });
         let need_new = audio.voices.get(&cid).is_none_or(|v| {
-            v.spatial != spatial || v.distances != (s.min_distance, s.max_distance)
+            v.spatial != spatial
+                || v.distances != (s.min_distance, s.max_distance)
+                || v.route != route
         });
         if need_new {
-            let Some(out) =
-                audio.make_output(spatial, mirror(pos), s.min_distance, s.max_distance, false)
-            else {
+            if let Some(mut old) = audio.voices.remove(&cid)
+                && let Some(snd) = old.sound.as_mut()
+            {
+                snd.stop(Tween::default());
+                // A playing source keeps playing on its new route.
+                if src_was_playing(&s) {
+                    cmds.insert(0, AudioCommand::Play);
+                }
+            }
+            let Some(out) = audio.make_output_in(
+                route.as_ref().map(|(m, g, _)| (m.as_str(), g.as_str())),
+                spatial,
+                mirror(pos),
+                s.min_distance,
+                s.max_distance,
+                false,
+            ) else {
                 continue;
             };
             audio.voices.insert(
@@ -410,10 +540,12 @@ fn sync(world: &mut World, audio: &mut Audio) {
                     pitch: -1.0,
                     looping: false,
                     distances: (s.min_distance, s.max_distance),
+                    route: route.clone(),
                 },
             );
         }
         let vol = if s.mute { 0.0 } else { s.volume };
+        let pitch = s.pitch * mixer_pitch;
         for c in cmds {
             match c {
                 AudioCommand::Play => {
@@ -424,7 +556,7 @@ fn sync(world: &mut World, audio: &mut Audio) {
                     if s.looping {
                         data = data.loop_region(..);
                     }
-                    data = data.volume(db(vol)).playback_rate(s.pitch as f64);
+                    data = data.volume(db(vol)).playback_rate(pitch as f64);
                     let v = audio.voices.get_mut(&cid).expect("voice");
                     if let Some(old) = v.sound.as_mut() {
                         old.stop(Tween::default());
@@ -435,7 +567,7 @@ fn sync(world: &mut World, audio: &mut Audio) {
                     };
                     v.clip = Some(clip.id());
                     v.volume = vol;
-                    v.pitch = s.pitch as f64;
+                    v.pitch = pitch as f64;
                     v.looping = s.looping;
                 }
                 AudioCommand::Stop => {
@@ -457,7 +589,7 @@ fn sync(world: &mut World, audio: &mut Audio) {
                     let Some(data) = audio.clip_data(assets, &clip) else {
                         continue;
                     };
-                    let data = data.volume(db(vol * scale)).playback_rate(s.pitch as f64);
+                    let data = data.volume(db(vol * scale)).playback_rate(pitch as f64);
                     let v = audio.voices.get_mut(&cid).expect("voice");
                     let _ = match &mut v.output {
                         Output::Spatial(t) => t.play(data).map(|_| ()),
@@ -475,9 +607,9 @@ fn sync(world: &mut World, audio: &mut Audio) {
                 snd.set_volume(db(vol), Tween::default());
                 v.volume = vol;
             }
-            if (v.pitch - s.pitch as f64).abs() > 1e-4 {
-                snd.set_playback_rate(s.pitch as f64, Tween::default());
-                v.pitch = s.pitch as f64;
+            if (v.pitch - pitch as f64).abs() > 1e-4 {
+                snd.set_playback_rate(pitch as f64, Tween::default());
+                v.pitch = pitch as f64;
             }
         }
         let playing = v.sound.as_ref().is_some_and(|h| {
@@ -500,9 +632,68 @@ fn sync(world: &mut World, audio: &mut Audio) {
     });
 }
 
-/// Script helpers: `ctx.play_clip_at_point("builtin:gunshot", pos, 1.0)`.
+fn src_was_playing(s: &AudioSource) -> bool {
+    s.playing
+}
+
+/// Builds or rebuilds the kira tracks of every mixer in use (by sources or scripts) and
+/// pushes their current values, advancing snapshot transitions.
+fn update_mixers(world: &mut World, audio: &mut Audio) {
+    let dt = world
+        .try_resource::<oxide_core::Time>()
+        .map_or(0.0, |t| t.unscaled_delta_time());
+    let mut paths: Vec<String> = world
+        .query::<AudioSource>()
+        .filter_map(|(_, s)| {
+            s.output
+                .as_ref()
+                .map(|h| mixer::split_group_path(h.path()).0.to_owned())
+        })
+        .collect();
+    paths.extend(audio.mixer_states.keys().cloned());
+    paths.sort();
+    paths.dedup();
+    let assets = world.resource_mut::<AssetServer>();
+    for path in paths {
+        let h: Handle<mixer::AudioMixer> = Handle::from_path(path.clone());
+        let Some(m) = assets.data_asset(&h).cloned() else {
+            continue;
+        };
+        let st = audio.mixer_states.entry(path.clone()).or_default();
+        if let Some((t, d)) = st.transition.as_mut() {
+            *t += dt;
+            if *t >= *d {
+                st.transition = None;
+            }
+        }
+        let values = st.values(&m);
+        let rebuild = audio
+            .mixers
+            .get(&path)
+            .is_none_or(|r| r.structure != m.structure());
+        if rebuild && let Some(mgr) = audio.manager.as_mut() {
+            audio.mixer_generation += 1;
+            match mixer::MixerRuntime::build(mgr, &m, audio.mixer_generation) {
+                Some(rt) => {
+                    audio.mixers.insert(path.clone(), rt);
+                }
+                None => continue,
+            }
+        }
+        if let Some(rt) = audio.mixers.get_mut(&path) {
+            rt.apply(&m, &values);
+        }
+    }
+}
+
+/// Script helpers: `ctx.play_clip_at_point("builtin:gunshot", pos, 1.0)`, Audio Mixer
+/// exposed parameters and snapshots.
 pub trait AudioExt {
     fn play_clip_at_point(&mut self, clip: &str, position: Vector3, volume: f32);
+    /// Unity `AudioMixer.SetFloat("MusicVol", -10)` on the mixer at `mixer`.
+    fn set_mixer_float(&mut self, mixer: &str, name: &str, value: f32);
+    /// Unity `mixer.FindSnapshot(name).TransitionTo(seconds)`.
+    fn transition_to_snapshot(&mut self, mixer: &str, snapshot: &str, seconds: f32);
 }
 
 impl AudioExt for Ctx<'_> {
@@ -514,6 +705,25 @@ impl AudioExt for Ctx<'_> {
         audio.play_clip_at_point(self.world.resource::<AssetServer>(), &h, position, volume);
         self.world.resources.insert(audio);
     }
+
+    fn set_mixer_float(&mut self, mixer: &str, name: &str, value: f32) {
+        if let Some(a) = self.world.try_resource_mut::<Audio>() {
+            a.set_float(mixer, name, value);
+        }
+    }
+
+    fn transition_to_snapshot(&mut self, mixer: &str, snapshot: &str, seconds: f32) {
+        let Some(mut audio) = self.world.resources.remove::<Audio>() else {
+            return;
+        };
+        audio.transition_to(
+            mixer,
+            snapshot,
+            seconds,
+            self.world.resource::<AssetServer>(),
+        );
+        self.world.resources.insert(audio);
+    }
 }
 
 /// Installs the `Audio` resource, built-in clips and components; returns the system.
@@ -521,6 +731,11 @@ pub fn install(world: &mut World) -> Box<dyn System> {
     world.resources.insert(Audio::new());
     if let Some(a) = world.try_resource_mut::<AssetServer>() {
         register_builtin_clips(a);
+        a.register_data_asset::<mixer::AudioMixer>(
+            oxide_assets::AssetTypeInfo::new("AudioMixer", &["mixer"])
+                .menu("Audio Mixer", "New Audio Mixer", 55)
+                .color(230, 140, 200),
+        );
     }
     world.registry.register::<AudioSource>("Audio/Audio Source");
     world

@@ -279,13 +279,24 @@ fn infer(v: &Json, world: &World) -> Result<Value, String> {
         }
         Json::String(_) | Json::Object(_) => match resolve_object(world, v) {
             Some(id) => Value::ObjectRef(id.to_bits()),
-            None => match v.as_str() {
-                Some(s) => Value::String(s.to_owned()),
-                None => return Err(format!("cannot infer a value from {v}")),
+            None => match v {
+                Json::String(s) => Value::String(s.clone()),
+                // A nested struct given whole (an element of an empty list): its fields
+                // are inferred one by one; enums arrive as strings, which they accept.
+                Json::Object(o) => Value::Object(
+                    o.iter()
+                        .map(|(k, x)| Ok((k.clone(), infer(x, world)?)))
+                        .collect::<Result<_, String>>()?,
+                ),
+                _ => return Err(format!("cannot infer a value from {v}")),
             },
         },
+        Json::Array(a) => Value::List(
+            a.iter()
+                .map(|x| infer(x, world))
+                .collect::<Result<_, _>>()?,
+        ),
         Json::Null => Value::Null,
-        other => return Err(format!("cannot infer a value from {other}")),
     })
 }
 

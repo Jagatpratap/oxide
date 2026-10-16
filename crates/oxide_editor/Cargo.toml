@@ -16,6 +16,7 @@ oxide_scene.workspace = true
 oxide_input.workspace = true
 oxide_physics.workspace = true
 oxide_animation.workspace = true
+oxide_audio.workspace = true
 oxide_ui.workspace = true
 oxide_terrain.workspace = true
 

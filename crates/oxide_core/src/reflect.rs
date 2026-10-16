@@ -140,9 +140,30 @@ macro_rules! field_value {
 }
 
 field_value!(bool, Bool, |s| *s, |v| v);
-field_value!(i32, Int, |s| *s as i64, |v| i32::try_from(v).ok()?);
-field_value!(i64, Int, |s| *s, |v| v);
-field_value!(u32, Int, |s| *s as i64, |v| u32::try_from(v).ok()?);
+/// Integers also accept whole floats (JSON numbers and inferred values arrive as floats).
+macro_rules! int_value {
+    ($t:ty) => {
+        impl FieldValue for $t {
+            const KIND: ValueKind = ValueKind::Int;
+            fn to_value(&self) -> Value {
+                Value::Int(*self as i64)
+            }
+            fn from_value(v: Value) -> Option<Self> {
+                match v {
+                    Value::Int(i) => <$t>::try_from(i).ok(),
+                    Value::Float(f) if f.fract() == 0.0 => <$t>::try_from(f as i64).ok(),
+                    _ => None,
+                }
+            }
+            fn default_value() -> Option<Value> {
+                Some(Value::Int(0))
+            }
+        }
+    };
+}
+int_value!(i32);
+int_value!(i64);
+int_value!(u32);
 impl FieldValue for f32 {
     const KIND: ValueKind = ValueKind::Float;
     fn default_value() -> Option<Value> {

@@ -90,4 +90,81 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
             })
         },
     );
+
+    tool(
+        s,
+        bus,
+        ToolDef::new(
+            "audio_mixer",
+            "Audio Mixer",
+            "An Audio Mixer at runtime (Unity AudioMixer): `set` {\"MusicVol\": -10} sets exposed parameters \
+             (dB for volumes), `clear` removes script values, `snapshot` + `seconds` transitions to a snapshot. \
+             Returns the mixer's groups, snapshots, exposed parameters and the values it plays at now.",
+            schema(
+                json!({ "mixer": { "type": "string" }, "set": { "type": "object" }, "clear": { "type": "array" },
+                        "snapshot": { "type": "string" }, "seconds": { "type": "number" } }),
+                &["mixer"],
+            ),
+        ),
+        |args, e| {
+            use oxide_audio::mixer::AudioMixer;
+            let path = args
+                .get("mixer")
+                .and_then(Json::as_str)
+                .unwrap_or("")
+                .to_owned();
+            let h: Handle<AudioMixer> = Handle::from_path(path.clone());
+            let Some(m) = e
+                .world
+                .resource_mut::<AssetServer>()
+                .data_asset(&h)
+                .cloned()
+            else {
+                return ToolResult::error(format!("cannot load mixer {path}"));
+            };
+            let mut audio = e.world.resources.remove::<Audio>().expect("Audio resource");
+            if let Some(set) = args.get("set").and_then(Json::as_object) {
+                for (k, v) in set {
+                    if let Some(x) = v.as_f64() {
+                        audio.set_float(&path, k, x as f32);
+                    }
+                }
+            }
+            for k in args
+                .get("clear")
+                .and_then(Json::as_array)
+                .into_iter()
+                .flatten()
+            {
+                if let Some(k) = k.as_str() {
+                    audio.clear_float(&path, k);
+                }
+            }
+            if let Some(snap) = args.get("snapshot").and_then(Json::as_str) {
+                if !m.snapshots.iter().any(|s| s.name == snap) {
+                    e.world.resources.insert(audio);
+                    return ToolResult::error(format!("no snapshot `{snap}`"));
+                }
+                let secs = args.get("seconds").and_then(Json::as_f64).unwrap_or(0.0) as f32;
+                audio.transition_to(&path, snap, secs, e.world.resource::<AssetServer>());
+            }
+            let st = audio.mixer_states.entry(path.clone()).or_default().clone();
+            e.world.resources.insert(audio);
+            let values = st.values(&m);
+            let groups: Vec<Json> = m
+                .groups
+                .iter()
+                .map(|g| json!({ "name": g.name, "parent": g.parent, "volume_db": m.effective_volume(&g.name, &values),
+                                 "pitch": m.pitch(&g.name, &values), "mute": g.mute, "solo": g.solo,
+                                 "effects": g.effects.iter().map(|x| format!("{:?}", x.kind)).collect::<Vec<_>>() }))
+                .collect();
+            ToolResult::json(json!({
+                "groups": groups,
+                "snapshot": st.snapshot,
+                "transitioning": st.transition.is_some(),
+                "snapshots": m.snapshots.iter().map(|s| s.name.clone()).collect::<Vec<_>>(),
+                "exposed": m.exposed_parameters.iter().map(|x| json!({ "name": x.name, "parameter": x.parameter, "value": values.get(&x.parameter) })).collect::<Vec<_>>(),
+            }))
+        },
+    );
 }
