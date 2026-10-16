@@ -38,6 +38,63 @@ impl Transform {
     }
 }
 
+/// Unity `StaticEditorFlags`: which systems may treat a GameObject as never moving.
+/// The Inspector's "Static" checkbox sets all of them.
+/// <https://docs.unity3d.com/Manual/StaticObjects.html>
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct StaticEditorFlags(pub u32);
+
+impl StaticEditorFlags {
+    pub const NOTHING: Self = Self(0);
+    pub const CONTRIBUTE_GI: Self = Self(1);
+    /// Hides what is behind it (occlusion culling).
+    pub const OCCLUDER_STATIC: Self = Self(2);
+    pub const BATCHING_STATIC: Self = Self(4);
+    pub const NAVIGATION_STATIC: Self = Self(8);
+    /// Can be hidden by occluders.
+    pub const OCCLUDEE_STATIC: Self = Self(16);
+    pub const OFF_MESH_LINK_GENERATION: Self = Self(32);
+    pub const REFLECTION_PROBE_STATIC: Self = Self(64);
+    pub const EVERYTHING: Self = Self(127);
+    /// Every flag with its Inspector name.
+    pub const ALL: [(Self, &'static str); 7] = [
+        (Self::CONTRIBUTE_GI, "Contribute GI"),
+        (Self::OCCLUDER_STATIC, "Occluder Static"),
+        (Self::BATCHING_STATIC, "Batching Static"),
+        (Self::NAVIGATION_STATIC, "Navigation Static"),
+        (Self::OCCLUDEE_STATIC, "Occludee Static"),
+        (Self::OFF_MESH_LINK_GENERATION, "Off Mesh Link Generation"),
+        (Self::REFLECTION_PROBE_STATIC, "Reflection Probe Static"),
+    ];
+
+    pub fn contains(self, f: Self) -> bool {
+        self.0 & f.0 == f.0
+    }
+    pub fn set(&mut self, f: Self, on: bool) {
+        if on { self.0 |= f.0 } else { self.0 &= !f.0 }
+    }
+    /// Flag names, for tools and the Inspector.
+    pub fn names(self) -> Vec<&'static str> {
+        Self::ALL
+            .iter()
+            .filter(|(f, _)| self.contains(*f))
+            .map(|(_, n)| *n)
+            .collect()
+    }
+    /// Parses a flag by its name (`"Occluder Static"`, `"occluder_static"`, ...).
+    pub fn from_name(name: &str) -> Option<Self> {
+        let norm = |s: &str| s.to_ascii_lowercase().replace([' ', '_'], "");
+        let n = norm(name);
+        if n == "everything" {
+            return Some(Self::EVERYTHING);
+        }
+        Self::ALL
+            .iter()
+            .find(|(_, s)| norm(s) == n)
+            .map(|(f, _)| *f)
+    }
+}
+
 /// Unity `Space`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Space {
@@ -64,7 +121,7 @@ pub struct GameObject {
     pub tag: String,
     /// 0..31, names in [`LayerNames`].
     pub layer: u8,
-    pub is_static: bool,
+    pub static_flags: StaticEditorFlags,
     pub transform: Transform,
     pub dont_destroy_on_load: bool,
     active_self: bool,
@@ -102,6 +159,10 @@ impl GameObject {
             .filter(|c| !c.destroy_pending)
             .map(|c| (c.id, c.type_name, c.enabled))
             .collect()
+    }
+    /// Unity `GameObject.isStatic`: any static flag set.
+    pub fn is_static(&self) -> bool {
+        self.static_flags.0 != 0
     }
     pub fn compare_tag(&self, tag: &str) -> bool {
         self.tag == tag
@@ -315,7 +376,7 @@ impl World {
             name: name.into(),
             tag: "Untagged".into(),
             layer: 0,
-            is_static: false,
+            static_flags: StaticEditorFlags::NOTHING,
             transform: Transform::default(),
             dont_destroy_on_load: false,
             active_self: true,

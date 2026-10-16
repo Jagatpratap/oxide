@@ -3,7 +3,7 @@
 //! ```text
 //! oxide new  <DIR> [editor args]   create a game project and open it
 //! oxide open <DIR> [editor args]   open a game project (its Scripts hot-reload)
-//! oxide [--scene Assets/Scenes/Main.scene] [--sample demo|vehicle|character|open_world] [--project DIR]
+//! oxide [--scene Assets/Scenes/Main.scene] [--sample demo|vehicle|character|open_world|city] [--project DIR]
 //!       [--player] [--mcp-addr 127.0.0.1:47474] [--no-mcp] [--size 1280x720]
 //! ```
 //! `new`/`open` are the project launcher (Unity Hub): they build the project's own editor,
@@ -20,7 +20,7 @@ use oxide_engine::prelude::*;
 use oxide_engine::{App, EngineConfig};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: oxide [--scene PATH] [--sample demo|vehicle|character|open_world] [--project DIR] [--player] [--mcp-addr HOST:PORT] [--no-mcp] [--size WxH]";
+const USAGE: &str = "usage: oxide [--scene PATH] [--sample demo|vehicle|character|open_world|city] [--project DIR] [--player] [--mcp-addr HOST:PORT] [--no-mcp] [--size WxH]";
 
 struct Args {
     config: EngineConfig,
@@ -162,6 +162,7 @@ fn main() -> ExitCode {
             "vehicle" => samples::vehicle,
             "character" => samples::character,
             "open_world" => samples::open_world,
+            "city" => samples::city,
 
             other => {
                 eprintln!("unknown sample `{other}` (demo, vehicle, character)");

@@ -2,15 +2,15 @@
 //! and debug lines, read from the World each frame.
 
 use oxide_assets::{AssetId, AssetServer, DEFAULT_MATERIAL};
-use oxide_math::{Color, Matrix4x4};
+use oxide_math::{Color, Matrix4x4, Matrix4x4Ext};
 use oxide_render::{
     CameraView, ClearMode, DrawItem, Environment, FogKind, ProjectionKind, PunctualLight,
     RenderFrame, ShadowSettings, SunLight,
 };
 use oxide_scene::{
     Camera, CameraClearFlags, DebugDraw, FogMode, LODGroup, Light, LightShadows, LightType,
-    MeshFilter, MeshRenderer, Projection, RenderSettings, ShadowCastingMode, SkinnedMeshRenderer,
-    World,
+    MeshFilter, MeshRenderer, OcclusionPortal, Projection, RenderSettings, ShadowCastingMode,
+    SkinnedMeshRenderer, StaticEditorFlags, World,
 };
 
 pub fn camera_view(world: &World, id: oxide_scene::GameObjectId, c: &Camera) -> CameraView {
@@ -36,6 +36,7 @@ pub fn camera_view(world: &World, id: oxide_scene::GameObjectId, c: &Camera) -> 
             CameraClearFlags::Nothing => ClearMode::Nothing,
         },
         culling_mask: c.culling_mask,
+        occlusion_culling: c.use_occlusion_culling,
     }
 }
 
@@ -147,6 +148,25 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
 
     let default_mat = AssetId::from_path(DEFAULT_MATERIAL);
     let layer_of = |id| world.get(id).map_or(0, |o| o.layer);
+    let flags_of = |id| {
+        world
+            .get(id)
+            .map_or(StaticEditorFlags::NOTHING, |o| o.static_flags)
+    };
+    // Occluder Static objects hide what is behind them; Occludee Static ones, and dynamic
+    // ones that allow it, can be hidden (Unity's rules).
+    let occludee = |id, allow_dynamic: bool| {
+        allow_dynamic || flags_of(id).contains(StaticEditorFlags::OCCLUDEE_STATIC)
+    };
+    for (id, p) in world.query::<OcclusionPortal>() {
+        if !p.open
+            && let Some(m) = world_matrix(id)
+        {
+            frame
+                .occluder_boxes
+                .push(m * Matrix4x4::trs(p.center, oxide_math::Quaternion::IDENTITY, p.size));
+        }
+    }
     let hidden = match frame.cameras.first() {
         Some(cam) => lod_hidden(world, cam, settings.lod_bias),
         None => std::collections::HashSet::new(),
@@ -184,6 +204,8 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
                 receive_shadows: r.receive_shadows,
                 layer: layer_of(id),
                 joint_offset: None,
+                occluder: flags_of(id).contains(StaticEditorFlags::OCCLUDER_STATIC),
+                occludee: occludee(id, r.allow_occlusion_when_dynamic),
             });
         }
     }
@@ -217,6 +239,8 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
                     receive_shadows: r.receive_shadows,
                     layer: layer_of(id),
                     joint_offset: None,
+                    occluder: false,
+                    occludee: occludee(id, r.allow_occlusion_when_dynamic),
                 });
             }
             continue;
@@ -244,6 +268,8 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
                 receive_shadows: r.receive_shadows,
                 layer: layer_of(id),
                 joint_offset: Some(offset),
+                occluder: false,
+                occludee: false,
             });
         }
     }
@@ -365,6 +391,7 @@ mod lod_tests {
             viewport: [0.0, 0.0, 1.0, 1.0],
             clear: ClearMode::Sky,
             culling_mask: u32::MAX,
+            occlusion_culling: true,
         }
     }
 

@@ -21,6 +21,12 @@ pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const SHADOW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 pub const CASCADES: usize = 4;
 const MAX_LIGHTS: usize = 256;
+/// Occluder triangles rasterized per camera per frame at most.
+const OCCLUDER_TRIANGLE_BUDGET: u32 = 60_000;
+/// Meshes with more triangles than this don't occlude (use a simpler LOD as the occluder).
+const MAX_OCCLUDER_TRIANGLES: u32 = 6_000;
+/// Occluders smaller than this (bounding radius / distance) are skipped.
+const MIN_OCCLUDER_SIZE: f32 = 0.02;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -153,6 +159,8 @@ pub struct SceneRenderer {
     targets: HashMap<(u32, u32), Targets>,
     frame_index: u64,
     post: PostProcessor,
+    /// One occlusion buffer per camera of the last frame.
+    occlusion: Vec<crate::occlusion::OcclusionBuffer>,
     pub last_stats: RenderStats,
 }
 
@@ -532,6 +540,7 @@ impl SceneRenderer {
             targets: HashMap::new(),
             frame_index: 0,
             post,
+            occlusion: Vec::new(),
             last_stats: RenderStats::default(),
         }
     }
@@ -764,6 +773,12 @@ impl SceneRenderer {
     }
 
     /// Renders `frame` into `target` (`width`×`height`, `format`) and submits the work.
+    /// The occlusion buffer of camera `index` from the last frame (empty if that camera
+    /// had occlusion culling off).
+    pub fn occlusion_buffer(&self, index: usize) -> Option<&crate::occlusion::OcclusionBuffer> {
+        self.occlusion.get(index).filter(|b| b.width() > 0)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
@@ -790,6 +805,8 @@ impl SceneRenderer {
             material: AssetId,
             center: Vector3,
             radius: f32,
+            /// Mesh bounds (local).
+            bounds: oxide_math::Bounds,
             transparent: bool,
             cutout: bool,
             double_sided: bool,
@@ -827,6 +844,7 @@ impl SceneRenderer {
                 material: mat,
                 center,
                 radius,
+                bounds: mesh.bounds,
                 transparent: gm.transparent,
                 cutout: gm.cutout,
                 double_sided: gm.double_sided,
@@ -835,7 +853,7 @@ impl SceneRenderer {
             });
         }
 
-        // Terrain chunks: (data, mesh, model, receive, center, radius).
+        // Terrain chunks: (draw, center, radius, local bounds).
         let mut terrain_items = Vec::new();
         for t in &frame.terrain_draws {
             if !self.gpu_assets.ensure_mesh(device, assets, t.mesh)
@@ -845,7 +863,7 @@ impl SceneRenderer {
             }
             let mesh = &self.gpu_assets.meshes[&t.mesh];
             let c = t.model.transform_point3(mesh.bounds.center);
-            terrain_items.push((t, c, mesh.bounds.extents.length()));
+            terrain_items.push((t, c, mesh.bounds.extents.length(), mesh.bounds));
         }
 
         // ---- lights and joints --------------------------------------------------------
@@ -987,10 +1005,84 @@ impl SceneRenderer {
         // ---- per-camera culling and batching -------------------------------------------
         let mut camera_batches: Vec<(Vec<Batch>, Vec<Batch>)> = Vec::new();
         let mut camera_terrain: Vec<Vec<(AssetId, AssetId, u32)>> = Vec::new();
+        let mut occlusion = std::mem::take(&mut self.occlusion);
+        occlusion.resize_with(frame.cameras.len(), Default::default);
         for (ci, cam) in frame.cameras.iter().enumerate() {
             let aspect = aspect0(cam);
             let vp = cam.view_projection(aspect);
             let planes = frustum_planes(&vp);
+            let occ = &mut occlusion[ci];
+            let occlusion_on = cam.occlusion_culling;
+            if occlusion_on {
+                let started = std::time::Instant::now();
+                occ.begin(vp, aspect);
+                // Biggest on screen first, until the triangle budget runs out.
+                enum Occluder<'a> {
+                    Draw(&'a Resolved<'a>),
+                    Terrain(&'a TerrainDraw, AssetId),
+                    Box(&'a Matrix4x4),
+                }
+                let mut occluders: Vec<(f32, Occluder)> = Vec::new();
+                let size = |c: Vector3, r: f32| r / (c - cam.position).length().max(0.01);
+                for r in &resolved {
+                    if r.item.occluder
+                        && !r.item.shadows_only
+                        && !r.transparent
+                        && !r.cutout
+                        && r.radius.is_finite()
+                        && cam.culling_mask & (1u32 << (r.item.layer & 31)) != 0
+                        && sphere_visible(&planes, r.center, r.radius)
+                    {
+                        let s = size(r.center, r.radius);
+                        if s >= MIN_OCCLUDER_SIZE {
+                            occluders.push((s, Occluder::Draw(r)));
+                        }
+                    }
+                }
+                for (t, c, r, _) in &terrain_items {
+                    if let Some(m) = t.occluder
+                        && sphere_visible(&planes, *c, *r)
+                    {
+                        occluders.push((size(*c, *r), Occluder::Terrain(t, m)));
+                    }
+                }
+                for m in &frame.occluder_boxes {
+                    occluders.push((f32::INFINITY, Occluder::Box(m)));
+                }
+                occluders.sort_by(|a, b| b.0.total_cmp(&a.0));
+                for (_, o) in &occluders {
+                    if occ.triangles >= OCCLUDER_TRIANGLE_BUDGET {
+                        break;
+                    }
+                    match o {
+                        Occluder::Draw(r) => {
+                            let Some(m) = assets.meshes.get_by_id(r.item.mesh) else {
+                                continue;
+                            };
+                            let Some(range) = m.submeshes.get(r.item.submesh as usize) else {
+                                continue;
+                            };
+                            if (range.end - range.start) / 3 > MAX_OCCLUDER_TRIANGLES {
+                                continue;
+                            }
+                            let idx = &m.indices[range.start as usize..range.end as usize];
+                            occ.rasterize(&r.item.model, &m.vertices, idx);
+                        }
+                        Occluder::Terrain(t, mesh) => {
+                            if let Some(m) = assets.meshes.get_by_id(*mesh) {
+                                occ.rasterize(&t.model, &m.vertices, &m.indices);
+                            }
+                        }
+                        Occluder::Box(m) => occ.rasterize_box(m),
+                    }
+                    stats.occluders += 1;
+                }
+                occ.finish();
+                stats.occluder_triangles += occ.triangles;
+                stats.occlusion_ms += started.elapsed().as_secs_f32() * 1000.0;
+            } else {
+                *occ = Default::default();
+            }
             let mut opaque: Vec<&Resolved> = Vec::new();
             let mut transparent: Vec<(f32, &Resolved)> = Vec::new();
             for r in &resolved {
@@ -999,6 +1091,14 @@ impl SceneRenderer {
                 }
                 if r.radius.is_finite() && !sphere_visible(&planes, r.center, r.radius) {
                     stats.culled += 1;
+                    continue;
+                }
+                if occlusion_on
+                    && r.item.occludee
+                    && r.radius.is_finite()
+                    && !occ.is_visible(&r.item.model, r.bounds.center, r.bounds.extents)
+                {
+                    stats.occlusion_culled += 1;
                     continue;
                 }
                 if r.transparent {
@@ -1069,9 +1169,13 @@ impl SceneRenderer {
                 .collect();
             camera_batches.push((ob, tb));
             let mut tl = Vec::new();
-            for (t, c, r) in &terrain_items {
+            for (t, c, r, b) in &terrain_items {
                 if !sphere_visible(&planes, *c, *r) {
                     stats.culled += 1;
+                    continue;
+                }
+                if occlusion_on && !occ.is_visible(&t.model, b.center, b.extents) {
+                    stats.occlusion_culled += 1;
                     continue;
                 }
                 let idx = instances.len() as u32;
@@ -1362,6 +1466,7 @@ impl SceneRenderer {
             env.vignette,
         );
         queue.submit([encoder.finish()]);
+        self.occlusion = occlusion;
         self.last_stats = stats;
         stats
     }

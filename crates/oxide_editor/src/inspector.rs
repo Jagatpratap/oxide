@@ -80,7 +80,7 @@ enum Edit {
     Reset(ComponentId),
     Name(String),
     Active(bool),
-    Static(bool),
+    Static(oxide_scene::StaticEditorFlags),
     Tag(String),
     Layer(u8),
     Position(Vector3),
@@ -136,10 +136,30 @@ fn header(ui: &mut egui::Ui, w: &World, id: GameObjectId, edits: &mut Vec<(Edit,
         if r.changed() {
             edits.push((Edit::Name(name), key(id, "name")));
         }
-        let mut s = o.is_static;
-        if ui.checkbox(&mut s, "Static").changed() {
-            edits.push((Edit::Static(s), key(id, "static")));
+        // Unity's Static checkbox (all flags) plus the per-system flags dropdown.
+        use oxide_scene::StaticEditorFlags as F;
+        let flags = o.static_flags;
+        let mut all = flags == F::EVERYTHING;
+        let r = ui.add(
+            egui::Checkbox::new(&mut all, "Static")
+                .indeterminate(flags != F::NOTHING && flags != F::EVERYTHING),
+        );
+        if r.changed() {
+            let f = if all { F::EVERYTHING } else { F::NOTHING };
+            edits.push((Edit::Static(f), key(id, "static")));
         }
+        ui.menu_button("▾", |ui| {
+            for (flag, name) in F::ALL {
+                let mut on = flags.contains(flag);
+                if ui.checkbox(&mut on, name).changed() {
+                    let mut f = flags;
+                    f.set(flag, on);
+                    edits.push((Edit::Static(f), key(id, "static")));
+                }
+            }
+        })
+        .response
+        .on_hover_text("Static flags");
     });
     ui.horizontal(|ui| {
         ui.label("Tag");
@@ -966,7 +986,7 @@ fn apply(st: &mut EditorState, w: &mut World, id: GameObjectId, edits: Vec<(Edit
             Edit::Active(a) => w.set_active(id, a),
             Edit::Static(s) => {
                 if let Some(o) = w.get_mut(id) {
-                    o.is_static = s;
+                    o.static_flags = s;
                 }
             }
             Edit::Tag(t) => {

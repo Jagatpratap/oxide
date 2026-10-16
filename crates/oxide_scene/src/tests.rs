@@ -244,3 +244,39 @@ fn panicking_script_does_not_take_the_engine_down() {
     assert!(LOG.lock().unwrap().iter().any(|l| l == "b update"));
     assert!(w.get_component::<Panicker>(a).is_some());
 }
+
+#[test]
+fn static_flags_round_trip_and_read_old_bool() {
+    let mut w = world();
+    let a = w.create("Wall");
+    let mut f = StaticEditorFlags::NOTHING;
+    f.set(StaticEditorFlags::OCCLUDER_STATIC, true);
+    f.set(StaticEditorFlags::OCCLUDEE_STATIC, true);
+    w.get_mut(a).unwrap().static_flags = f;
+    w.create("Dynamic");
+    let yaml = w.serialize(&[], "S").to_yaml().unwrap();
+    let back = SceneFile::from_yaml(&yaml).unwrap();
+    let mut w2 = world();
+    w2.spawn(&back, None);
+    let wall = w2.find("Wall").unwrap();
+    assert_eq!(w2.get(wall).unwrap().static_flags, f);
+    assert_eq!(
+        w2.get(wall).unwrap().static_flags.names(),
+        ["Occluder Static", "Occludee Static"]
+    );
+    assert!(!w2.get(w2.find("Dynamic").unwrap()).unwrap().is_static());
+
+    // Scenes saved before the flags existed wrote `static: true`.
+    let old = yaml.replace(&format!("static: {}", f.0), "static: true");
+    assert_ne!(old, yaml);
+    let mut w3 = world();
+    w3.spawn(&SceneFile::from_yaml(&old).unwrap(), None);
+    assert_eq!(
+        w3.get(w3.find("Wall").unwrap()).unwrap().static_flags,
+        StaticEditorFlags::EVERYTHING
+    );
+    assert_eq!(
+        StaticEditorFlags::from_name("occluder_static"),
+        Some(StaticEditorFlags::OCCLUDER_STATIC)
+    );
+}

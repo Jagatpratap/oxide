@@ -42,6 +42,8 @@ pub struct Camera {
     pub culling_mask: u32,
     /// Post-processing (tonemapping, bloom, ...) on this camera.
     pub post_processing: bool,
+    /// Skip renderers hidden behind occluders (Unity `Camera.useOcclusionCulling`).
+    pub use_occlusion_culling: bool,
 }
 
 impl Default for Camera {
@@ -58,6 +60,7 @@ impl Default for Camera {
             viewport_rect: Vector4::new(0.0, 0.0, 1.0, 1.0),
             culling_mask: u32::MAX,
             post_processing: true,
+            use_occlusion_culling: true,
         }
     }
 }
@@ -165,6 +168,9 @@ pub struct MeshRenderer {
     pub materials: Vec<Handle<Material>>,
     pub cast_shadows: ShadowCastingMode,
     pub receive_shadows: bool,
+    /// Occluders may hide this renderer even when its object isn't Occludee Static
+    /// (Unity `Renderer.allowOcclusionWhenDynamic`).
+    pub allow_occlusion_when_dynamic: bool,
 }
 
 impl Default for MeshRenderer {
@@ -173,6 +179,7 @@ impl Default for MeshRenderer {
             materials: vec![Handle::from_path(oxide_assets::DEFAULT_MATERIAL)],
             cast_shadows: ShadowCastingMode::On,
             receive_shadows: true,
+            allow_occlusion_when_dynamic: true,
         }
     }
 }
@@ -193,7 +200,7 @@ impl Component for MeshRenderer {
 }
 
 /// Unity `SkinnedMeshRenderer`: a mesh deformed by bone transforms.
-#[derive(Clone, Debug, Default, Reflect)]
+#[derive(Clone, Debug, Reflect)]
 pub struct SkinnedMeshRenderer {
     pub mesh: Option<Handle<Mesh>>,
     pub materials: Vec<Handle<Material>>,
@@ -202,6 +209,22 @@ pub struct SkinnedMeshRenderer {
     pub root_bone: Option<GameObjectId>,
     pub cast_shadows: ShadowCastingMode,
     pub receive_shadows: bool,
+    /// Unity `Renderer.allowOcclusionWhenDynamic`.
+    pub allow_occlusion_when_dynamic: bool,
+}
+
+impl Default for SkinnedMeshRenderer {
+    fn default() -> Self {
+        Self {
+            mesh: None,
+            materials: Vec::new(),
+            bones: Vec::new(),
+            root_bone: None,
+            cast_shadows: ShadowCastingMode::On,
+            receive_shadows: true,
+            allow_occlusion_when_dynamic: true,
+        }
+    }
 }
 
 impl Component for SkinnedMeshRenderer {
@@ -368,4 +391,69 @@ impl Component for LODGroup {
 pub fn lod_level(lods: &[Lod], relative_height: f32) -> Option<usize> {
     lods.iter()
         .position(|l| relative_height >= l.screen_relative_height)
+}
+
+/// Unity `OcclusionPortal`: a box that hides what is behind it while closed (a door, a
+/// gate). Open it when the door opens. <https://docs.unity3d.com/Manual/class-OcclusionPortal.html>
+#[derive(Clone, Debug, Reflect)]
+pub struct OcclusionPortal {
+    pub open: bool,
+    /// Box center, local to the object.
+    pub center: Vector3,
+    pub size: Vector3,
+}
+
+impl Default for OcclusionPortal {
+    fn default() -> Self {
+        Self {
+            open: true,
+            center: Vector3::ZERO,
+            size: Vector3::ONE,
+        }
+    }
+}
+
+impl Component for OcclusionPortal {
+    fn on_draw_gizmos(
+        &self,
+        world: &crate::World,
+        id: GameObjectId,
+        gizmos: &mut crate::component::Gizmos,
+    ) {
+        gizmos.color = if self.open {
+            Color::rgb(0.3, 1.0, 0.4)
+        } else {
+            Color::rgb(1.0, 0.35, 0.3)
+        };
+        let m = world.local_to_world(id);
+        let h = self.size * 0.5;
+        let corner = |i: usize| {
+            let s = Vector3::new(
+                if i & 1 == 0 { -1.0 } else { 1.0 },
+                if i & 2 == 0 { -1.0 } else { 1.0 },
+                if i & 4 == 0 { -1.0 } else { 1.0 },
+            );
+            m.transform_point3(self.center + h * s)
+        };
+        for (a, b) in [
+            (0, 1),
+            (2, 3),
+            (4, 5),
+            (6, 7),
+            (0, 2),
+            (1, 3),
+            (4, 6),
+            (5, 7),
+            (0, 4),
+            (1, 5),
+            (2, 6),
+            (3, 7),
+        ] {
+            gizmos.draw_line(corner(a), corner(b));
+        }
+    }
+
+    fn allow_multiple(&self) -> bool {
+        false
+    }
 }

@@ -10,6 +10,7 @@ pub mod input_map;
 pub mod mcp_animation;
 pub mod mcp_audio;
 pub mod mcp_network;
+pub mod mcp_occlusion;
 pub mod mcp_physics;
 pub mod mcp_prefabs;
 pub mod mcp_terrain;
@@ -189,8 +190,8 @@ pub mod prelude {
     };
     pub use oxide_scene::{
         Camera, CameraClearFlags, Collision, Component, Ctx, GameObjectId, Light, LightShadows,
-        LightType, MeshFilter, MeshRenderer, Projection, RenderSettings, ShadowCastingMode,
-        SkinnedMeshRenderer, Space, World,
+        LightType, MeshFilter, MeshRenderer, OcclusionPortal, Projection, RenderSettings,
+        ShadowCastingMode, SkinnedMeshRenderer, Space, StaticEditorFlags, World,
     };
     pub use oxide_standard::*;
 }

@@ -579,3 +579,121 @@ pub fn open_world(world: &mut World) {
     );
     world.get_mut(glow).unwrap().name = "Campfire Light".into();
 }
+
+/// A city grid for occlusion culling: Occluder Static buildings hide the streets behind
+/// them, and a closed Occlusion Portal (a gate) hides a walled courtyard.
+pub fn city(world: &mut World) {
+    let cam = sun_and_camera(world);
+    grid_ground(world, 600.0);
+    let walls = mat(world, "Concrete", Color::rgb(0.62, 0.6, 0.57), 0.0, 0.3);
+    let props = [
+        mat(world, "Red", Color::rgb(0.85, 0.2, 0.15), 0.0, 0.5),
+        mat(world, "Yellow", Color::rgb(0.95, 0.8, 0.2), 0.0, 0.5),
+        mat(world, "Blue", Color::rgb(0.2, 0.45, 0.9), 0.3, 0.6),
+    ];
+    let occluder = StaticEditorFlags::EVERYTHING;
+    // 12×12 blocks of 20 m buildings with 10 m streets, centered on the origin.
+    let (blocks, pitch) = (12, 30.0);
+    let half = (blocks - 1) as f32 * pitch * 0.5;
+    let mut rng = 0x2545_f491_u32;
+    let mut rand = move || {
+        rng ^= rng << 13;
+        rng ^= rng >> 17;
+        rng ^= rng << 5;
+        (rng % 10_000) as f32 / 10_000.0
+    };
+    for bz in 0..blocks {
+        for bx in 0..blocks {
+            let c = Vector3::new(bx as f32 * pitch - half, 0.0, bz as f32 * pitch - half);
+            // Leave the center block open for the courtyard.
+            if bx == blocks / 2 && bz == blocks / 2 {
+                continue;
+            }
+            let height = 12.0 + rand() * 45.0;
+            let b = create_primitive(world, PrimitiveType::Cube);
+            let o = world.get_mut(b).unwrap();
+            o.name = format!("Building {bx},{bz}");
+            o.static_flags = occluder;
+            set_local(
+                world,
+                b,
+                c + Vector3::Y * height * 0.5,
+                Vector3::ZERO,
+                Vector3::new(20.0, height, 20.0),
+            );
+            set_material(world, b, walls.clone());
+            // Props along the street corner of each block.
+            for k in 0..4 {
+                let p = create_primitive(
+                    world,
+                    if k % 2 == 0 {
+                        PrimitiveType::Sphere
+                    } else {
+                        PrimitiveType::Cube
+                    },
+                );
+                world.get_mut(p).unwrap().name = format!("Prop {bx},{bz},{k}");
+                let at = c + Vector3::new(11.5 + rand() * 2.0, 0.6, -10.0 + k as f32 * 6.0);
+                set_local(world, p, at, Vector3::ZERO, Vector3::splat(1.2));
+                set_material(world, p, props[k % 3].clone());
+            }
+        }
+    }
+    // A walled courtyard in the center block with a gate (an Occlusion Portal) facing -Z.
+    let mid = (blocks / 2) as f32 * pitch - half;
+    let yard = Vector3::new(mid, 0.0, mid);
+    for (offset, size) in [
+        (Vector3::new(0.0, 4.0, 10.0), Vector3::new(20.0, 8.0, 0.6)),
+        (Vector3::new(-10.0, 4.0, 0.0), Vector3::new(0.6, 8.0, 20.0)),
+        (Vector3::new(10.0, 4.0, 0.0), Vector3::new(0.6, 8.0, 20.0)),
+        (Vector3::new(-6.5, 4.0, -10.0), Vector3::new(7.0, 8.0, 0.6)),
+        (Vector3::new(6.5, 4.0, -10.0), Vector3::new(7.0, 8.0, 0.6)),
+    ] {
+        let w = create_primitive(world, PrimitiveType::Cube);
+        let o = world.get_mut(w).unwrap();
+        o.name = "Courtyard Wall".into();
+        o.static_flags = occluder;
+        set_local(world, w, yard + offset, Vector3::ZERO, size);
+        set_material(world, w, walls.clone());
+    }
+    let gate = world.create_at(
+        "Gate",
+        yard + Vector3::new(0.0, 4.0, -10.0),
+        Quaternion::IDENTITY,
+    );
+    world.add_component(
+        gate,
+        OcclusionPortal {
+            open: false,
+            center: Vector3::ZERO,
+            size: Vector3::new(6.0, 8.0, 0.4),
+        },
+    );
+    // The door the portal stands for; open the portal when the door opens.
+    let door = create_primitive(world, PrimitiveType::Cube);
+    world.get_mut(door).unwrap().name = "Door".into();
+    world.set_parent(door, Some(gate), false).unwrap();
+    set_local(
+        world,
+        door,
+        Vector3::ZERO,
+        Vector3::ZERO,
+        Vector3::new(6.0, 8.0, 0.6),
+    );
+    let wood = mat(world, "Door", Color::rgb(0.45, 0.3, 0.18), 0.0, 0.35);
+    set_material(world, door, wood);
+    for i in 0..9 {
+        let p = create_primitive(world, PrimitiveType::Sphere);
+        world.get_mut(p).unwrap().name = format!("Courtyard Prop {i}");
+        let at = yard + Vector3::new((i % 3) as f32 * 5.0 - 5.0, 1.0, (i / 3) as f32 * 5.0 - 3.0);
+        set_local(world, p, at, Vector3::ZERO, Vector3::splat(2.0));
+        set_material(world, p, props[i % 3].clone());
+    }
+    // Looking down the street towards the gate.
+    world.set_position(cam, yard + Vector3::new(0.0, 1.7, -14.0));
+    world.look_at(cam, yard + Vector3::Y * 1.7, Vector3::Y);
+    world
+        .get_component_mut::<Camera>(cam)
+        .unwrap()
+        .far_clip_plane = 2000.0;
+}

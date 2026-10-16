@@ -258,7 +258,10 @@ editing, Undo History window, Preferences/Project Settings windows, project laun
   ([Color and HDR](https://docs.unity3d.com/Manual/graphics-color.html))
 - ◐ Anti-aliasing: MSAA, FXAA, SMAA, TAA
   ([URP anti-aliasing](https://docs.unity3d.com/Manual/urp/anti-aliasing.html))
-- ☐ Occlusion culling (GPU Hi-Z first, baked PVS later)
+- ✔ Occlusion culling: runtime CPU occluder depth buffer + min-depth pyramid (no bake, works
+  with streaming); Occluder/Occludee Static flags, `Camera.useOcclusionCulling`,
+  `allowOcclusionWhenDynamic`, conservative terrain occluders, Occlusion Portals. Baked PVS /
+  Occlusion Areas not planned unless runtime culling proves insufficient
   ([Occlusion culling](https://docs.unity3d.com/Manual/OcclusionCulling-landing.html))
 
 **Exit:** Sponza-class glTF scene renders with PBR, multiple cameras, transparent sorting, 60 fps on a laptop GPU.
@@ -435,7 +438,7 @@ needs, and where the engine is:
 | Vehicle physics (WheelCollider) | ✔ | ✔ (vehicles) | ☑ Rapier ray-cast vehicles, CarController |
 | Character controller + animation | | ✔ | ◐ CharacterController, Animator, 1D blend trees; missing 2D blend trees, root motion, IK, humanoid retargeting |
 | Terrain + foliage | ✔ | ✔ | ◐ chunked LOD terrain, trees; missing grass/details, sculpt tools, streaming |
-| Big worlds (8×8 km) | | ✔ | ◐ LOD Groups (+ `_LODn` model import, LOD bias); occlusion culling, world streaming ☐ |
+| Big worlds (8×8 km) | | ✔ | ◐ LOD Groups (+ `_LODn` model import, LOD bias); occlusion culling ✔; world streaming ☐ |
 | Weapons, hits, ragdolls | | ✔ | ◐ raycasts and joints exist; ragdoll wizard, hit boxes ☐ |
 | Game scripts in the editor | ✔ | ✔ | ☑ project Scripts crate, hot reload in Edit and Play mode |
 | HUD, menus | ✔ | ✔ | ◐ Canvas UI + immediate GUI; UI Toolkit-style layout ☐ |

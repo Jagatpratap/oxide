@@ -29,7 +29,9 @@ pub use resources::Resources;
 pub use serialize::{ComponentData, ObjectData, SceneFile};
 pub use system::{DebugDraw, DebugLine, System};
 pub use timers::Timers;
-pub use world::{GameObject, LayerNames, Phase, ReloadedComponent, Space, Transform, World};
+pub use world::{
+    GameObject, LayerNames, Phase, ReloadedComponent, Space, StaticEditorFlags, Transform, World,
+};
 
 /// Registers the built-in components with their Add Component menu paths.
 pub fn register_builtin(reg: &mut ComponentRegistry) {
@@ -39,6 +41,7 @@ pub fn register_builtin(reg: &mut ComponentRegistry) {
     reg.register::<MeshRenderer>("Mesh/Mesh Renderer");
     reg.register::<SkinnedMeshRenderer>("Mesh/Skinned Mesh Renderer");
     reg.register::<LODGroup>("Rendering/LOD Group");
+    reg.register::<OcclusionPortal>("Rendering/Occlusion Portal");
 }
 
 #[cfg(test)]

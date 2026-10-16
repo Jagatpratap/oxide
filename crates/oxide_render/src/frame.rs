@@ -32,6 +32,8 @@ pub struct CameraView {
     pub viewport: [f32; 4],
     pub clear: ClearMode,
     pub culling_mask: u32,
+    /// Skip draws hidden behind occluders (Unity `Camera.useOcclusionCulling`).
+    pub occlusion_culling: bool,
 }
 
 impl CameraView {
@@ -114,6 +116,10 @@ pub struct DrawItem {
     pub layer: u8,
     /// Offset into [`RenderFrame::joints`] for skinned meshes.
     pub joint_offset: Option<u32>,
+    /// Hides what is behind it (Occluder Static).
+    pub occluder: bool,
+    /// May be hidden by occluders.
+    pub occludee: bool,
 }
 
 /// One terrain chunk drawn with the terrain (splat) shader.
@@ -124,6 +130,8 @@ pub struct TerrainDraw {
     pub mesh: AssetId,
     pub model: Matrix4x4,
     pub receive_shadows: bool,
+    /// Simplified mesh that never rises above the real ground, used as an occluder.
+    pub occluder: Option<AssetId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -209,6 +217,9 @@ pub struct RenderFrame {
     pub lights: Vec<PunctualLight>,
     pub draws: Vec<DrawItem>,
     pub terrain_draws: Vec<TerrainDraw>,
+    /// Boxes that occlude like solid geometry (closed Occlusion Portals): a unit cube
+    /// centered on the origin under each matrix.
+    pub occluder_boxes: Vec<Matrix4x4>,
     pub particles: Vec<ParticleBatch>,
 
     /// World-space skinning matrices (bone local-to-world × bind pose).
@@ -242,4 +253,10 @@ pub struct RenderStats {
     pub culled: u32,
     pub shadow_draw_calls: u32,
     pub cameras: u32,
+    /// Draws and terrain chunks skipped because occluders hide them.
+    pub occlusion_culled: u32,
+    pub occluders: u32,
+    pub occluder_triangles: u32,
+    /// CPU time spent rasterizing occluders and testing bounds.
+    pub occlusion_ms: f32,
 }

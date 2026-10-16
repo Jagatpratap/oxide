@@ -155,6 +155,7 @@ impl SceneCamera {
             viewport: [0.0, 0.0, 1.0, 1.0],
             clear: ClearMode::Sky,
             culling_mask: u32::MAX,
+            occlusion_culling: true,
         }
     }
 }

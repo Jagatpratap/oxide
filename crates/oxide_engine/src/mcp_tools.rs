@@ -109,7 +109,7 @@ pub fn object_json(w: &World, id: GameObjectId) -> Json {
         "active_in_hierarchy": o.active_in_hierarchy(),
         "tag": o.tag,
         "layer": o.layer,
-        "static": o.is_static,
+        "static": o.static_flags.names(),
         "transform": {
             "local_position": r(t.local_position),
             "local_euler_angles": r(t.local_rotation.euler_angles()),
@@ -368,6 +368,7 @@ pub fn build_server(bus: Arc<Bus>) -> McpServer {
                     rotation: Quaternion::look_rotation((t - p).normalize_or(Vector3::Z), Vector3::Y),
                     projection: ProjectionKind::Perspective { fov },
                     near: 0.1, far: 5000.0, viewport: [0.0, 0.0, 1.0, 1.0], clear: ClearMode::Sky, culling_mask: u32::MAX,
+                    occlusion_culling: true,
                 }])
             } else if args.contains_key("camera") {
                 let id = tri!(obj_arg(args, &e.world, "camera"));
@@ -528,7 +529,7 @@ pub fn build_server(bus: Arc<Bus>) -> McpServer {
             schema(
                 json!({
                     "object": {}, "name": { "type": "string" }, "active": { "type": "boolean" }, "tag": { "type": "string" },
-                    "layer": { "type": "integer", "minimum": 0, "maximum": 31 }, "static": { "type": "boolean" }, "parent": {},
+                    "layer": { "type": "integer", "minimum": 0, "maximum": 31 }, "static": { "description": "true/false (all or no static flags), or a list of StaticEditorFlags names such as [\"Occluder Static\", \"Occludee Static\"]" }, "parent": {},
                     "position": { "type": "array" }, "euler_angles": { "type": "array" }, "scale": { "type": "array" },
                     "space": { "type": "string", "enum": ["local", "world"] }
                 }),
@@ -573,8 +574,8 @@ pub fn build_server(bus: Arc<Bus>) -> McpServer {
             if let Some(l) = args.get("layer").and_then(Json::as_u64) {
                 o.layer = l as u8
             }
-            if let Some(st) = args.get("static").and_then(Json::as_bool) {
-                o.is_static = st
+            if let Some(st) = args.get("static") {
+                o.static_flags = tri!(static_flags_arg(st).map_err(ToolResult::error));
             }
             if !world_space {
                 if let Some(p) = pos {
@@ -1047,6 +1048,7 @@ pub fn build_server(bus: Arc<Bus>) -> McpServer {
     crate::mcp_prefabs::register(&mut s, bus);
     crate::mcp_audio::register(&mut s, bus);
     crate::mcp_network::register(&mut s, bus);
+    crate::mcp_occlusion::register(&mut s, bus);
     crate::mcp_animation::register(&mut s, bus);
     crate::mcp_terrain::register(&mut s, bus);
     crate::mcp_terrain::register_effects(&mut s, bus);
@@ -1066,3 +1068,31 @@ pub fn build_server(bus: Arc<Bus>) -> McpServer {
 
 #[allow(dead_code)]
 fn _scene_file_type(_: SceneFile) {}
+
+/// `true`/`false`, a bit mask, or a list of flag names → [`StaticEditorFlags`].
+fn static_flags_arg(v: &Json) -> Result<oxide_scene::StaticEditorFlags, String> {
+    use oxide_scene::StaticEditorFlags as F;
+    match v {
+        Json::Bool(true) => Ok(F::EVERYTHING),
+        Json::Bool(false) => Ok(F::NOTHING),
+        Json::Number(n) => n
+            .as_u64()
+            .map(|b| F(b as u32 & F::EVERYTHING.0))
+            .ok_or_else(|| "static: expected a non-negative integer".into()),
+        Json::Array(names) => {
+            let mut f = F::NOTHING;
+            for n in names {
+                let name = n.as_str().ok_or("static: flag names must be strings")?;
+                let flag = F::from_name(name).ok_or_else(|| {
+                    format!(
+                        "static: unknown flag `{name}` (expected one of: {})",
+                        F::ALL.map(|(_, n)| n).join(", ")
+                    )
+                })?;
+                f.set(flag, true);
+            }
+            Ok(f)
+        }
+        _ => Err("static: expected true/false or a list of flag names".into()),
+    }
+}

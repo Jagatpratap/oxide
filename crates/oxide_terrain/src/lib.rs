@@ -56,6 +56,65 @@ impl Component for Terrain {
 struct Chunk {
     center: Vector3,
     lods: [Handle<Mesh>; LODS],
+    /// Occluder meshes for near and far chunks (see [`occluder_mesh`]).
+    occluders: [Handle<Mesh>; 2],
+}
+
+/// Grid step, in heightmap cells, of the near and far occluder meshes.
+const OCCLUDER_STEPS: [u32; 2] = [4, 16];
+
+/// A coarse chunk surface for occlusion culling. Each vertex takes the lowest height within
+/// one step around it, so the surface never rises above the real ground and can't hide
+/// anything that is actually visible.
+fn occluder_mesh(d: &TerrainData, cx: u32, cz: u32, step: u32) -> Mesh {
+    let n = d.resolution;
+    let x0 = cx * CHUNK_CELLS;
+    let z0 = cz * CHUNK_CELLS;
+    let x1 = (x0 + CHUNK_CELLS).min(n - 1);
+    let z1 = (z0 + CHUNK_CELLS).min(n - 1);
+    let axis = |a: u32, b: u32| -> Vec<u32> {
+        (a..=b)
+            .step_by(step as usize)
+            .chain(std::iter::once(b))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    };
+    let (xs, zs) = (axis(x0, x1), axis(z0, z1));
+    let cell = Vector2::new(d.size.x / (n - 1) as f32, d.size.z / (n - 1) as f32);
+    let lowest = |x: u32, z: u32| {
+        let mut h = f32::MAX;
+        for sz in z.saturating_sub(step)..=(z + step).min(n - 1) {
+            for sx in x.saturating_sub(step)..=(x + step).min(n - 1) {
+                h = h.min(d.sample(sx, sz));
+            }
+        }
+        h * d.size.y
+    };
+    let mut m = Mesh {
+        name: format!("Terrain occluder {cx},{cz} step{step}"),
+        ..Default::default()
+    };
+    let w = xs.len() as u32;
+    for &z in &zs {
+        for &x in &xs {
+            m.vertices.push(Vector3::new(
+                x as f32 * cell.x,
+                lowest(x, z),
+                z as f32 * cell.y,
+            ));
+        }
+    }
+    for j in 0..zs.len() as u32 - 1 {
+        for i in 0..w - 1 {
+            let bl = j * w + i;
+            m.indices
+                .extend_from_slice(&[bl, bl + w, bl + w + 1, bl, bl + w + 1, bl + 1]);
+        }
+    }
+    m.submeshes = vec![0..m.indices.len() as u32];
+    m.recalculate_bounds();
+    m
 }
 
 /// Generated chunk meshes per TerrainData.
@@ -179,7 +238,18 @@ fn build(assets: &mut AssetServer, id: AssetId) -> Option<(u64, Vec<Chunk>)> {
                 .get(&lods[0])
                 .map(|m| m.bounds.center)
                 .unwrap_or_default();
-            chunks.push(Chunk { center: b, lods });
+            let occluders: [Handle<Mesh>; 2] = std::array::from_fn(|i| {
+                let step = OCCLUDER_STEPS[i];
+                assets.meshes.insert(
+                    format!("terrain:{}/{cx}_{cz}_occluder{step}", id.0),
+                    occluder_mesh(&d, cx, cz, step),
+                )
+            });
+            chunks.push(Chunk {
+                center: b,
+                lods,
+                occluders,
+            });
         }
     }
     Some((d.version, chunks))
@@ -291,6 +361,7 @@ pub fn extract(
                 mesh: c.lods[lod].id(),
                 model,
                 receive_shadows: true,
+                occluder: Some(c.occluders[(lod > 1) as usize].id()),
             });
             if t.cast_shadows {
                 draws.push(DrawItem {
@@ -303,6 +374,8 @@ pub fn extract(
                     receive_shadows: false,
                     layer,
                     joint_offset: None,
+                    occluder: false,
+                    occludee: false,
                 });
             }
         }
@@ -351,6 +424,8 @@ pub fn extract(
                     receive_shadows: true,
                     layer,
                     joint_offset: None,
+                    occluder: false,
+                    occludee: true,
                 });
             }
         }

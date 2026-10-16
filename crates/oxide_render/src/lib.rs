@@ -4,12 +4,14 @@
 //! - [`frame`]: the plain-data [`RenderFrame`] the engine extracts from the scene.
 //! - [`renderer`]: the built-in forward renderer (PBR, cascaded shadows, sky, fog, instancing).
 //! - [`post`]: bloom and tonemapping.
+//! - [`occlusion`]: CPU occlusion culling (occluder depth buffer + min-depth pyramid).
 //! - [`capture`]: offscreen rendering and readback (screenshots, MCP, tests).
 
 pub mod capture;
 pub mod frame;
 pub mod gpu;
 pub mod gpu_assets;
+pub mod occlusion;
 pub mod particles;
 pub mod post;
 pub mod renderer;

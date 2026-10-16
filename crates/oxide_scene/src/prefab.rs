@@ -28,7 +28,7 @@ pub enum ObjectProperty {
     Active(bool),
     Tag(String),
     Layer(u8),
-    Static(bool),
+    Static(u32),
     Position([f32; 3]),
     Rotation([f32; 4]),
     Scale([f32; 3]),
@@ -136,8 +136,8 @@ pub fn overrides(instance: &SceneFile, prefab: &SceneFile) -> Vec<PrefabOverride
         if od.layer != po.layer {
             prop(P::Layer(od.layer));
         }
-        if od.is_static != po.is_static {
-            prop(P::Static(od.is_static));
+        if od.static_flags != po.static_flags {
+            prop(P::Static(od.static_flags));
         }
         if !close(&od.position, &po.position) {
             prop(P::Position(od.position));
@@ -219,7 +219,7 @@ pub fn apply_overrides(prefab: &SceneFile, ovs: &[PrefabOverride]) -> SceneFile 
                     P::Active(v) => o.active = *v,
                     P::Tag(v) => o.tag = v.clone(),
                     P::Layer(v) => o.layer = *v,
-                    P::Static(v) => o.is_static = *v,
+                    P::Static(v) => o.static_flags = *v,
                     P::Position(v) => o.position = *v,
                     P::Rotation(v) => o.rotation = *v,
                     P::Scale(v) => o.scale = *v,
@@ -493,7 +493,7 @@ impl World {
                 o.name = od.name.clone();
                 o.tag = od.tag.clone();
                 o.layer = od.layer;
-                o.is_static = od.is_static;
+                o.static_flags = crate::StaticEditorFlags(od.static_flags);
                 o.transform.local_position = oxide_math::Vector3::from_array(od.position);
                 o.transform.local_rotation =
                     oxide_math::Quaternion::from_array(od.rotation).normalize();

@@ -27,6 +27,29 @@ fn yes() -> bool {
     true
 }
 
+fn is_zero(v: &u32) -> bool {
+    *v == 0
+}
+
+fn static_flags<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Flags {
+        Bool(bool),
+        Bits(u32),
+    }
+    Ok(match Flags::deserialize(d)? {
+        Flags::Bool(b) => {
+            if b {
+                crate::StaticEditorFlags::EVERYTHING.0
+            } else {
+                0
+            }
+        }
+        Flags::Bits(v) => v,
+    })
+}
+
 fn untagged() -> String {
     "Untagged".into()
 }
@@ -42,8 +65,14 @@ pub struct ObjectData {
     pub tag: String,
     #[serde(default)]
     pub layer: u8,
-    #[serde(default, rename = "static")]
-    pub is_static: bool,
+    /// [`StaticEditorFlags`](crate::StaticEditorFlags) bits (`true` in older files = all).
+    #[serde(
+        default,
+        rename = "static",
+        deserialize_with = "static_flags",
+        skip_serializing_if = "is_zero"
+    )]
+    pub static_flags: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<u64>,
     pub position: [f32; 3],
@@ -178,7 +207,7 @@ impl World {
                     active: o.active_self(),
                     tag: o.tag.clone(),
                     layer: o.layer,
-                    is_static: o.is_static,
+                    static_flags: o.static_flags.0,
                     parent: o.parent().and_then(|p| file_ids.get(&p).copied()),
                     position: t.local_position.to_array(),
                     rotation: t.local_rotation.to_array(),
@@ -217,7 +246,7 @@ impl World {
             let o = self.get_mut(id).expect("created");
             o.tag = od.tag.clone();
             o.layer = od.layer;
-            o.is_static = od.is_static;
+            o.static_flags = crate::StaticEditorFlags(od.static_flags);
             o.prefab_source = od.prefab.clone();
             o.prefab_link = od.prefab_id;
             o.transform.local_position = Vector3::from_array(od.position);

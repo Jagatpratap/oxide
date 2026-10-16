@@ -194,8 +194,7 @@ pub fn instantiate_model(world: &mut World, model: &Handle<Model>) -> Option<Gam
                         materials: n.materials.clone(),
                         bones,
                         root_bone: skin.joints.first().and_then(|&j| ids[j]),
-                        cast_shadows: oxide_scene::ShadowCastingMode::On,
-                        receive_shadows: true,
+                        ..Default::default()
                     },
                 );
             }
