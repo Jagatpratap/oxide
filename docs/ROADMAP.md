@@ -410,8 +410,16 @@ web/mobile, dedicated server.
 ### P11 — Extended (after a usable 1.0)
 - ☐ XR via OpenXR
   ([XR](https://docs.unity3d.com/Manual/XR.html))
-- ☐ Networking / multiplayer (netcode, relay)
-  ([Multiplayer](https://docs.unity3d.com/Manual/multiplayer.html))
+- ◐ Networking / multiplayer
+  ([Multiplayer](https://docs.unity3d.com/Manual/multiplayer.html),
+  [Netcode for GameObjects](https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@latest))
+  - ☑ `oxide_network` over UDP (renet): host / server / client, NetworkManager with a player
+    prefab, NetworkObject spawn/despawn from prefabs (late joiners get everything),
+    NetworkTransform (server or owner authority, interpolation), NetworkRigidbody,
+    ServerRpc / ClientRpc, client shuts down cleanly when the server goes away; MCP `network`
+  - ☐ NetworkVariables, client-side prediction and reconciliation, lag compensation for hits,
+    interest management (only send what's near), relay / NAT punch-through, lobby,
+    headless dedicated-server build
 - ☐ HDRP-class high-end features: ray tracing, volumetrics, SSR, SSGI, hair/skin, water
 - ☐ Embedded/consoles
 
@@ -433,12 +441,12 @@ needs, and where the engine is:
 | HUD, menus | ✔ | ✔ | ◐ Canvas UI + immediate GUI; UI Toolkit-style layout ☐ |
 | Audio (engine, 3D, mixer) | ✔ | ✔ | ◐ 3D sources, car audio; mixer ☐ |
 | AI (opponents, bots) | ✔ | ✔ | ◐ WaypointCircuit + CarAIControl racing AI; NavMesh ☐ |
-| Multiplayer | ◐ | ✔ | ☐ netcode (server-authoritative, prediction, interpolation), dedicated server |
+| Multiplayer | ◐ | ✔ | ◐ UDP netcode: spawning, NetworkTransform with interpolation, NetworkRigidbody, RPCs; prediction, lag compensation, interest management, dedicated server ☐ |
 | Ship the game | ✔ | ✔ | ◐ desktop player builds (macOS/Windows/Linux); Android/iOS ☐ |
 
 Build order from here: big-world rendering (LOD,
 occlusion, streaming) → animation (2D blend trees, root motion, IK, ragdolls) → NavMesh →
-netcode and dedicated server → mobile.
+netcode (prediction, interest management) and dedicated server → mobile.
 
 ---
 

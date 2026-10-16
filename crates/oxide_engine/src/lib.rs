@@ -9,6 +9,7 @@ pub mod gui;
 pub mod input_map;
 pub mod mcp_animation;
 pub mod mcp_audio;
+pub mod mcp_network;
 pub mod mcp_physics;
 pub mod mcp_prefabs;
 pub mod mcp_terrain;
@@ -24,6 +25,7 @@ pub use oxide_audio as audio;
 pub use oxide_core as core;
 pub use oxide_input as input;
 pub use oxide_math as math;
+pub use oxide_network as network;
 pub use oxide_particles as particles;
 pub use oxide_physics as physics;
 pub use oxide_render as render;
@@ -110,6 +112,19 @@ impl Plugin for ParticlesPlugin {
     }
 }
 
+/// Multiplayer: NetworkManager, NetworkObject, NetworkTransform, RPCs.
+pub struct NetworkPlugin;
+
+impl Plugin for NetworkPlugin {
+    fn build(
+        &self,
+        world: &mut oxide_scene::World,
+        systems: &mut Vec<Box<dyn oxide_scene::System>>,
+    ) {
+        systems.push(oxide_network::install(world));
+    }
+}
+
 /// Standard assets: car controller, cameras, character controllers.
 pub struct StandardAssetsPlugin;
 
@@ -128,6 +143,7 @@ pub fn default_plugins() -> Vec<Box<dyn Plugin>> {
         Box::new(UiPlugin),
         Box::new(TerrainPlugin),
         Box::new(ParticlesPlugin),
+        Box::new(NetworkPlugin),
         Box::new(StandardAssetsPlugin),
     ]
 }
@@ -148,6 +164,10 @@ pub mod prelude {
     };
     pub use oxide_assets::{TerrainData, TerrainLayer, TreeInstance, TreePrototype};
     pub use oxide_audio::{Audio, AudioExt, AudioListener, AudioSource};
+    pub use oxide_network::{
+        HOST_CLIENT_ID, NetMode, Network, NetworkExt, NetworkManager, NetworkObject,
+        NetworkTransform,
+    };
     pub use oxide_particles::{
         BlendMode, ParticleShape, ParticleSystem, ParticlesExt, SimulationSpace,
     };

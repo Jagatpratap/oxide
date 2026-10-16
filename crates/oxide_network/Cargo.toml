@@ -1,0 +1,19 @@
+[package]
+name = "oxide_network"
+description = "Oxide multiplayer: NetworkManager, NetworkObject, NetworkTransform, RPCs over renet (UDP)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+oxide_core.workspace = true
+oxide_math.workspace = true
+oxide_scene.workspace = true
+oxide_physics.workspace = true
+serde.workspace = true
+renet = "2"
+renet_netcode = "2"
+bincode = { version = "2", features = ["serde"] }
+
+[dev-dependencies]
+oxide_assets.workspace = true

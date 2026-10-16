@@ -79,6 +79,7 @@ only when the editor is running (not with `--player`).
 | `unpack_prefab` | Unity Unpack Completely: the instance becomes plain objects, no longer linked to the prefab | yes |
 | `create_prefab_variant` | Saves a prefab instance as a variant of its prefab at `path`: a prefab that inherits from the base and keeps the instance's overrides | yes |
 | `audio_info` | Audio device availability, playing voices, master volume and loaded clips | yes |
+| `network` | Multiplayer status (mode, client id, clients, RTT, spawned network objects); optional `start` host/server/client or `stop` | yes |
 | `play_sound` | Plays an audio clip once: at a world `position` (3D, like AudioSource.PlayClipAtPoint) or 2D if omitted | yes |
 | `animator` | Reads an object's Animator (states, parameters, current state) and optionally changes it: `parameters` {name: number\|bool} (SetFloat/SetBool), `trigger` name (SetTrigger), `play` state name, `cross_fade` [state, seconds], `speed` | yes |
 | `create_terrain` | Creates a generated terrain (noise heights, auto grass/rock/sand/snow texturing, heightfield collider) | yes |

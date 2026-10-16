@@ -19,6 +19,7 @@ oxide_animation.workspace = true
 oxide_ui.workspace = true
 oxide_terrain.workspace = true
 oxide_particles.workspace = true
+oxide_network.workspace = true
 
 
 egui.workspace = true

@@ -5,9 +5,9 @@
 
 Prints the tool's text/JSON result; image results are written to --png (default /tmp/oxide.png).
 """
-import base64, json, sys, urllib.request
+import base64, json, os, sys, urllib.request
 
-URL = "http://127.0.0.1:47474/mcp"
+URL = os.environ.get("OXIDE_MCP_URL", "http://127.0.0.1:47474/mcp")
 
 def call(tool, args):
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
