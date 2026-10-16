@@ -4,24 +4,24 @@
 //! MCP `editor_execute_menu` tool all run the same [`Action`]s.
 //! Reference: <https://docs.unity3d.com/Manual/Toolbar.html>
 
+use crate::shortcuts::{Effect, Keymap};
 use crate::{Action, Create, EditorState, PlayState, Tab, Tool};
-use egui::{Key, KeyboardShortcut, Modifiers};
 use oxide_assets::PrimitiveType;
 use oxide_engine::Engine;
-use oxide_input::{CursorLockMode, Input};
 use oxide_scene::World;
 
 pub struct MenuItem {
     /// `File/Save`; a last segment of `-` is a separator.
     pub path: String,
-    pub shortcut: &'static str,
+    /// Shown next to the item (from the [`Keymap`]).
+    pub shortcut: String,
     pub action: Option<Action>,
 }
 
-fn item(path: &str, shortcut: &'static str, action: Action) -> MenuItem {
+fn item(path: &str, action: Action) -> MenuItem {
     MenuItem {
         path: path.to_owned(),
-        shortcut,
+        shortcut: String::new(),
         action: Some(action),
     }
 }
@@ -29,97 +29,19 @@ fn item(path: &str, shortcut: &'static str, action: Action) -> MenuItem {
 fn sep(menu: &str) -> MenuItem {
     MenuItem {
         path: format!("{menu}/-"),
-        shortcut: "",
+        shortcut: String::new(),
         action: None,
     }
-}
-
-#[cfg(target_os = "macos")]
-mod keys {
-    pub const NEW: &str = "⌘N";
-    pub const OPEN: &str = "⌘O";
-    pub const SAVE: &str = "⌘S";
-    pub const SAVE_AS: &str = "⇧⌘S";
-    pub const UNDO: &str = "⌘Z";
-    pub const REDO: &str = "⇧⌘Z";
-    pub const ALL: &str = "⌘A";
-    pub const DUP: &str = "⌘D";
-    pub const DEL: &str = "⌫";
-    pub const PLAY: &str = "⌘P";
-    pub const PAUSE: &str = "⇧⌘P";
-    pub const STEP: &str = "⌥⌘P";
-    pub const EMPTY: &str = "⇧⌘N";
-    pub const CHILD: &str = "⌥⇧N";
-    pub const BUILD_SETTINGS: &str = "⇧⌘B";
-    pub const BUILD_RUN: &str = "⌘B";
-    pub const PREFS: &str = "⌘,";
-    pub const REFRESH: &str = "⌘R";
-    pub const SEL_BACK: &str = "⌘[";
-    pub const SEL_FWD: &str = "⌘]";
-    pub const SAVE_SEL: [&str; 9] = [
-        "⌥⌘1", "⌥⌘2", "⌥⌘3", "⌥⌘4", "⌥⌘5", "⌥⌘6", "⌥⌘7", "⌥⌘8", "⌥⌘9",
-    ];
-    pub const LOAD_SEL: [&str; 9] = [
-        "⇧⌘1", "⇧⌘2", "⇧⌘3", "⇧⌘4", "⇧⌘5", "⇧⌘6", "⇧⌘7", "⇧⌘8", "⇧⌘9",
-    ];
-}
-
-#[cfg(not(target_os = "macos"))]
-mod keys {
-    pub const NEW: &str = "Ctrl+N";
-    pub const OPEN: &str = "Ctrl+O";
-    pub const SAVE: &str = "Ctrl+S";
-    pub const SAVE_AS: &str = "Ctrl+Shift+S";
-    pub const UNDO: &str = "Ctrl+Z";
-    pub const REDO: &str = "Ctrl+Y";
-    pub const ALL: &str = "Ctrl+A";
-    pub const DUP: &str = "Ctrl+D";
-    pub const DEL: &str = "Del";
-    pub const PLAY: &str = "Ctrl+P";
-    pub const PAUSE: &str = "Ctrl+Shift+P";
-    pub const STEP: &str = "Ctrl+Alt+P";
-    pub const EMPTY: &str = "Ctrl+Shift+N";
-    pub const CHILD: &str = "Alt+Shift+N";
-    pub const BUILD_SETTINGS: &str = "Ctrl+Shift+B";
-    pub const BUILD_RUN: &str = "Ctrl+B";
-    pub const PREFS: &str = "";
-    pub const REFRESH: &str = "Ctrl+R";
-    pub const SEL_BACK: &str = "Ctrl+[";
-    pub const SEL_FWD: &str = "Ctrl+]";
-    pub const SAVE_SEL: [&str; 9] = [
-        "Ctrl+Alt+1",
-        "Ctrl+Alt+2",
-        "Ctrl+Alt+3",
-        "Ctrl+Alt+4",
-        "Ctrl+Alt+5",
-        "Ctrl+Alt+6",
-        "Ctrl+Alt+7",
-        "Ctrl+Alt+8",
-        "Ctrl+Alt+9",
-    ];
-    pub const LOAD_SEL: [&str; 9] = [
-        "Ctrl+Shift+1",
-        "Ctrl+Shift+2",
-        "Ctrl+Shift+3",
-        "Ctrl+Shift+4",
-        "Ctrl+Shift+5",
-        "Ctrl+Shift+6",
-        "Ctrl+Shift+7",
-        "Ctrl+Shift+8",
-        "Ctrl+Shift+9",
-    ];
 }
 
 fn create_items(prefix: &str) -> Vec<MenuItem> {
     let mut v = vec![
         item(
             &format!("{prefix}Create Empty"),
-            keys::EMPTY,
             Action::Create(Create::Empty),
         ),
         item(
             &format!("{prefix}Create Empty Child"),
-            keys::CHILD,
             Action::Create(Create::EmptyChild),
         ),
     ];
@@ -133,38 +55,31 @@ fn create_items(prefix: &str) -> Vec<MenuItem> {
     ] {
         v.push(item(
             &format!("{prefix}3D Object/{}", p.name()),
-            "",
             Action::Create(Create::Primitive(p)),
         ));
     }
     v.push(item(
         &format!("{prefix}3D Object/Ragdoll..."),
-        "",
         Action::CreateRagdoll,
     ));
     v.push(item(
         &format!("{prefix}Light/Directional Light"),
-        "",
         Action::Create(Create::DirectionalLight),
     ));
     v.push(item(
         &format!("{prefix}Light/Point Light"),
-        "",
         Action::Create(Create::PointLight),
     ));
     v.push(item(
         &format!("{prefix}Light/Spot Light"),
-        "",
         Action::Create(Create::SpotLight),
     ));
     v.push(item(
         &format!("{prefix}Light/Reflection Probe"),
-        "",
         Action::Create(Create::ReflectionProbe),
     ));
     v.push(item(
         &format!("{prefix}Light/Light Probe Group"),
-        "",
         Action::Create(Create::LightProbeGroup),
     ));
     for (name, kind) in [
@@ -174,86 +89,66 @@ fn create_items(prefix: &str) -> Vec<MenuItem> {
     ] {
         v.push(item(
             &format!("{prefix}Volume/{name}"),
-            "",
             Action::Create(kind),
         ));
     }
     v.push(item(
         &format!("{prefix}Camera"),
-        "",
         Action::Create(Create::Camera),
     ));
     v
 }
 
 /// Every main-menu item, in menu order. `Component/...` comes from the component registry.
-pub fn menu_items(world: &World) -> Vec<MenuItem> {
+pub fn menu_items(world: &World, keymap: &Keymap) -> Vec<MenuItem> {
     let mut v = vec![
-        item("File/New Scene", keys::NEW, Action::NewScene),
-        item("File/Open Scene...", keys::OPEN, Action::OpenSceneDialog),
+        item("File/New Scene", Action::NewScene),
+        item("File/Open Scene...", Action::OpenSceneDialog),
         sep("File"),
-        item("File/Save", keys::SAVE, Action::SaveScene),
-        item("File/Save As...", keys::SAVE_AS, Action::SaveSceneAsDialog),
+        item("File/Save", Action::SaveScene),
+        item("File/Save As...", Action::SaveSceneAsDialog),
         sep("File"),
-        item(
-            "File/Build Settings...",
-            keys::BUILD_SETTINGS,
-            Action::BuildSettingsDialog,
-        ),
-        item(
-            "File/Build And Run",
-            keys::BUILD_RUN,
-            Action::BuildPlayer(true),
-        ),
-        item("Edit/Undo", keys::UNDO, Action::Undo),
-        item("Edit/Redo", keys::REDO, Action::Redo),
+        item("File/Build Settings...", Action::BuildSettingsDialog),
+        item("File/Build And Run", Action::BuildPlayer(true)),
+        item("Edit/Undo", Action::Undo),
+        item("Edit/Redo", Action::Redo),
         sep("Edit"),
-        item("Edit/Select All", keys::ALL, Action::SelectAll),
-        item("Edit/Duplicate", keys::DUP, Action::Duplicate),
-        item("Edit/Delete", keys::DEL, Action::Delete),
-        item("Edit/Rename", "F2", Action::Rename),
-        item("Edit/Frame Selected", "F", Action::FrameSelected),
-        item("Edit/Selection/Back", keys::SEL_BACK, Action::SelectionBack),
-        item(
-            "Edit/Selection/Forward",
-            keys::SEL_FWD,
-            Action::SelectionForward,
-        ),
+        item("Edit/Select All", Action::SelectAll),
+        item("Edit/Duplicate", Action::Duplicate),
+        item("Edit/Delete", Action::Delete),
+        item("Edit/Rename", Action::Rename),
+        item("Edit/Frame Selected", Action::FrameSelected),
+        item("Edit/Selection/Back", Action::SelectionBack),
+        item("Edit/Selection/Forward", Action::SelectionForward),
         sep("Edit/Selection"),
         sep("Edit"),
-        item("Edit/Play", keys::PLAY, Action::TogglePlay),
-        item("Edit/Pause", keys::PAUSE, Action::TogglePause),
-        item("Edit/Step", keys::STEP, Action::Step),
+        item("Edit/Play", Action::TogglePlay),
+        item("Edit/Pause", Action::TogglePause),
+        item("Edit/Step", Action::Step),
         sep("Edit"),
-        item("Edit/Tools/Hand", "Q", Action::SetTool(Tool::Hand)),
-        item("Edit/Tools/Move", "W", Action::SetTool(Tool::Move)),
-        item("Edit/Tools/Rotate", "E", Action::SetTool(Tool::Rotate)),
-        item("Edit/Tools/Scale", "R", Action::SetTool(Tool::Scale)),
-        item("Edit/Tools/Rect", "T", Action::SetTool(Tool::Rect)),
-        item(
-            "Edit/Tools/Transform",
-            "Y",
-            Action::SetTool(Tool::Transform),
-        ),
+        item("Edit/Tools/Hand", Action::SetTool(Tool::Hand)),
+        item("Edit/Tools/Move", Action::SetTool(Tool::Move)),
+        item("Edit/Tools/Rotate", Action::SetTool(Tool::Rotate)),
+        item("Edit/Tools/Scale", Action::SetTool(Tool::Scale)),
+        item("Edit/Tools/Rect", Action::SetTool(Tool::Rect)),
+        item("Edit/Tools/Transform", Action::SetTool(Tool::Transform)),
         sep("Edit"),
         item(
             "Edit/Project Settings...",
-            "",
             Action::OpenProjectSettings(crate::settings_window::Page::default()),
         ),
-        item("Edit/Preferences...", keys::PREFS, Action::OpenPreferences),
+        item("Edit/Preferences...", Action::OpenPreferences),
+        item("Edit/Shortcuts...", Action::OpenTab(Tab::Shortcuts)),
     ];
     for n in 1..=9 {
         v.push(item(
             &format!("Edit/Selection/Save Selection {n}"),
-            keys::SAVE_SEL[n - 1],
             Action::SaveSelection(n),
         ));
     }
     for n in 1..=9 {
         v.push(item(
             &format!("Edit/Selection/Load Selection {n}"),
-            keys::LOAD_SEL[n - 1],
             Action::LoadSelection(n),
         ));
     }
@@ -261,17 +156,14 @@ pub fn menu_items(world: &World) -> Vec<MenuItem> {
     v.push(sep("GameObject"));
     v.push(item(
         "GameObject/Prefab/Apply All Overrides",
-        "",
         Action::ApplyPrefab,
     ));
     v.push(item(
         "GameObject/Prefab/Revert All Overrides",
-        "",
         Action::RevertPrefab,
     ));
     v.push(item(
         "GameObject/Prefab/Unpack Completely",
-        "",
         Action::UnpackPrefab,
     ));
     let mut comps: Vec<(String, String)> = world
@@ -284,42 +176,43 @@ pub fn menu_items(world: &World) -> Vec<MenuItem> {
     for (menu, name) in comps {
         v.push(MenuItem {
             path: format!("Component/{menu}"),
-            shortcut: "",
+            shortcut: String::new(),
             action: Some(Action::AddComponent(name)),
         });
     }
     for t in Tab::ALL {
         v.push(item(
             &format!("Window/General/{}", t.title()),
-            "",
             Action::OpenTab(t),
         ));
     }
-    v.push(item("Assets/Refresh", keys::REFRESH, Action::RefreshAssets));
-    v.push(item(
-        "Assets/Recompile Scripts",
-        "",
-        Action::RecompileScripts,
-    ));
+    v.push(item("Assets/Refresh", Action::RefreshAssets));
+    v.push(item("Assets/Recompile Scripts", Action::RecompileScripts));
     for size in [100.0, 200.0, 500.0] {
         v.push(item(
             &format!("Tools/World Streaming/Split Scene into {size} m Cells"),
-            "",
             Action::SplitIntoCells(size),
         ));
     }
     v.push(item(
         "Window/Rendering/Lighting/Generate Lighting",
-        "",
         Action::GenerateLighting,
     ));
     v.push(item(
         "Window/Rendering/Lighting/Clear Baked Data",
-        "",
         Action::ClearBakedLighting,
     ));
     v.push(sep("Window"));
-    v.push(item("Window/Layouts/Default", "", Action::ResetLayout));
+    v.push(item("Window/Layouts/Default", Action::ResetLayout));
+    with_shortcuts(v, keymap)
+}
+
+fn with_shortcuts(mut v: Vec<MenuItem>, keymap: &Keymap) -> Vec<MenuItem> {
+    for m in &mut v {
+        if let Some(a) = &m.action {
+            m.shortcut = keymap.action_text(a);
+        }
+    }
     v
 }
 
@@ -327,7 +220,7 @@ pub fn menu_items(world: &World) -> Vec<MenuItem> {
 fn show_level(
     ui: &mut egui::Ui,
     out: &mut Vec<Action>,
-    items: &[(Vec<String>, &'static str, Option<Action>)],
+    items: &[(Vec<String>, String, Option<Action>)],
 ) {
     let mut i = 0;
     while i < items.len() {
@@ -336,7 +229,7 @@ fn show_level(
             if segs[0] == "-" {
                 ui.separator();
             } else if let Some(a) = action {
-                let b = egui::Button::new(&segs[0]).shortcut_text(*shortcut);
+                let b = egui::Button::new(&segs[0]).shortcut_text(shortcut.as_str());
                 if ui.add(b).clicked() {
                     out.push(a.clone());
                     ui.close();
@@ -348,14 +241,18 @@ fn show_level(
         let head = segs[0].clone();
         let mut sub = Vec::new();
         while i < items.len() && items[i].0.len() > 1 && items[i].0[0] == head {
-            sub.push((items[i].0[1..].to_vec(), items[i].1, items[i].2.clone()));
+            sub.push((
+                items[i].0[1..].to_vec(),
+                items[i].1.clone(),
+                items[i].2.clone(),
+            ));
             i += 1;
         }
         ui.menu_button(&head, |ui| show_level(ui, out, &sub));
     }
 }
 
-fn split(items: Vec<MenuItem>, prefix: &str) -> Vec<(Vec<String>, &'static str, Option<Action>)> {
+fn split(items: Vec<MenuItem>, prefix: &str) -> Vec<(Vec<String>, String, Option<Action>)> {
     items
         .into_iter()
         .filter_map(|m| {
@@ -371,11 +268,12 @@ fn split(items: Vec<MenuItem>, prefix: &str) -> Vec<(Vec<String>, &'static str, 
 
 /// GameObject creation menu (Hierarchy "+" and context menus).
 pub fn create_menu(st: &mut EditorState, ui: &mut egui::Ui) {
-    show_level(ui, &mut st.actions, &split(create_items(""), ""));
+    let items = with_shortcuts(create_items(""), &st.keymap);
+    show_level(ui, &mut st.actions, &split(items, ""));
 }
 
 pub fn menu_bar(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
-    let items = menu_items(&engine.world);
+    let items = menu_items(&engine.world, &st.keymap);
     egui::MenuBar::new().ui(ui, |ui| {
         for top in [
             "File",
@@ -393,7 +291,7 @@ pub fn menu_bar(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
                     .filter(|m| m.path.starts_with(&prefix))
                     .map(|m| MenuItem {
                         path: m.path.clone(),
-                        shortcut: m.shortcut,
+                        shortcut: m.shortcut.clone(),
                         action: m.action.clone(),
                     })
                     .collect(),
@@ -407,14 +305,15 @@ pub fn menu_bar(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
 pub fn toolbar(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
     let full = ui.max_rect();
     ui.horizontal(|ui| {
-        for (tool, label, key) in [
-            (Tool::Hand, "Hand", "Q"),
-            (Tool::Move, "Move", "W"),
-            (Tool::Rotate, "Rotate", "E"),
-            (Tool::Scale, "Scale", "R"),
-            (Tool::Rect, "Rect", "T"),
-            (Tool::Transform, "Transform", "Y"),
+        for (tool, label) in [
+            (Tool::Hand, "Hand"),
+            (Tool::Move, "Move"),
+            (Tool::Rotate, "Rotate"),
+            (Tool::Scale, "Scale"),
+            (Tool::Rect, "Rect"),
+            (Tool::Transform, "Transform"),
         ] {
+            let key = st.keymap.action_text(&Action::SetTool(tool));
             if ui
                 .selectable_label(st.tool == tool, label)
                 .on_hover_text(format!("{label} tool ({key})"))
@@ -427,9 +326,10 @@ pub fn toolbar(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
         let pivot = if st.center_handles { "Center" } else { "Pivot" };
         if ui
             .button(pivot)
-            .on_hover_text(
-                "Handle position: the active object's pivot or the selection's center (Z)",
-            )
+            .on_hover_text(format!(
+                "Handle position: the active object's pivot or the selection's center ({})",
+                st.keymap.text_for(&Effect::TogglePivot)
+            ))
             .clicked()
         {
             st.center_handles = !st.center_handles;
@@ -437,7 +337,10 @@ pub fn toolbar(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
         let space = if st.local_handles { "Local" } else { "Global" };
         if ui
             .button(space)
-            .on_hover_text("Handle orientation")
+            .on_hover_text(format!(
+                "Handle orientation ({})",
+                st.keymap.text_for(&Effect::ToggleLocal)
+            ))
             .clicked()
         {
             st.local_handles = !st.local_handles;
@@ -548,128 +451,4 @@ pub fn status_bar(
             ui.weak(format!("{} objects", engine.world.len()));
         });
     });
-}
-
-/// Global shortcuts. Editor shortcuts are off while typing in a field or while the Game
-/// view has the keyboard in Play mode (Esc gives it back).
-pub fn shortcuts(st: &mut EditorState, engine: &mut Engine, ctx: &egui::Context) {
-    let cmd = Modifiers::COMMAND;
-    let fire =
-        |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(m, k)));
-    if fire(cmd | Modifiers::ALT, Key::P) {
-        st.actions.push(Action::Step);
-    } else if fire(cmd | Modifiers::SHIFT, Key::P) {
-        st.actions.push(Action::TogglePause);
-    } else if fire(cmd, Key::P) {
-        st.actions.push(Action::TogglePlay);
-    }
-    let game_keys = st.play == PlayState::Playing && st.game_focused;
-    if game_keys {
-        if ctx.input(|i| i.key_pressed(Key::Escape)) {
-            st.game_focused = false;
-            let input = engine.world.resource_mut::<Input>();
-            input.cursor_lock = CursorLockMode::None;
-            input.cursor_visible = true;
-            input.release_all();
-        }
-        return;
-    }
-    if ctx.egui_wants_keyboard_input() {
-        return;
-    }
-    let pairs: [(Modifiers, Key, Action); 15] = [
-        (cmd | Modifiers::SHIFT, Key::B, Action::BuildSettingsDialog),
-        (cmd, Key::B, Action::BuildPlayer(true)),
-        (cmd | Modifiers::SHIFT, Key::Z, Action::Redo),
-        (cmd, Key::Z, Action::Undo),
-        (cmd, Key::Y, Action::Redo),
-        (cmd | Modifiers::SHIFT, Key::S, Action::SaveSceneAsDialog),
-        (cmd, Key::S, Action::SaveScene),
-        (
-            cmd | Modifiers::SHIFT,
-            Key::N,
-            Action::Create(Create::Empty),
-        ),
-        (
-            Modifiers::ALT | Modifiers::SHIFT,
-            Key::N,
-            Action::Create(Create::EmptyChild),
-        ),
-        (cmd, Key::N, Action::NewScene),
-        (cmd, Key::O, Action::OpenSceneDialog),
-        (cmd, Key::D, Action::Duplicate),
-        (cmd, Key::A, Action::SelectAll),
-        (cmd, Key::Backspace, Action::Delete),
-        (Modifiers::NONE, Key::Delete, Action::Delete),
-    ];
-    for (m, k, a) in pairs {
-        if fire(m, k) {
-            st.actions.push(a);
-            return;
-        }
-    }
-    let nums = [
-        Key::Num1,
-        Key::Num2,
-        Key::Num3,
-        Key::Num4,
-        Key::Num5,
-        Key::Num6,
-        Key::Num7,
-        Key::Num8,
-        Key::Num9,
-    ];
-    for (i, k) in nums.into_iter().enumerate() {
-        if fire(cmd | Modifiers::ALT, k) {
-            st.actions.push(Action::SaveSelection(i + 1));
-            return;
-        }
-        if fire(cmd | Modifiers::SHIFT, k) {
-            st.actions.push(Action::LoadSelection(i + 1));
-            return;
-        }
-    }
-    if fire(cmd, Key::OpenBracket) {
-        st.actions.push(Action::SelectionBack);
-        return;
-    }
-    if fire(cmd, Key::CloseBracket) {
-        st.actions.push(Action::SelectionForward);
-        return;
-    }
-    if fire(cmd, Key::R) {
-        st.actions.push(Action::RefreshAssets);
-        return;
-    }
-    let plain = |k: Key| ctx.input(|i| i.modifiers.is_none() && i.key_pressed(k));
-    if plain(Key::Backspace) {
-        st.actions.push(Action::Delete);
-    }
-    if plain(Key::F) {
-        st.actions.push(Action::FrameSelected);
-    }
-    if plain(Key::F2) {
-        st.actions.push(Action::Rename);
-    }
-    if !st.scene_ui.flying {
-        for (k, t) in [
-            (Key::Q, Tool::Hand),
-            (Key::W, Tool::Move),
-            (Key::E, Tool::Rotate),
-            (Key::R, Tool::Scale),
-            (Key::T, Tool::Rect),
-            (Key::Y, Tool::Transform),
-        ] {
-            if plain(k) {
-                st.tool = t;
-            }
-        }
-        // Unity: Z toggles Pivot/Center, X toggles Global/Local.
-        if plain(Key::Z) {
-            st.center_handles = !st.center_handles;
-        }
-        if plain(Key::X) {
-            st.local_handles = !st.local_handles;
-        }
-    }
 }

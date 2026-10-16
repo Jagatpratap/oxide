@@ -25,6 +25,7 @@ pub mod project_files;
 mod scene_view;
 pub mod scripting;
 pub mod settings_window;
+pub mod shortcuts;
 mod theme;
 mod undo;
 mod view;
@@ -54,6 +55,7 @@ pub enum Tab {
     ProjectSettings,
     Preferences,
     UndoHistory,
+    Shortcuts,
 }
 
 impl Tab {
@@ -79,6 +81,7 @@ impl Tab {
             Tab::ProjectSettings => "Project Settings",
             Tab::Preferences => "Preferences",
             Tab::UndoHistory => "Undo History",
+            Tab::Shortcuts => "Shortcuts",
         }
     }
 }
@@ -266,6 +269,9 @@ pub struct EditorState {
     /// Asset thumbnails (Project window, Inspector).
     previews: previews::Previews,
     asset_inspector: asset_inspector::AssetInspectorState,
+    /// Shortcut bindings (defaults plus the user's changes from Preferences).
+    pub keymap: shortcuts::Keymap,
+    shortcuts_ui: shortcuts::ShortcutsWindow,
     scene_ui: scene_view::SceneViewState,
     pub(crate) game: game_view::GameViewState,
     modal: Option<Modal>,
@@ -312,6 +318,8 @@ impl EditorState {
             project: Default::default(),
             previews: Default::default(),
             asset_inspector: Default::default(),
+            keymap: Default::default(),
+            shortcuts_ui: Default::default(),
             scene_ui: Default::default(),
             game: Default::default(),
             modal: None,
@@ -504,6 +512,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::ProjectSettings => settings_window::ui(self.st, self.engine, ui),
             Tab::Preferences => prefs::ui(self.st, self.engine, ui),
             Tab::UndoHistory => undo::window_ui(self.st, ui),
+            Tab::Shortcuts => shortcuts::window_ui(self.st, ui),
         }
     }
 
@@ -550,7 +559,7 @@ impl Editor {
         match serde_json::from_str::<DockState<Tab>>(&text) {
             Ok(mut dock) if dock.iter_all_tabs().next().is_some() => {
                 // Settings windows open on demand at full size (floating sizes aren't saved).
-                for tab in [Tab::ProjectSettings, Tab::Preferences] {
+                for tab in [Tab::ProjectSettings, Tab::Preferences, Tab::Shortcuts] {
                     while let Some(path) = dock.find_tab(&tab) {
                         dock.remove_tab(path);
                     }
@@ -600,7 +609,10 @@ impl Editor {
             .map(|(p, _)| p);
         if let Some(path) = found {
             let _ = self.dock.set_active_tab(path);
-        } else if matches!(tab, Tab::ProjectSettings | Tab::Preferences) {
+        } else if matches!(
+            tab,
+            Tab::ProjectSettings | Tab::Preferences | Tab::Shortcuts
+        ) {
             // Unity opens its settings in their own window.
             let surface = self.dock.add_window(vec![tab]);
             if let Some(ws) = self.dock.get_window_state_mut(surface) {
@@ -1429,6 +1441,7 @@ impl Shell for Editor {
             theme::apply(&ctx);
             self.load_layout(engine);
             self.st.prefs = prefs::EditorPrefs::load(&self.st.prefs_path);
+            self.st.keymap = shortcuts::Keymap::new(&self.st.prefs.shortcuts);
             self.styled = true;
         }
         self.st.prefs.apply(&ctx);
@@ -1445,7 +1458,7 @@ impl Shell for Editor {
             let w = &engine.world;
             self.st.selection.retain(|&id| w.is_alive(id));
         }
-        menus::shortcuts(&mut self.st, engine, &ctx);
+        shortcuts::dispatch(&mut self.st, engine, &ctx);
         self.st.previews.update(engine, &ctx);
         // The Project window claims keyboard commands when it is clicked (it sets this).
         if ctx.input(|i| i.pointer.any_pressed()) {

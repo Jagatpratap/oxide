@@ -34,6 +34,9 @@ pub struct EditorPrefs {
     /// Command that opens a source file; `{file}` and `{line}` are replaced. Empty opens
     /// files with the system's default app.
     pub script_editor: String,
+    // Shortcuts
+    /// Rebound shortcuts: command id → bindings (`Cmd+Shift+Z`). Only changed commands.
+    pub shortcuts: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 impl Default for EditorPrefs {
@@ -50,6 +53,7 @@ impl Default for EditorPrefs {
             scale_snap: 0.1,
             play_mode_tint: [62, 78, 102],
             script_editor: String::new(),
+            shortcuts: Default::default(),
         }
     }
 }

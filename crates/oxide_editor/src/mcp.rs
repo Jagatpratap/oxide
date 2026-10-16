@@ -224,7 +224,7 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
         ),
         |args, e| {
             with_editor(e, |ed, e| {
-                let items = menus::menu_items(&e.world);
+                let items = menus::menu_items(&e.world, &ed.st.keymap);
                 let Some(path) = args.get("path").and_then(Json::as_str) else {
                     let paths: Vec<&str> = items
                         .iter()
@@ -308,9 +308,11 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
         |args, e| {
             with_editor(e, |ed, e| {
                 let name = args.get("window").and_then(Json::as_str).unwrap_or("");
-                let all = crate::Tab::ALL
-                    .into_iter()
-                    .chain([crate::Tab::ProjectSettings, crate::Tab::Preferences]);
+                let all = crate::Tab::ALL.into_iter().chain([
+                    crate::Tab::ProjectSettings,
+                    crate::Tab::Preferences,
+                    crate::Tab::Shortcuts,
+                ]);
                 let Some(tab) = all
                     .into_iter()
                     .find(|t| t.title().eq_ignore_ascii_case(name))
@@ -767,6 +769,105 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
                         }
                         other => return Err(format!("unknown action `{other}`")),
                     })
+                })();
+                match r {
+                    Ok(v) => ToolResult::json(v),
+                    Err(m) => ToolResult::error(m),
+                }
+            })
+        },
+    );
+
+    tool(
+        s,
+        bus,
+        ToolDef::new(
+            "editor_shortcuts",
+            "Keyboard shortcuts",
+            "The Shortcuts Manager's bindings. `list` every command (id, shortcuts, defaults, conflicts; `query` \
+             filters by id or key), `set` a command's shortcuts (`id`, `shortcuts`: [\"Cmd+Shift+K\"]; Cmd is \
+             Ctrl outside macOS; an empty list removes them; `reassign: true` takes the keys from other commands), \
+             or `reset` one command (`id`) or all. Changes are saved in Preferences.",
+            schema(
+                json!({ "action": { "type": "string", "enum": ["list", "set", "reset"] },
+                       "id": { "type": "string" }, "query": { "type": "string" },
+                       "shortcuts": { "type": "array", "items": { "type": "string" } },
+                       "reassign": { "type": "boolean" } }),
+                &[],
+            ),
+        ),
+        |args, e| {
+            with_editor(e, |ed, _| {
+                use crate::shortcuts::{Binding, Keymap};
+                let st = &mut ed.st;
+                let s = |k: &str| args.get(k).and_then(Json::as_str).map(str::to_owned);
+                let r: Result<Json, String> = (|| {
+                    let action = s("action").unwrap_or_else(|| "list".into());
+                    match action.as_str() {
+                        "set" => {
+                            let id = s("id").ok_or("`id` is required")?;
+                            let i = st
+                                .keymap
+                                .find(&id)
+                                .ok_or_else(|| format!("no command `{id}`"))?;
+                            let list = args
+                                .get("shortcuts")
+                                .and_then(Json::as_array)
+                                .ok_or("`shortcuts` is required")?;
+                            let mut parsed = Vec::new();
+                            for v in list {
+                                let t = v.as_str().unwrap_or_default();
+                                parsed.push(
+                                    Binding::parse(t)
+                                        .ok_or_else(|| format!("can't read shortcut `{t}`"))?,
+                                );
+                            }
+                            let steal = args
+                                .get("reassign")
+                                .and_then(Json::as_bool)
+                                .unwrap_or(false);
+                            st.keymap.bindings[i].clear();
+                            for b in parsed {
+                                st.keymap.bind(i, b, false, steal);
+                            }
+                        }
+                        "reset" => match s("id") {
+                            Some(id) => {
+                                let i = st
+                                    .keymap
+                                    .find(&id)
+                                    .ok_or_else(|| format!("no command `{id}`"))?;
+                                st.keymap.bindings[i] = st.keymap.commands[i].defaults.clone();
+                            }
+                            None => st.keymap = Keymap::default(),
+                        },
+                        "list" => {}
+                        other => return Err(format!("unknown action `{other}`")),
+                    }
+                    if action != "list" {
+                        st.prefs.shortcuts = st.keymap.overrides();
+                        st.prefs_changed = true;
+                    }
+                    let q = s("query").unwrap_or_default().to_lowercase();
+                    let km = &st.keymap;
+                    let rows: Vec<Json> = (0..km.commands.len())
+                        .filter(|&i| {
+                            q.is_empty()
+                                || km.commands[i].id.to_lowercase().contains(&q)
+                                || km.bindings[i].iter().any(|b| b.to_config().to_lowercase().contains(&q))
+                        })
+                        .map(|i| {
+                            let c = &km.commands[i];
+                            json!({
+                                "id": c.id,
+                                "shortcuts": km.bindings[i].iter().map(|b| b.to_config()).collect::<Vec<_>>(),
+                                "display": km.bindings[i].iter().map(|b| b.label()).collect::<Vec<_>>(),
+                                "defaults": c.defaults.iter().map(|b| b.to_config()).collect::<Vec<_>>(),
+                                "conflicts": km.conflicts(i).iter().map(|&j| km.commands[j].id.clone()).collect::<Vec<_>>(),
+                            })
+                        })
+                        .collect();
+                    Ok(json!({ "commands": rows }))
                 })();
                 match r {
                     Ok(v) => ToolResult::json(v),
