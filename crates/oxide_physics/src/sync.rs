@@ -379,10 +379,26 @@ fn describe(world: &World, obj: GameObjectId, cid: ComponentId) -> Option<Desc> 
             }
         }
         let size = c.size * s;
-        let shape = SharedShape::heightfield(
+        let mut hf = rapier3d::parry::shape::HeightField::new(
             rapier3d::parry::utils::Array2::new(n, n, data),
             Vector3::new(size.x, size.y, size.z),
         );
+        // Terrain holes: removed cells (rows = z, columns = x).
+        let cells = n - 1;
+        if c.holes.len() == cells * cells {
+            for z in 0..cells {
+                for x in 0..cells {
+                    if c.holes[z * cells + x] == 0 {
+                        hf.set_cell_status(
+                            z,
+                            x,
+                            rapier3d::parry::shape::HeightFieldCellStatus::CELL_REMOVED,
+                        );
+                    }
+                }
+            }
+        }
+        let shape = SharedShape::new(hf);
         Desc {
             shape,
             offset: Vector3::new(size.x * 0.5, 0.0, size.z * 0.5),

@@ -158,6 +158,13 @@ impl<T: Asset> Assets<T> {
         self.entries.get(&h.id).map(|e| &e.value)
     }
 
+    pub fn get_by_id_mut(&mut self, id: AssetId) -> Option<&mut T> {
+        self.entries.get_mut(&id).map(|e| {
+            e.version += 1;
+            &mut e.value
+        })
+    }
+
     pub fn get_by_id(&self, id: AssetId) -> Option<&T> {
         self.entries.get(&id).map(|e| &e.value)
     }

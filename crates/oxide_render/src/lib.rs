@@ -14,6 +14,7 @@ pub mod frame;
 pub mod fullscreen;
 pub mod gpu;
 pub mod gpu_assets;
+pub mod grass;
 pub mod occlusion;
 pub mod particles;
 pub mod post;

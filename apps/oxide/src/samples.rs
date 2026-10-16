@@ -532,10 +532,8 @@ pub fn open_world(world: &mut World) {
         let h = d.interpolated_height(0.5, 0.5) / d.size.y;
         d.flatten(0.5, 0.5, 60.0, 50.0, h);
         d.auto_splat(0.06, 0.82, 32.0);
-        d.tree_prototypes.push(TreePrototype {
-            mesh: tree_mesh,
-            materials: vec![bark, leaves],
-        });
+        d.tree_prototypes
+            .push(TreePrototype::new(tree_mesh, vec![bark, leaves]));
         d.scatter_trees(0, 6000, 42, 28.0, (0.08, 0.7));
     }
     let ground_y = world

@@ -1008,6 +1008,9 @@ fn components(
             if type_name == "NavMeshSurface" && targets.len() == 1 {
                 navmesh_surface_footer(ui, w, id, &mut st.actions);
             }
+            if type_name == "Terrain" && targets.len() == 1 {
+                crate::terrain_tools::inspector_ui(ui, &mut st.terrain, w, id);
+            }
         });
         // Right-click anywhere on the header row (Unity), or the ⋮ button.
         header_resp

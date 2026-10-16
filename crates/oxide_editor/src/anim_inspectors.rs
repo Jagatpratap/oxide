@@ -26,7 +26,7 @@ fn row(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui)) {
 }
 
 /// A picker over assets of one type: project files and loaded assets.
-fn asset_picker(
+pub(crate) fn asset_picker(
     ui: &mut egui::Ui,
     assets: &AssetServer,
     salt: &str,

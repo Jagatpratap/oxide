@@ -4,6 +4,7 @@
 //! Restoring rebuilds the objects, so GameObject ids change; the selection is carried across
 //! by position in hierarchy order. Reference: <https://docs.unity3d.com/Manual/UndoWindow.html>
 
+use oxide_assets::{AssetServer, Handle, TerrainData};
 use oxide_scene::{GameObjectId, SceneFile, SceneHandle, SceneInfo, World};
 
 const MAX_STEPS: usize = 64;
@@ -18,6 +19,9 @@ pub struct Snapshot {
     scene_assignment: Vec<SceneHandle>,
     /// Selected objects as indices into `World::hierarchy_order`.
     selection: Vec<usize>,
+    /// Terrain data edited by this step (terrain tools): restored with the scene. The
+    /// big arrays are shared (`Arc`), so a copy is cheap.
+    terrains: Vec<(Handle<TerrainData>, TerrainData)>,
 }
 
 impl Snapshot {
@@ -34,7 +38,28 @@ impl Snapshot {
                 .iter()
                 .filter_map(|id| order.iter().position(|o| o == id))
                 .collect(),
+            terrains: vec![],
         }
+    }
+
+    /// Adds the current state of these terrains to the step.
+    fn with_terrains(mut self, world: &World, handles: &[Handle<TerrainData>]) -> Self {
+        let Some(assets) = world.try_resource::<AssetServer>() else {
+            return self;
+        };
+        self.terrains = handles
+            .iter()
+            .filter_map(|h| Some((h.clone(), assets.terrains.get(h)?.clone())))
+            .collect();
+        self
+    }
+
+    /// Terrains this step restores (marked unsaved by the caller).
+    pub fn terrain_paths(&self) -> Vec<String> {
+        self.terrains
+            .iter()
+            .map(|(h, _)| h.path().to_owned())
+            .collect()
     }
 
     /// Rewrites asset paths (after assets moved). Returns how many references changed.
@@ -44,6 +69,25 @@ impl Snapshot {
 
     /// Replaces the scene with this snapshot. Returns the restored selection.
     pub fn restore(&self, world: &mut World) -> Vec<GameObjectId> {
+        if let Some(assets) = world.try_resource_mut::<AssetServer>() {
+            for (h, data) in &self.terrains {
+                if let Some(cur) = assets.terrains.get_mut(h) {
+                    // Newer versions than anything cached, so meshes and GPU data refresh.
+                    let v = cur.versions;
+                    let mut d = data.clone();
+                    d.version = cur.version.max(d.version) + 1;
+                    d.versions.heights = v.heights.max(d.versions.heights) + 1;
+                    d.versions.alphamaps = v.alphamaps.max(d.versions.alphamaps) + 1;
+                    d.versions.layers = v.layers.max(d.versions.layers) + 1;
+                    d.versions.holes = v.holes.max(d.versions.holes) + 1;
+                    d.versions.trees = v.trees.max(d.versions.trees) + 1;
+                    d.versions.details = v.details.max(d.versions.details) + 1;
+                    d.dirty_heights.clear();
+                    d.hold_collider = false;
+                    *cur = d;
+                }
+            }
+        }
         world.clear(false);
         let (_, warnings) = world.spawn(&self.scene, None);
         for w in warnings {
@@ -95,13 +139,34 @@ impl UndoStack {
         true
     }
 
+    /// Like [`record`](Self::record) for a terrain tool: the step also restores the
+    /// terrains' data.
+    pub fn record_terrain(
+        &mut self,
+        world: &World,
+        label: &str,
+        selection: &[GameObjectId],
+        terrains: &[Handle<TerrainData>],
+    ) -> bool {
+        self.last = None;
+        self.undo
+            .push(Snapshot::take(world, label, selection).with_terrains(world, terrains));
+        if self.undo.len() > MAX_STEPS {
+            self.undo.remove(0);
+        }
+        self.redo.clear();
+        true
+    }
+
     pub fn undo(
         &mut self,
         world: &mut World,
         selection: &[GameObjectId],
     ) -> Option<(String, Vec<GameObjectId>)> {
         let s = self.undo.pop()?;
-        self.redo.push(Snapshot::take(world, &s.label, selection));
+        let handles: Vec<_> = s.terrains.iter().map(|(h, _)| h.clone()).collect();
+        self.redo
+            .push(Snapshot::take(world, &s.label, selection).with_terrains(world, &handles));
         self.last = None;
         Some((s.label.clone(), s.restore(world)))
     }
@@ -112,7 +177,9 @@ impl UndoStack {
         selection: &[GameObjectId],
     ) -> Option<(String, Vec<GameObjectId>)> {
         let s = self.redo.pop()?;
-        self.undo.push(Snapshot::take(world, &s.label, selection));
+        let handles: Vec<_> = s.terrains.iter().map(|(h, _)| h.clone()).collect();
+        self.undo
+            .push(Snapshot::take(world, &s.label, selection).with_terrains(world, &handles));
         self.last = None;
         Some((s.label.clone(), s.restore(world)))
     }
@@ -142,6 +209,22 @@ impl UndoStack {
 
     pub fn clear(&mut self) {
         self.truncate(0);
+    }
+
+    /// Terrains the next undo would change (to mark them unsaved).
+    pub fn top_terrains(&self) -> Vec<String> {
+        self.undo
+            .last()
+            .map(Snapshot::terrain_paths)
+            .unwrap_or_default()
+    }
+
+    /// Terrains the next redo would change.
+    pub fn top_redo_terrains(&self) -> Vec<String> {
+        self.redo
+            .last()
+            .map(Snapshot::terrain_paths)
+            .unwrap_or_default()
     }
 
     /// Labels, oldest first (the Undo History window).
@@ -195,6 +278,30 @@ pub fn window_ui(st: &mut crate::EditorState, ui: &mut egui::Ui) {
 mod tests {
     use super::*;
     use oxide_math::Vector3;
+
+    #[test]
+    fn terrain_strokes_undo_and_redo() {
+        let mut w = World::new();
+        let mut assets = AssetServer::new(".");
+        let h = assets
+            .terrains
+            .add(TerrainData::flat(Vector3::new(100.0, 50.0, 100.0), 33));
+        w.resources.insert(assets);
+        let mut u = UndoStack::default();
+        u.record_terrain(&w, "Raise", &[], std::slice::from_ref(&h));
+        let brush = oxide_assets::Brush::default();
+        let d = w.resource_mut::<AssetServer>().terrains.get_mut(&h).unwrap();
+        d.paint_height(0.5, 0.5, &brush, oxide_assets::HeightOp::Raise(10.0));
+        let raised = d.interpolated_height(0.5, 0.5);
+        assert!(raised > 1.0);
+        assert_eq!(u.top_terrains(), vec![h.path().to_owned()]);
+        u.undo(&mut w, &[]).unwrap();
+        let d = w.resource::<AssetServer>().terrains.get(&h).unwrap();
+        assert_eq!(d.interpolated_height(0.5, 0.5), 0.0, "undo restores the heights");
+        u.redo(&mut w, &[]).unwrap();
+        let d = w.resource::<AssetServer>().terrains.get(&h).unwrap();
+        assert!((d.interpolated_height(0.5, 0.5) - raised).abs() < 1e-4, "redo brings the stroke back");
+    }
 
     #[test]
     fn undo_redo_round_trip_keeps_selection() {

@@ -59,6 +59,10 @@ fn create_items(prefix: &str) -> Vec<MenuItem> {
         ));
     }
     v.push(item(
+        &format!("{prefix}3D Object/Terrain"),
+        Action::Create(Create::Terrain),
+    ));
+    v.push(item(
         &format!("{prefix}3D Object/Ragdoll..."),
         Action::CreateRagdoll,
     ));

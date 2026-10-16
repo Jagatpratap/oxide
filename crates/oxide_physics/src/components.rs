@@ -395,6 +395,10 @@ pub struct TerrainCollider {
     #[reflect(skip)]
     #[doc(hidden)]
     pub heights: std::sync::Arc<Vec<f32>>,
+    /// One byte per cell ((resolution - 1)², 0 = hole; empty = no holes).
+    #[reflect(skip)]
+    #[doc(hidden)]
+    pub holes: std::sync::Arc<Vec<u8>>,
     /// Bumped when `heights` changes so the physics shape is rebuilt.
     #[reflect(skip)]
     #[doc(hidden)]
@@ -411,6 +415,7 @@ impl Default for TerrainCollider {
             size: Vector3::new(100.0, 30.0, 100.0),
             resolution: 2,
             heights: std::sync::Arc::new(vec![0.0; 4]),
+            holes: std::sync::Arc::new(Vec::new()),
             version: 0,
             material: None,
             friction: 0.8,

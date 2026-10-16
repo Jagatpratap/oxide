@@ -35,6 +35,7 @@ mod search_window;
 pub mod settings_window;
 pub mod shortcuts;
 mod sprite_editor;
+mod terrain_tools;
 mod theme;
 mod tile_palette;
 mod undo;
@@ -173,6 +174,8 @@ pub enum Create {
     NavMeshSurface,
     NavMeshModifierVolume,
     NavMeshLink,
+    /// GameObject → 3D Object → Terrain (with a new `.terraindata` file).
+    Terrain,
 }
 
 impl Create {
@@ -193,6 +196,7 @@ impl Create {
             Create::Sprite(n) => n,
             Create::Tilemap => "Tilemap",
             Create::NavMeshSurface => "NavMesh Surface",
+            Create::Terrain => "Terrain",
             Create::NavMeshModifierVolume => "NavMesh Modifier Volume",
             Create::NavMeshLink => "NavMesh Link",
         }
@@ -286,6 +290,8 @@ pub struct EditorState {
     pub selection: Vec<GameObjectId>,
     /// When the curve / gradient preset libraries were last read.
     pub presets_synced: f64,
+    /// Terrain Inspector tools (brushes, painting, unsaved terrains).
+    pub terrain: terrain_tools::TerrainTools,
     pub tool: Tool,
     /// Handles follow the object's rotation (Unity "Local") instead of world axes.
     pub local_handles: bool,
@@ -357,6 +363,7 @@ impl EditorState {
     fn new() -> Self {
         Self {
             presets_synced: 0.0,
+            terrain: Default::default(),
             selection: Vec::new(),
             tool: Tool::Move,
             local_handles: false,
@@ -802,6 +809,7 @@ impl Editor {
             }
             Action::SaveScene => match w.scene_path.clone() {
                 Some(path) => {
+                    terrain_tools::save_dirty(&mut st.terrain, w);
                     let n = oxide_engine::save_scene(w, &path)?;
                     launch::remember_scene(&w.resource::<AssetServer>().full_path(""), &path);
                     st.dirty = false;
@@ -816,6 +824,7 @@ impl Editor {
                 }
             },
             Action::SaveSceneAs(path) => {
+                terrain_tools::save_dirty(&mut st.terrain, w);
                 let n = oxide_engine::save_scene(w, &path)?;
                 launch::remember_scene(&w.resource::<AssetServer>().full_path(""), &path);
                 st.dirty = false;
@@ -836,6 +845,12 @@ impl Editor {
             Action::Undo | Action::Redo => {
                 let undo = action == Action::Undo;
                 let paths = st.remember_paths(w);
+                let touched = if undo {
+                    st.undo.top_terrains()
+                } else {
+                    st.undo.top_redo_terrains()
+                };
+                st.terrain.dirty.extend(touched);
                 let step = if undo {
                     st.undo.undo(w, &st.selection)
                 } else {
@@ -1600,6 +1615,23 @@ fn create(w: &mut World, kind: Create, active: Option<GameObjectId>) -> GameObje
             id
         }
         Create::Tilemap => tile_palette::create_tilemap(w, None),
+        Create::Terrain => {
+            // Unity's defaults: 1000 × 600 × 1000 m, 513² heightmap.
+            let path = terrain_tools::new_terrain_path(w.resource::<AssetServer>());
+            match oxide_engine::terrain::create_terrain_object(
+                w,
+                "Terrain",
+                oxide_math::Vector3::new(1000.0, 600.0, 1000.0),
+                513,
+                Some(&path),
+            ) {
+                Ok(id) => id,
+                Err(e) => {
+                    oxide_core::debug_log_error!("{e}");
+                    w.create("Terrain")
+                }
+            }
+        }
         Create::Camera => {
             let id = objects::create_camera(w, "Camera");
             if let Some(o) = w.get_mut(id) {
@@ -1640,6 +1672,8 @@ impl Shell for Editor {
             self.st.selection.retain(|&id| w.is_alive(id));
         }
         project::sync_asset_types(&engine.world.resource::<oxide_assets::AssetServer>().types);
+        // Terrain tool edits queued by the Inspector.
+        terrain_tools::apply_commands(&mut self.st, engine);
         // Curve / gradient preset libraries for the Curve and Gradient Editors.
         let now = oxide_core::time::realtime_since_startup();
         if now - self.st.presets_synced > 1.0 {

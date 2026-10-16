@@ -88,6 +88,7 @@ only when the editor is running (not with `--player`).
 | `animator` | Reads an object's Animator (layers with current state, normalized time and weight; parameters; root motion velocity; humanoid bone mapping) and optionally changes it: `parameters` {name: number\|bool}, `trigger`, `play`, `cross_fade` [state, seconds], `speed`, `layer_weights`, `apply_root_motion`, `ik_pass` {layer: bool}, `ik` {LeftHand\|RightHand\|LeftFoot\|RightFoot: [x,y,z] or null}, `look_at` [x,y,z] or null | yes |
 | `ragdoll` | Ragdolls on humanoids (Ragdoll Wizard): `create` (Rigidbodies, colliders, CharacterJoints on the mapped bones; `mass`), `activate` (Animator off, bodies fall), `deactivate` | yes |
 | `create_terrain` | Creates a generated terrain (noise heights, auto grass/rock/sand/snow texturing, heightfield collider) | yes |
+| `terrain_edit` | Unity terrain tools on a Terrain: info, paint (raise, lower, set_height, smooth, stamp, texture, holes, trees, details and erasers) across neighbours, add/remove layers, add tree / detail prototypes, mass place trees, wind, save to `.terraindata` | yes |
 | `terrain_height` | Unity Terrain.SampleHeight: world Y of the terrain surface at `x`, `z` (null off-terrain) | no |
 | `spawn_effect` | Creates a ParticleSystem from a preset (smoke, fire, explosion, muzzle_flash, dust, rain) at `position` | yes |
 | `log_message` | Logs a message like Unity's Debug.Log / LogWarning / LogError (errors also record a stack trace) | yes |

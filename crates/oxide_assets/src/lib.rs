@@ -29,6 +29,7 @@ pub mod shader;
 pub mod sprite;
 pub mod sprite_atlas;
 pub mod terrain;
+pub mod terrain_file;
 pub mod texture;
 pub mod texture_compress;
 
@@ -55,7 +56,10 @@ pub use server::{AssetServer, AudioClip, DEFAULT_MATERIAL};
 pub use shader::Shader;
 pub use sprite::{Sprite, SpriteImportMode, SpriteRect};
 pub use sprite_atlas::{AtlasReport, SpriteAtlas};
-pub use terrain::{TerrainData, TerrainLayer, TreeInstance, TreePrototype};
+pub use terrain::{
+    Brush, BrushShape, DetailPrototype, DetailRenderMode, HeightOp, TerrainData, TerrainLayer,
+    TerrainVersions, TreeInstance, TreePrototype, WindSettings,
+};
 pub use texture::{
     CompressedFormat, CompressedMips, FilterMode, Texture2D, TextureCompression, TextureImporter,
     TextureImporterType, TextureWrapMode,

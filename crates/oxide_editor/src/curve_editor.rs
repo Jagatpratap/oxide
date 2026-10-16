@@ -33,7 +33,9 @@ pub static PRESETS: std::sync::Mutex<PresetLibraries> = std::sync::Mutex::new(Pr
 });
 
 fn presets() -> std::sync::MutexGuard<'static, PresetLibraries> {
-    PRESETS.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    PRESETS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 const CURVE_COLOR: Color32 = Color32::from_rgb(230, 80, 80);
 const MIN_COLOR: Color32 = Color32::from_rgb(90, 160, 240);
@@ -61,8 +63,11 @@ pub fn sync_presets(assets: &mut oxide_assets::AssetServer) {
         } else {
             CurvePresetLibrary::default()
         };
-        lib.presets
-            .extend(save_c.into_iter().map(|(name, curve)| CurvePreset { name, curve }));
+        lib.presets.extend(
+            save_c
+                .into_iter()
+                .map(|(name, curve)| CurvePreset { name, curve }),
+        );
         if let Err(e) = assets.save_data(path, Box::new(lib)) {
             oxide_core::debug_log_warning!("{path}: {e}");
         }
@@ -78,8 +83,11 @@ pub fn sync_presets(assets: &mut oxide_assets::AssetServer) {
         } else {
             GradientPresetLibrary::default()
         };
-        lib.presets
-            .extend(save_g.into_iter().map(|(name, gradient)| GradientPreset { name, gradient }));
+        lib.presets.extend(
+            save_g
+                .into_iter()
+                .map(|(name, gradient)| GradientPreset { name, gradient }),
+        );
         if let Err(e) = assets.save_data(path, Box::new(lib)) {
             oxide_core::debug_log_warning!("{path}: {e}");
         }
@@ -94,7 +102,11 @@ pub fn sync_presets(assets: &mut oxide_assets::AssetServer) {
             .get_dyn(&path)
             .and_then(|d| d.as_any().downcast_ref::<CurvePresetLibrary>())
         {
-            curves.extend(lib.presets.iter().map(|p| (p.name.clone(), p.curve.clone())));
+            curves.extend(
+                lib.presets
+                    .iter()
+                    .map(|p| (p.name.clone(), p.curve.clone())),
+            );
         }
     }
     let mut gradients = vec![];
@@ -1544,8 +1556,12 @@ mod tests {
         let mut assets = oxide_assets::AssetServer::new(&dir);
         oxide_engine::builtin_assets::register(&mut assets);
         let torque = AnimationCurve::ease_in_out(0.0, 100.0, 7000.0, 340.0);
-        presets().save_curves.push(("Torque".into(), torque.clone()));
-        presets().save_gradients.push(("Fire".into(), Gradient::default()));
+        presets()
+            .save_curves
+            .push(("Torque".into(), torque.clone()));
+        presets()
+            .save_gradients
+            .push(("Fire".into(), Gradient::default()));
         sync_presets(&mut assets);
         assert!(dir.join("Assets/Editor/Presets.curves").is_file());
         let p = presets();

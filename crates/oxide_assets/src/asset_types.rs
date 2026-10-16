@@ -340,6 +340,7 @@ pub fn builtin_types() -> Vec<AssetTypeInfo> {
                 72,
             )
             .color(210, 150, 110),
+        AssetTypeInfo::new("TerrainData", &["terraindata"]).color(150, 200, 110),
         AssetTypeInfo::new("AvatarMask", &["mask"])
             .menu("Animation/Avatar Mask", "New Avatar Mask", 73)
             .color(160, 200, 200),

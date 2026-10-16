@@ -193,11 +193,17 @@ impl AssetServer {
 
     /// Writes an asset file, creating its folder.
     pub(crate) fn write_file(&self, path: &str, text: &str) -> Result<(), String> {
+        self.write_bytes(path, text.as_bytes())
+    }
+
+    /// Writes a file in the project (and remembers the write so it isn't reloaded).
+    pub(crate) fn write_bytes(&self, path: &str, bytes: &[u8]) -> Result<(), String> {
         let full = self.full_path(path);
         if let Some(dir) = full.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        std::fs::write(&full, text).map_err(|e| format!("cannot write {}: {e}", full.display()))?;
+        std::fs::write(&full, bytes)
+            .map_err(|e| format!("cannot write {}: {e}", full.display()))?;
         // Our own write isn't an outside edit to reload.
         if let Ok(t) = std::fs::metadata(&full).and_then(|m| m.modified()) {
             self.mtimes
@@ -261,6 +267,7 @@ impl AssetServer {
                 "controller" => self.load_animator_controller(&path).map(|_| ()),
                 "overridecontroller" => self.load_override_controller(&path).map(|_| ()),
                 "mask" => self.load_avatar_mask(&path).map(|_| ()),
+                "terraindata" => self.load_terrain_data(&path).map(|_| ()),
                 _ if self
                     .types
                     .for_path(&path)
@@ -739,6 +746,11 @@ impl AssetServer {
             "controller" => {
                 if self.controllers.handle_of(file).is_none() {
                     self.load_animator_controller(file)?;
+                }
+            }
+            "terraindata" => {
+                if self.terrains.handle_of(file).is_none() {
+                    self.load_terrain_data(file)?;
                 }
             }
             "overridecontroller" => {

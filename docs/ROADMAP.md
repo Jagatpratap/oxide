@@ -418,7 +418,7 @@ runner, native plugins.
 - ☐ Decals, lens flares, Line/Trail renderers, billboards
   ([Decals](https://docs.unity3d.com/Manual/visual-effects-decals.html),
   [Lines and trails](https://docs.unity3d.com/Manual/visual-effects-lines-trails-billboards.html))
-- ◐ Terrain: heightmap, sculpt/paint tools, layers, trees, details/grass, wind zones, LOD
+- ◐ Terrain: `.terraindata` files (16-bit heights, control maps, holes, trees, details) ☑, up to 16 layers with normal maps ☑, holes (render + collider) ☑, chunked LOD with partial rebuilds ☑, Terrain tools in the Inspector (Raise/Lower, Paint Holes, Paint Texture, Set Height, Smooth, Stamp; brushes with shapes/textures; Paint Trees with density/size/colour variation and Mass Place; Paint Details; Terrain Settings: wind, sizes, resolutions, RAW import/export) ☑, neighbour terrains with Auto Connect and cross-tile brushes ☑, grass and detail meshes with wind ☑, Undo for strokes ☑, MCP `terrain_edit` ☑; tree billboards/LOD, wind zones affecting trees, terrain streaming ☐
   ([Terrain](https://docs.unity3d.com/Manual/script-Terrain.html))
 - ☐ Video Player (decode via `ffmpeg` bindings or platform decoders) to texture/camera
   ([Video Player](https://docs.unity3d.com/Manual/VideoPlayer.html))
@@ -495,7 +495,7 @@ needs, and where the engine is:
 | Editor to build levels | ✔ | ✔ | ☑ P2 editor, prefabs |
 | Vehicle physics (WheelCollider) | ✔ | ✔ (vehicles) | ☑ Rapier ray-cast vehicles, CarController |
 | Character controller + animation | | ✔ | ◐ CharacterController; Animator with layers (Override/Additive, Avatar Masks), 1D/2D blend trees, root motion, animation events, humanoid bone mapping, IK goals/hints + LookAt, sub-state machines, interruption, Direct/nested blend trees, sync layers, StateMachineBehaviours, Animator window ☑; retargeting between rigs ☐ |
-| Terrain + foliage | ✔ | ✔ | ◐ chunked LOD terrain, trees; missing grass/details, sculpt tools, streaming |
+| Terrain + foliage | ✔ | ✔ | ◐ terrain files, sculpt/paint tools, 16 layers, holes, trees, grass/details with wind, neighbours; tree billboards and streaming ☐ |
 | Big worlds (8×8 km) | | ✔ | ◐ LOD Groups (+ `_LODn` model import, LOD bias); occlusion culling ✔; world streaming ✔ (scene cells; assets still load on the main thread); floating origin ☐ |
 | Weapons, hits, ragdolls | | ✔ | ◐ raycasts, CharacterJoint, Ragdoll Wizard (from the humanoid map), animated ↔ limp switch; hit boxes ☐ |
 | Game scripts in the editor | ✔ | ✔ | ☑ project Scripts crate, hot reload in Edit and Play mode |

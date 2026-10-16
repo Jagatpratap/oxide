@@ -212,6 +212,7 @@ pub struct SceneRenderer {
     pub gpu_assets: GpuAssets,
     terrain: crate::terrain::TerrainGpu,
     particles: crate::particles::ParticleGpu,
+    grass: crate::grass::GrassGpu,
     sprites: crate::sprites::SpriteGpu,
     /// MSAA sample counts the GPU supports for the HDR and depth formats.
     supported_samples: Vec<u32>,
@@ -601,6 +602,22 @@ impl SceneRenderer {
         );
         let particles =
             crate::particles::ParticleGpu::new(device, &gpu.queue, &frame_layout, particle_module);
+        let grass_module = shader(
+            device,
+            "grass.wgsl",
+            &format!(
+                "{}\n{}",
+                include_str!("shaders/grass.wgsl"),
+                include_str!("shaders/lighting.wgsl")
+            ),
+        );
+        let grass = crate::grass::GrassGpu::new(
+            device,
+            &gpu.queue,
+            &frame_layout,
+            &ssao.screen_layout,
+            grass_module,
+        );
         let sprite_module = shader(device, "sprites.wgsl", include_str!("shaders/sprites.wgsl"));
         let sprites =
             crate::sprites::SpriteGpu::new(device, &gpu.queue, &frame_layout, sprite_module);
@@ -610,6 +627,7 @@ impl SceneRenderer {
                 .contains(wgpu::Features::POLYGON_MODE_LINE),
             terrain,
             particles,
+            grass,
             sprites,
             gpu_assets,
             supported_samples,
@@ -1686,6 +1704,7 @@ impl SceneRenderer {
         self.ensure_targets(device, w, h, samples);
         self.ensure_fixed(device, samples);
         self.particles.ensure_pipelines(device, samples);
+        self.grass.ensure_pipelines(device, samples);
         self.sprites.ensure_pipelines(device, samples);
         if capture.is_none() {
             self.last_samples = samples;
@@ -2592,6 +2611,9 @@ impl SceneRenderer {
             &frame.particles,
             cam0,
         );
+        let grass_ranges =
+            self.grass
+                .prepare(device, queue, &mut self.gpu_assets, assets, &frame.grass);
         let sprite_ranges = self.sprites.prepare(
             device,
             queue,
@@ -2837,6 +2859,10 @@ impl SceneRenderer {
                         stats.draw_calls += 1;
                         pass.draw_indexed(range, 0, idx..idx + 1);
                     }
+                }
+                if ci == 0 && !grass_ranges.is_empty() {
+                    stats.draw_calls += self.grass.draw(&mut pass, &grass_ranges, samples);
+                    pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
                 }
                 let draw_batches = |pass: &mut wgpu::RenderPass,
                                     list: &[Batch],

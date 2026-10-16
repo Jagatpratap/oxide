@@ -230,6 +230,31 @@ pub struct SpriteDraw {
     pub instance: SpriteInstance,
 }
 
+/// One grass / detail billboard (Unity Grass and Grass Billboard details).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct GrassInstance {
+    /// Ground point (the quad's bottom centre).
+    pub position: [f32; 3],
+    pub width: f32,
+    pub height: f32,
+    /// Yaw in radians.
+    pub rotation: f32,
+    /// How far the tip sways in the wind (fraction of the height).
+    pub wind: f32,
+    /// 0 = two crossed quads, 1 = camera-facing quad.
+    pub mode: f32,
+    /// Linear RGB tint; alpha = wind speed.
+    pub color: [f32; 4],
+}
+
+/// Grass instances sharing one texture.
+#[derive(Clone, Debug, Default)]
+pub struct GrassBatch {
+    pub texture: Option<AssetId>,
+    pub instances: Vec<GrassInstance>,
+}
+
 /// Particles of one system (one texture and blend mode).
 #[derive(Clone, Debug)]
 pub struct ParticleBatch {
@@ -658,6 +683,8 @@ pub struct RenderFrame {
     /// centered on the origin under each matrix.
     pub occluder_boxes: Vec<Matrix4x4>,
     pub particles: Vec<ParticleBatch>,
+    /// Terrain grass and detail billboards.
+    pub grass: Vec<GrassBatch>,
     pub sprites: Vec<SpriteDraw>,
     pub reflection_probes: Vec<ReflectionProbeView>,
     /// Cameras rendering into Render Textures (Unity `Camera.targetTexture`), drawn before

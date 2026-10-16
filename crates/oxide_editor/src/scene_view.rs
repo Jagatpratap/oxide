@@ -191,6 +191,10 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
         Vec::new()
     };
     draw_selection(st, world, &proj, &painter);
+    // Terrain tools paint instead of selecting.
+    if crate::terrain_tools::scene_paint(st, engine, ui, &resp, &proj, &painter) {
+        return;
+    }
     // A Tile Palette tool paints instead of selecting.
     let palette_open = st.tile_palette_open;
     if crate::tile_palette::scene_paint(st, engine, ui, &resp, &proj, &painter, palette_open) {
