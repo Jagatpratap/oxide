@@ -62,6 +62,8 @@ struct Drag {
 }
 
 pub struct SceneViewState {
+    /// Draw mode (Shaded, Wireframe, Albedo, ...): Scene view only.
+    pub draw_mode: oxide_render::DebugView,
     pub grid: bool,
     pub gizmos: bool,
     pub frame_request: bool,
@@ -74,6 +76,7 @@ pub struct SceneViewState {
 impl Default for SceneViewState {
     fn default() -> Self {
         Self {
+            draw_mode: oxide_render::DebugView::Shaded,
             grid: true,
             gizmos: true,
             frame_request: false,
@@ -163,6 +166,15 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
 
 fn overlay_bar(st: &mut EditorState, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
+        egui::ComboBox::from_id_salt("scene_draw_mode")
+            .selected_text(st.scene_ui.draw_mode.name())
+            .show_ui(ui, |ui| {
+                for mode in oxide_render::DebugView::ALL {
+                    ui.selectable_value(&mut st.scene_ui.draw_mode, mode, mode.name());
+                }
+            })
+            .response
+            .on_hover_text("Draw Mode");
         ui.toggle_value(&mut st.scene_ui.grid, "#")
             .on_hover_text("Grid");
         ui.toggle_value(&mut st.scene_ui.gizmos, "Gizmos");
@@ -1324,6 +1336,7 @@ pub fn render(st: &mut EditorState, engine: &mut Engine) {
     let [w, h] = st.scene_view.size;
     let cam = st.scene_cam.camera_view();
     let mut rf = extract::extract(&engine.world, Some(vec![cam]));
+    rf.debug_view = st.scene_ui.draw_mode;
     if st.scene_ui.grid {
         add_grid(&mut rf, &st.scene_cam);
     }

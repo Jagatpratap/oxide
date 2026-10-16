@@ -109,6 +109,8 @@ struct MainKey {
     /// Render Objects features can change the depth test and turn depth writes off.
     depth_test: DepthTest,
     depth_write: bool,
+    /// Mesh edges in line mode (Scene view wireframe draw modes).
+    wire: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -205,6 +207,8 @@ fn grow_buffer(
 }
 
 pub struct SceneRenderer {
+    /// The GPU draws polygons as lines (wireframe draw modes).
+    wire_supported: bool,
     pub gpu_assets: GpuAssets,
     terrain: crate::terrain::TerrainGpu,
     particles: crate::particles::ParticleGpu,
@@ -597,6 +601,9 @@ impl SceneRenderer {
         let particles =
             crate::particles::ParticleGpu::new(device, &gpu.queue, &frame_layout, particle_module);
         Self {
+            wire_supported: device
+                .features()
+                .contains(wgpu::Features::POLYGON_MODE_LINE),
             terrain,
             particles,
             gpu_assets,
@@ -698,6 +705,11 @@ impl SceneRenderer {
     }
 
     /// MSAA samples used by the last render.
+    /// Whether the wireframe draw modes can draw edges on this GPU.
+    pub fn supports_wireframe(&self) -> bool {
+        self.wire_supported
+    }
+
     pub fn sample_count(&self) -> u32 {
         self.last_samples
     }
@@ -853,10 +865,15 @@ impl SceneRenderer {
                 },
                 primitive: wgpu::PrimitiveState {
                     front_face: wgpu::FrontFace::Cw,
-                    cull_mode: if key.double_sided {
+                    cull_mode: if key.double_sided || key.wire {
                         None
                     } else {
                         Some(wgpu::Face::Back)
+                    },
+                    polygon_mode: if key.wire {
+                        wgpu::PolygonMode::Line
+                    } else {
+                        wgpu::PolygonMode::Fill
                     },
                     ..Default::default()
                 },
@@ -878,7 +895,7 @@ impl SceneRenderer {
                 },
                 fragment: Some(wgpu::FragmentState {
                     module,
-                    entry_point: Some("fs_main"),
+                    entry_point: Some(if key.wire { "fs_wire" } else { "fs_main" }),
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: HDR_FORMAT,
@@ -2267,6 +2284,7 @@ impl SceneRenderer {
                     skinned: r.item.joint_offset.is_some(),
                     depth_test: DepthTest::LessEqual,
                     depth_write: true,
+                    wire: false,
                 };
                 let idx = instances.len() as u32;
                 instances.push(make_instance(r));
@@ -2302,6 +2320,7 @@ impl SceneRenderer {
                             skinned: r.item.joint_offset.is_some(),
                             depth_test: DepthTest::LessEqual,
                             depth_write: false,
+                            wire: false,
                         },
                         material: r.material,
                         mesh: r.item.mesh,
@@ -2310,7 +2329,12 @@ impl SceneRenderer {
                     }
                 })
                 .collect();
-            camera_batches.push((ob, tb));
+            // Pure Wireframe draws edges only (when the GPU can draw them).
+            if frame.debug_view.shaded() || !self.wire_supported {
+                camera_batches.push((ob, tb));
+            } else {
+                camera_batches.push((Vec::new(), Vec::new()));
+            }
 
             // Render Objects features: the camera's renderers on their layers, again.
             let mut fb: Vec<(RenderPassEvent, Vec<Batch>)> = Vec::new();
@@ -2348,6 +2372,7 @@ impl SceneRenderer {
                             skinned: r.item.joint_offset.is_some(),
                             depth_test: *depth_test,
                             depth_write: *write_depth,
+                            wire: false,
                         },
                         material,
                         mesh: r.item.mesh,
@@ -2356,6 +2381,37 @@ impl SceneRenderer {
                     });
                 }
                 fb.push((*event, list));
+            }
+            // Wireframe draw modes: every visible renderer's edges after the transparents.
+            if frame.debug_view.wire() && self.wire_supported {
+                let mut list = Vec::new();
+                for r in &resolved {
+                    let bit = 1u32 << (r.item.layer & 31);
+                    if r.item.shadows_only
+                        || cam.culling_mask & bit == 0
+                        || (r.radius.is_finite() && !sphere_visible(&planes, r.center, r.radius))
+                    {
+                        continue;
+                    }
+                    let idx = instances.len() as u32;
+                    instances.push(make_instance(r));
+                    list.push(Batch {
+                        key: MainKey {
+                            samples,
+                            transparent: true,
+                            double_sided: true,
+                            skinned: r.item.joint_offset.is_some(),
+                            depth_test: DepthTest::LessEqual,
+                            depth_write: false,
+                            wire: true,
+                        },
+                        material: r.material,
+                        mesh: r.item.mesh,
+                        submesh: r.item.submesh,
+                        instances: idx..idx + 1,
+                    });
+                }
+                fb.push((RenderPassEvent::AfterRenderingTransparents, list));
             }
             camera_features.push(fb);
             let mut tl = Vec::new();
@@ -2450,7 +2506,12 @@ impl SceneRenderer {
                 ground_color: [ground.r, ground.g, ground.b, env.ambient_intensity],
                 fog_color: [fog_c[0], fog_c[1], fog_c[2], fog_mode],
                 fog_params: [fog_p[0], fog_p[1], fog_p[2], env.reflection_intensity],
-                misc: [lights.len() as f32, 0.0, w as f32, h as f32],
+                misc: [
+                    lights.len() as f32,
+                    frame.debug_view.shader_mode() as f32,
+                    w as f32,
+                    h as f32,
+                ],
                 clear_color: clear,
                 cascade_texel: texels,
                 ssao: [

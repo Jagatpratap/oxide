@@ -202,7 +202,7 @@ with `.meta` files in P3).
 - ☐ Preferences + Project Settings windows (Tags & Layers, Time, Physics, Quality, Graphics, Input, Player)
   ([Preferences](https://docs.unity3d.com/Manual/Preferences.html),
   [Project Settings](https://docs.unity3d.com/Manual/comp-ManagerGroup.html))
-- ☐ Project launcher (Hub equivalent): create/open projects from templates
+- ✓ Project launcher (Hub equivalent): `oxide new <dir>` / `oxide open <dir>`
 
 **Exit:** create a project, place/move cubes with gizmos, edit in Inspector, Play/Stop restores state, Undo works for every edit.
 
@@ -211,8 +211,11 @@ Hierarchy / Scene / Game / Inspector / Project / Console with a saved layout; Sc
 fly/orbit/pan, grid, picking, icons, outlines, collider/light/camera gizmos and Move/Rotate/
 Scale handles with snapping; Inspector for every reflected field with Add Component;
 Undo/Redo; Play/Pause/Step with scene restore; File/Edit/GameObject/Component/Window menus.
-MCP: `editor_*` tools drive all of it. Not yet: rect tool, 2D mode, draw modes, multi-object
-editing, Undo History window, Preferences/Project Settings windows, project launcher.
+Scene view draw modes (Shaded, Wireframe, Shaded Wireframe, Albedo, Normals, Lighting Only,
+Shadow Cascades, Baked Lightmap); multi-object Inspector with lock and Debug mode; Undo History
+and selection history; Project Settings and Preferences windows; Console call sites and stack
+traces; Game view control bar. MCP: `editor_*` tools drive all of it. Not yet: rect tool,
+2D mode, overlays toolbar, Scene view lighting/audio/effects toggles.
 
 ### P3 — Asset pipeline
 - ☐ AssetDatabase with GUIDs, `.meta` files, Library cache, dependency tracking

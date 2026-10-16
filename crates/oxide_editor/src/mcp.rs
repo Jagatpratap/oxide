@@ -48,6 +48,7 @@ fn state_json(ed: &Editor, e: &Engine) -> Json {
             "position": cam.position().to_array(), "pivot": cam.pivot.to_array(),
             "yaw": cam.yaw, "pitch": cam.pitch, "distance": cam.distance,
             "orthographic": cam.orthographic, "fov": cam.fov,
+            "draw_mode": st.scene_ui.draw_mode.name(),
         },
         "status": st.status,
     })
@@ -472,11 +473,13 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
             "editor_scene_camera",
             "Move Scene view camera",
             "Positions the Scene view camera: `position` + `look_at`, or `pivot`/`yaw`/`pitch`/`distance`, or `frame` (an \
-         object to frame, like pressing F). Also `orthographic` and `fov`.",
+         object to frame, like pressing F). Also `orthographic`, `fov` and `draw_mode` (Shaded, Wireframe, Shaded \
+         Wireframe, Albedo, Normals, Lighting Only, Shadow Cascades, Baked Lightmap).",
             schema(
                 json!({ "position": { "type": "array" }, "look_at": { "type": "array" }, "pivot": { "type": "array" },
                        "yaw": { "type": "number" }, "pitch": { "type": "number" }, "distance": { "type": "number" },
-                       "frame": {}, "orthographic": { "type": "boolean" }, "fov": { "type": "number" } }),
+                       "frame": {}, "orthographic": { "type": "boolean" }, "fov": { "type": "number" },
+                       "draw_mode": { "type": "string" } }),
                 &[],
             ),
         ),
@@ -507,6 +510,15 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
                 }
                 if let Some(o) = args.get("orthographic").and_then(Json::as_bool) {
                     cam.orthographic = o;
+                }
+                if let Some(name) = args.get("draw_mode").and_then(Json::as_str) {
+                    let Some(mode) = oxide_render::DebugView::ALL
+                        .into_iter()
+                        .find(|m| m.name().eq_ignore_ascii_case(name))
+                    else {
+                        return ToolResult::error(format!("unknown draw_mode `{name}`"));
+                    };
+                    ed.st.scene_ui.draw_mode = mode;
                 }
                 if args.contains_key("frame") {
                     let id = oxide_engine::tri!(obj_arg(args, &e.world, "frame"));

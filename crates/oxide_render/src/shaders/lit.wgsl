@@ -148,10 +148,24 @@ fn fs_main(in: VertexOut, @builtin(front_facing) front: bool) -> FragOut {
     let ao = mix(1.0, textureSample(occlusion_map, mat_sampler, uv).r, material.pbr.w);
 
     let albedo = base.rgb;
+    let mode = debug_mode();
+    if (mode != 0u) {
+        let c = debug_view(mode, in.world_pos, n, normalize(in.normal), albedo, in.receive_shadows != 0u, in.probes, in.clip.xy, in.gi, in.lm_uv);
+        out.color = vec4f(c, 1.0);
+        return out;
+    }
     var color = shade(in.world_pos, n, normalize(in.normal), albedo, metallic, rough, ao, in.receive_shadows != 0u, in.probes, in.clip.xy, in.gi, in.lm_uv);
     color += emission;
 
     color = apply_fog(color, in.world_pos);
     out.color = vec4f(color, select(1.0, base.a, material.flags.w > 0.5));
+    return out;
+}
+
+// Wireframe draw modes: mesh edges.
+@fragment
+fn fs_wire(in: VertexOut) -> FragOut {
+    var out: FragOut;
+    out.color = vec4f(0.0, 0.0, 0.0, 0.55);
     return out;
 }

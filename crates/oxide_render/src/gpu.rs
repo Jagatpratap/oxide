@@ -29,7 +29,10 @@ impl std::error::Error for GpuError {}
 /// ASTC on mobile and Apple GPUs).
 fn compression_features(adapter: &wgpu::Adapter) -> wgpu::Features {
     adapter.features()
-        & (wgpu::Features::TEXTURE_COMPRESSION_BC | wgpu::Features::TEXTURE_COMPRESSION_ASTC)
+        & (wgpu::Features::TEXTURE_COMPRESSION_BC
+            | wgpu::Features::TEXTURE_COMPRESSION_ASTC
+            // Scene view wireframe draw modes.
+            | wgpu::Features::POLYGON_MODE_LINE)
 }
 
 /// The GPU: adapter, logical device and submission queue.

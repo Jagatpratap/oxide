@@ -556,6 +556,74 @@ pub struct LineVertex {
     pub color: [f32; 4],
 }
 
+/// Unity's Scene view draw modes: shading modes and debug views.
+/// <https://docs.unity3d.com/Manual/ViewModes.html>
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum DebugView {
+    #[default]
+    Shaded,
+    Wireframe,
+    ShadedWireframe,
+    /// Surface color without lighting.
+    Albedo,
+    /// World-space normals as colors.
+    Normals,
+    /// Lighting on a neutral gray surface.
+    LightingOnly,
+    /// Each sun shadow cascade tinted (red, green, blue, yellow).
+    ShadowCascades,
+    /// Diffuse light from lightmaps and light probes only.
+    BakedLightmap,
+}
+
+impl DebugView {
+    pub const ALL: [DebugView; 8] = [
+        DebugView::Shaded,
+        DebugView::Wireframe,
+        DebugView::ShadedWireframe,
+        DebugView::Albedo,
+        DebugView::Normals,
+        DebugView::LightingOnly,
+        DebugView::ShadowCascades,
+        DebugView::BakedLightmap,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            DebugView::Shaded => "Shaded",
+            DebugView::Wireframe => "Wireframe",
+            DebugView::ShadedWireframe => "Shaded Wireframe",
+            DebugView::Albedo => "Albedo",
+            DebugView::Normals => "Normals",
+            DebugView::LightingOnly => "Lighting Only",
+            DebugView::ShadowCascades => "Shadow Cascades",
+            DebugView::BakedLightmap => "Baked Lightmap",
+        }
+    }
+
+    /// Value of the shaders' debug mode (`frame.misc.y`): 0 = normal shading.
+    pub fn shader_mode(self) -> u32 {
+        match self {
+            DebugView::Albedo => 1,
+            DebugView::Normals => 2,
+            DebugView::LightingOnly => 3,
+            DebugView::ShadowCascades => 4,
+            DebugView::BakedLightmap => 5,
+            _ => 0,
+        }
+    }
+
+    /// Draws mesh edges.
+    pub fn wire(self) -> bool {
+        matches!(self, DebugView::Wireframe | DebugView::ShadedWireframe)
+    }
+
+    /// Draws shaded surfaces (everything but pure Wireframe).
+    pub fn shaded(self) -> bool {
+        self != DebugView::Wireframe
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct RenderFrame {
     /// Rendered in order; later cameras draw on top (sorted by Unity `depth` beforehand).
@@ -576,6 +644,8 @@ pub struct RenderFrame {
     pub renderer_features: Vec<RendererFeature>,
     /// Baked lightmaps (RGBM textures of one size; Unity `LightmapSettings.lightmaps`).
     pub lightmaps: Vec<AssetId>,
+    /// Scene view draw mode (shaded, wireframe or a debug view of one input).
+    pub debug_view: DebugView,
 
     /// World-space skinning matrices (bone local-to-world × bind pose).
     pub joints: Vec<Matrix4x4>,

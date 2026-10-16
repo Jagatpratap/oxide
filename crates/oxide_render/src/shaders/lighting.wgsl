@@ -313,3 +313,38 @@ fn shade(world_pos: vec3f, n: vec3f, geo_n: vec3f, albedo: vec3f, metallic: f32,
     color += (diffuse_amb + spec_env * env_brdf_approx(f0, rough, nv) * frame.fog_params.w * horizon_occ * horizon_occ) * ao;
     return color;
 }
+
+// Scene view debug views (frame.misc.y): 1 albedo, 2 normals, 3 lighting only,
+// 4 shadow cascades, 5 baked lightmap / probes.
+fn debug_mode() -> u32 {
+    return u32(frame.misc.y + 0.5);
+}
+
+fn debug_view(mode: u32, world_pos: vec3f, n: vec3f, geo_n: vec3f, albedo: vec3f, receive_shadows: bool, probe_sel: vec2u, frag_xy: vec2f, gi: u32, lm_uv: vec2f) -> vec3f {
+    switch mode {
+        case 1u: {
+            return albedo;
+        }
+        case 2u: {
+            return n * 0.5 + 0.5;
+        }
+        case 3u: {
+            return shade(world_pos, n, geo_n, vec3f(0.7), 0.0, 0.6, 1.0, receive_shadows, probe_sel, frag_xy, gi, lm_uv);
+        }
+        case 4u: {
+            let lit = shade(world_pos, n, geo_n, vec3f(0.7), 0.0, 0.6, 1.0, receive_shadows, probe_sel, frag_xy, gi, lm_uv);
+            let view_depth = (frame.view * vec4f(world_pos, 1.0)).z;
+            let colors = array<vec3f, 4>(vec3f(1.0, 0.25, 0.25), vec3f(0.25, 1.0, 0.25), vec3f(0.3, 0.45, 1.0), vec3f(1.0, 1.0, 0.25));
+            let count = i32(frame.shadow_params.w);
+            for (var i = 0; i < count; i++) {
+                if (view_depth < frame.cascade_splits[i]) {
+                    return lit * colors[i];
+                }
+            }
+            return lit;
+        }
+        default: {
+            return diffuse_light(n, gi, lm_uv);
+        }
+    }
+}
