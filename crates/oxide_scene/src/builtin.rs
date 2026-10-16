@@ -653,3 +653,65 @@ impl Component for ReflectionProbe {
         false
     }
 }
+
+/// When a renderer feature runs (Unity `RenderPassEvent`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
+pub enum RenderPassEvent {
+    AfterRenderingOpaques,
+    AfterRenderingTransparents,
+    BeforeRenderingPostProcessing,
+    #[default]
+    AfterRenderingPostProcessing,
+}
+
+/// Depth comparison of a Render Objects feature (Unity `CompareFunction`, the useful ones).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
+pub enum CompareFunction {
+    #[default]
+    LessEqual,
+    /// Only where hidden behind something: see-through-walls silhouettes.
+    Greater,
+    Always,
+}
+
+/// URP Full Screen Pass Renderer Feature: runs a WGSL shader over the camera image. The
+/// `.wgsl` file defines `fn fs_main(in: FullscreenIn) -> vec4f` and can call
+/// `sample_source(uv)`, `sample_depth(uv)` and read `fx.params0`, `fx.params1`, `fx.time`.
+/// Only Before/After Rendering Post Processing apply.
+/// <https://docs.unity3d.com/Manual/urp/renderer-features/renderer-feature-full-screen-pass.html>
+#[derive(Clone, Debug, Default, Reflect)]
+pub struct FullScreenPassRendererFeature {
+    pub injection_point: RenderPassEvent,
+    pub shader: Option<Handle<oxide_assets::Shader>>,
+    pub params0: Vector4,
+    pub params1: Vector4,
+}
+
+impl Component for FullScreenPassRendererFeature {}
+
+/// URP Render Objects Renderer Feature: draws renderers on `layer_mask` again at an event,
+/// optionally with an override material and another depth test (e.g. Greater with an
+/// unlit material for silhouettes of players behind walls).
+/// <https://docs.unity3d.com/Manual/urp/renderer-features/how-to-custom-effect-render-objects.html>
+#[derive(Clone, Debug, Reflect)]
+pub struct RenderObjectsRendererFeature {
+    pub event: RenderPassEvent,
+    pub layer_mask: u32,
+    pub override_material: Option<Handle<Material>>,
+    pub depth_test: CompareFunction,
+    pub write_depth: bool,
+}
+
+impl Default for RenderObjectsRendererFeature {
+    fn default() -> Self {
+        Self {
+            event: RenderPassEvent::AfterRenderingOpaques,
+            layer_mask: 0,
+            override_material: None,
+            depth_test: CompareFunction::LessEqual,
+            write_depth: true,
+        }
+    }
+}
+
+impl Component for RenderObjectsRendererFeature {}

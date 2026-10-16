@@ -65,6 +65,55 @@ pub fn cameras(world: &World) -> Vec<CameraView> {
     cams.into_iter().map(|(_, v)| v).collect()
 }
 
+/// Renderer features from the Full Screen Pass and Render Objects components.
+pub fn renderer_features(world: &World) -> Vec<oxide_render::RendererFeature> {
+    use oxide_render::{DepthTest, RenderPassEvent as E, RendererFeature};
+    let event = |e: oxide_scene::RenderPassEvent| match e {
+        oxide_scene::RenderPassEvent::AfterRenderingOpaques => E::AfterRenderingOpaques,
+        oxide_scene::RenderPassEvent::AfterRenderingTransparents => E::AfterRenderingTransparents,
+        oxide_scene::RenderPassEvent::BeforeRenderingPostProcessing => {
+            E::BeforeRenderingPostProcessing
+        }
+        oxide_scene::RenderPassEvent::AfterRenderingPostProcessing => {
+            E::AfterRenderingPostProcessing
+        }
+    };
+    let mut out = Vec::new();
+    for (_, f) in world.query::<oxide_scene::FullScreenPassRendererFeature>() {
+        let Some(shader) = &f.shader else { continue };
+        let e = event(f.injection_point);
+        // Full-screen passes need a whole image: before or after post-processing.
+        let e = match e {
+            E::AfterRenderingOpaques | E::AfterRenderingTransparents => {
+                E::BeforeRenderingPostProcessing
+            }
+            other => other,
+        };
+        out.push(RendererFeature::FullScreen {
+            event: e,
+            shader: shader.id(),
+            params: [f.params0.to_array(), f.params1.to_array()],
+        });
+    }
+    for (_, f) in world.query::<oxide_scene::RenderObjectsRendererFeature>() {
+        out.push(RendererFeature::RenderObjects {
+            event: match event(f.event) {
+                E::AfterRenderingOpaques => E::AfterRenderingOpaques,
+                _ => E::AfterRenderingTransparents,
+            },
+            layer_mask: f.layer_mask,
+            override_material: f.override_material.as_ref().map(|m| m.id()),
+            depth_test: match f.depth_test {
+                oxide_scene::CompareFunction::LessEqual => DepthTest::LessEqual,
+                oxide_scene::CompareFunction::Greater => DepthTest::Greater,
+                oxide_scene::CompareFunction::Always => DepthTest::Always,
+            },
+            write_depth: f.write_depth,
+        });
+    }
+    out
+}
+
 /// Cameras rendering into Render Textures, by depth.
 pub fn texture_cameras(world: &World) -> Vec<(AssetId, CameraView)> {
     let mut cams: Vec<_> = world
@@ -146,6 +195,7 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
         time: world.resource::<oxide_core::Time>().time(),
         frame_index: world.resource::<oxide_core::Time>().frame_count(),
         texture_cameras: texture_cameras(world),
+        renderer_features: renderer_features(world),
         ..Default::default()
     };
 

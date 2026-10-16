@@ -184,6 +184,7 @@ fn set_component(
         w.component_dyn(id, cid)
             .map(|c| c as &dyn oxide_core::reflect::Reflect),
     );
+    crate::json_values::load_referenced_assets(w, &values);
     let comp = w.component_dyn_mut(id, cid).ok_or("component busy")?;
     set_fields(comp, values, &mut errors);
     Ok(errors)
@@ -625,6 +626,7 @@ pub fn build_server(bus: Arc<Bus>) -> McpServer {
                     w,
                     Some(comp.as_ref() as &dyn oxide_core::reflect::Reflect),
                 );
+                crate::json_values::load_referenced_assets(w, &values);
                 errors = errs;
                 set_fields(comp.as_mut(), values, &mut errors);
             }

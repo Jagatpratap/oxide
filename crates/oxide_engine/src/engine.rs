@@ -213,6 +213,13 @@ impl Engine {
     }
 
     fn end_frame(&mut self) {
+        // Pick up asset files edited outside the engine (twice a second).
+        if self.world.resource::<Time>().frame_count().is_multiple_of(30) {
+            let reloaded = self.world.resource_mut::<AssetServer>().reload_changed();
+            for p in reloaded {
+                oxide_core::debug_log!("Reloaded {p}");
+            }
+        }
         let input = self.world.resource_mut::<Input>();
         input.end_frame();
         let want = (input.cursor_lock, input.cursor_visible);

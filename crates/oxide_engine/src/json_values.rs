@@ -326,6 +326,31 @@ pub fn parse_fields(
     (out, errors)
 }
 
+/// Loads the asset files (`Assets/...`) that parsed values refer to, so a field set to an
+/// asset path works even if that asset wasn't loaded yet.
+pub fn load_referenced_assets(world: &mut World, values: &[(&'static str, Value)]) {
+    fn walk(v: &Value, out: &mut Vec<String>) {
+        match v {
+            Value::Asset(p) if p.starts_with("Assets/") => out.push(p.clone()),
+            Value::List(items) => items.iter().for_each(|x| walk(x, out)),
+            Value::Object(map) => map.values().for_each(|x| walk(x, out)),
+            _ => {}
+        }
+    }
+    let mut paths = Vec::new();
+    for (_, v) in values {
+        walk(v, &mut paths);
+    }
+    for p in paths {
+        if let Err(e) = world
+            .resource_mut::<oxide_assets::AssetServer>()
+            .ensure_loaded(&p)
+        {
+            oxide_core::debug_log_warning!("{e}");
+        }
+    }
+}
+
 /// Writes parsed values into an object, collecting errors.
 pub fn set_fields(
     obj: &mut dyn Reflect,

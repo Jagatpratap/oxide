@@ -247,6 +247,49 @@ pub struct ReflectionProbeView {
     pub render_requests: u32,
 }
 
+/// When a renderer feature runs (Unity `RenderPassEvent`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RenderPassEvent {
+    AfterRenderingOpaques,
+    AfterRenderingTransparents,
+    /// On the HDR image, after TAA / depth of field / motion blur, before bloom and grading.
+    BeforeRenderingPostProcessing,
+    /// On the final (tonemapped, linear) image.
+    AfterRenderingPostProcessing,
+}
+
+/// Depth test of a Render Objects feature.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum DepthTest {
+    /// Visible surfaces only (the usual test).
+    LessEqual,
+    /// Only where something nearer hides it (x-ray / see-through-walls silhouettes).
+    Greater,
+    /// Ignores depth (draws on top).
+    Always,
+}
+
+/// URP renderer features configured for this frame.
+#[derive(Clone, Debug)]
+pub enum RendererFeature {
+    /// Full Screen Pass: a custom WGSL fragment shader over the camera image.
+    FullScreen {
+        event: RenderPassEvent,
+        /// A `Shader` asset with `fn fs_main(in: FullscreenIn) -> vec4f`.
+        shader: AssetId,
+        params: [[f32; 4]; 2],
+    },
+    /// Render Objects: draws renderers on `layer_mask` again, optionally with another
+    /// material and depth test.
+    RenderObjects {
+        event: RenderPassEvent,
+        layer_mask: u32,
+        override_material: Option<AssetId>,
+        depth_test: DepthTest,
+        write_depth: bool,
+    },
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum FogKind {
     Linear { start: f32, end: f32 },
@@ -524,6 +567,8 @@ pub struct RenderFrame {
     /// Cameras rendering into Render Textures (Unity `Camera.targetTexture`), drawn before
     /// the main cameras, at most once per frame each.
     pub texture_cameras: Vec<(AssetId, CameraView)>,
+    /// Renderer features, in order (Unity's Renderer Features list).
+    pub renderer_features: Vec<RendererFeature>,
 
     /// World-space skinning matrices (bone local-to-world × bind pose).
     pub joints: Vec<Matrix4x4>,

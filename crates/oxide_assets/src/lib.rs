@@ -20,6 +20,7 @@ pub mod model;
 pub mod primitives;
 pub mod render_texture;
 pub mod server;
+pub mod shader;
 pub mod terrain;
 pub mod texture;
 pub mod texture_compress;
@@ -37,6 +38,7 @@ pub use model::{Model, ModelNode, ModelSkin};
 pub use primitives::PrimitiveType;
 pub use render_texture::RenderTexture;
 pub use server::{AssetServer, AudioClip, DEFAULT_MATERIAL};
+pub use shader::Shader;
 pub use terrain::{TerrainData, TerrainLayer, TreeInstance, TreePrototype};
 pub use texture::{
     CompressedFormat, CompressedMips, FilterMode, Texture2D, TextureCompression, TextureImporter,

@@ -13,6 +13,7 @@ use crate::frame::*;
 use crate::gpu_assets::{GpuAssets, SkinVertex, Vertex};
 use crate::post::PostProcessor;
 use crate::reflection::{PROBE_SIZE, ReflectionProbes};
+use crate::render_graph::TextureDesc;
 use oxide_assets::{AssetId, AssetServer};
 use oxide_math::{Matrix4x4, Matrix4x4Ext, Vector3, Vector4};
 use std::collections::HashMap;
@@ -95,6 +96,9 @@ struct MainKey {
     transparent: bool,
     double_sided: bool,
     skinned: bool,
+    /// Render Objects features can change the depth test and turn depth writes off.
+    depth_test: DepthTest,
+    depth_write: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -157,8 +161,6 @@ struct TaaHistory {
 
 struct Targets {
     last_used: u64,
-    /// FXAA input (tonemapped, sRGB-encoded), made on first use.
-    ldr: Option<wgpu::TextureView>,
     /// Motion vectors, made on first TAA use.
     motion: Option<wgpu::TextureView>,
     /// Depth of field / motion blur textures, made on first use.
@@ -228,6 +230,8 @@ pub struct SceneRenderer {
     view_prev: HashMap<(u64, u32, u32), (u64, Matrix4x4, Matrix4x4)>,
     /// Frame each Render Texture was last rendered in.
     rt_frames: HashMap<AssetId, u64>,
+    fullscreen: crate::fullscreen::FullscreenGpu,
+    graph_pool: crate::render_graph::TexturePool,
     frame_buffers: Vec<wgpu::Buffer>,
     /// Per camera: cluster cells and light index list (Forward+).
     cluster_buffers: Vec<(wgpu::Buffer, wgpu::Buffer)>,
@@ -597,6 +601,8 @@ impl SceneRenderer {
             terrain_prepass,
             view_prev: HashMap::new(),
             rt_frames: HashMap::new(),
+            fullscreen: crate::fullscreen::FullscreenGpu::new(device, &gpu.queue),
+            graph_pool: Default::default(),
             frame_buffers: Vec::new(),
             cluster_buffers: Vec::new(),
             frame_groups: Vec::new(),
@@ -826,8 +832,13 @@ impl SceneRenderer {
                 },
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: DEPTH_FORMAT,
-                    depth_write_enabled: Some(!key.transparent),
-                    depth_compare: Some(wgpu::CompareFunction::Greater),
+                    depth_write_enabled: Some(!key.transparent && key.depth_write),
+                    // Reversed-Z: nearer is greater.
+                    depth_compare: Some(match key.depth_test {
+                        DepthTest::LessEqual => wgpu::CompareFunction::Greater,
+                        DepthTest::Greater => wgpu::CompareFunction::Less,
+                        DepthTest::Always => wgpu::CompareFunction::Always,
+                    }),
                     stencil: Default::default(),
                     bias: Default::default(),
                 }),
@@ -1001,7 +1012,6 @@ impl SceneRenderer {
             (w, h, samples),
             Targets {
                 last_used: now,
-                ldr: None,
                 motion: None,
                 fx: None,
                 ssao: None,
@@ -1224,28 +1234,6 @@ impl SceneRenderer {
 
         // ---- post-processing into the target ------------------------------------------
         let key = (w, h, out.samples);
-        if out.fxaa {
-            let t = self.targets.get_mut(&key).expect("targets");
-            t.ldr.get_or_insert_with(|| {
-                gpu.device
-                    .create_texture(&wgpu::TextureDescriptor {
-                        label: Some("ldr (fxaa input)"),
-                        size: wgpu::Extent3d {
-                            width: w,
-                            height: h,
-                            depth_or_array_layers: 1,
-                        },
-                        mip_level_count: 1,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        format: crate::aa::LDR_FORMAT,
-                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                            | wgpu::TextureUsages::TEXTURE_BINDING,
-                        view_formats: &[],
-                    })
-                    .create_view(&Default::default())
-            });
-        }
         // Depth of field and motion blur, from the first camera's view.
         let mut fx_out = None;
         if out.fx
@@ -1307,34 +1295,160 @@ impl SceneRenderer {
             }
             (None, None) => &targets.resolve,
         };
-        let (post_target, post_format) = match &targets.ldr {
-            Some(ldr) if out.fxaa => (ldr, crate::aa::LDR_FORMAT),
-            _ => (target, format),
+
+        // Post-processing as a render graph: Full Screen Pass features before post on the
+        // HDR image, bloom + uber, FXAA, then features after post on the final image.
+        let full_screen = |event: RenderPassEvent| {
+            frame
+                .renderer_features
+                .iter()
+                .filter_map(move |f| match f {
+                    RendererFeature::FullScreen {
+                        event: e,
+                        shader,
+                        params,
+                    } if *e == event => Some((*shader, *params)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
         };
-        self.post.run(
-            &gpu.device,
-            &gpu.queue,
-            &mut encoder,
-            hdr,
-            &targets.bloom,
-            post_target,
-            post_format,
-            &env.post,
-            w as f32 / h as f32,
-            frame.time,
-        );
-        if out.fxaa {
-            self.aa.fxaa(
-                &gpu.device,
-                &gpu.queue,
-                &mut encoder,
-                post_target,
-                target,
-                format,
-                w,
-                h,
+        let before = full_screen(RenderPassEvent::BeforeRenderingPostProcessing);
+        let after = full_screen(RenderPassEvent::AfterRenderingPostProcessing);
+        let depth_copy = targets.fx.as_ref().map(|f| &f.depth);
+        let post = std::cell::RefCell::new(&mut self.post);
+        let aa = std::cell::RefCell::new(&mut self.aa);
+        let fsg = std::cell::RefCell::new(&mut self.fullscreen);
+        let (aspect, time) = (w as f32 / h as f32, frame.time);
+        let srgb = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let mut graph = crate::render_graph::RenderGraph::new();
+        let mut cur = graph.import(hdr);
+        let mut slot = 0;
+        for (shader, params) in before {
+            let (src, dst) = (cur, graph.create(TextureDesc::color(w, h, HDR_FORMAT)));
+            let (fsg, s) = (&fsg, slot);
+            graph.add_pass(
+                "Full Screen Pass (before post)",
+                |b| {
+                    b.read(src).write(dst);
+                },
+                move |ctx| {
+                    fsg.borrow_mut().run(
+                        ctx.device,
+                        ctx.queue,
+                        ctx.encoder,
+                        assets,
+                        s,
+                        shader,
+                        params,
+                        time,
+                        &ctx.view(src),
+                        depth_copy,
+                        &ctx.view(dst),
+                        HDR_FORMAT,
+                        (w, h),
+                    )
+                },
             );
+            cur = dst;
+            slot += 1;
         }
+        let final_target = graph.import(target);
+        let (post_out, post_format) = if out.fxaa {
+            (
+                graph.create(TextureDesc::color(w, h, crate::aa::LDR_FORMAT)),
+                crate::aa::LDR_FORMAT,
+            )
+        } else if !after.is_empty() {
+            (graph.create(TextureDesc::color(w, h, srgb)), srgb)
+        } else {
+            (final_target, format)
+        };
+        {
+            let (src, post) = (cur, &post);
+            graph.add_pass(
+                "Post-processing",
+                |b| {
+                    b.read(src).write(post_out);
+                },
+                move |ctx| {
+                    post.borrow_mut().run(
+                        ctx.device,
+                        ctx.queue,
+                        ctx.encoder,
+                        &ctx.view(src),
+                        &targets.bloom,
+                        &ctx.view(post_out),
+                        post_format,
+                        &env.post,
+                        aspect,
+                        time,
+                    )
+                },
+            );
+            cur = post_out;
+        }
+        if out.fxaa {
+            let (dst, dst_format) = if after.is_empty() {
+                (final_target, format)
+            } else {
+                (graph.create(TextureDesc::color(w, h, srgb)), srgb)
+            };
+            let (src, aa) = (cur, &aa);
+            graph.add_pass(
+                "FXAA",
+                |b| {
+                    b.read(src).write(dst);
+                },
+                move |ctx| {
+                    aa.borrow_mut().fxaa(
+                        ctx.device,
+                        ctx.queue,
+                        ctx.encoder,
+                        &ctx.view(src),
+                        &ctx.view(dst),
+                        dst_format,
+                        w,
+                        h,
+                    )
+                },
+            );
+            cur = dst;
+        }
+        let count = after.len();
+        for (i, (shader, params)) in after.into_iter().enumerate() {
+            let (dst, dst_format) = if i + 1 == count {
+                (final_target, format)
+            } else {
+                (graph.create(TextureDesc::color(w, h, srgb)), srgb)
+            };
+            let (src, fsg, s) = (cur, &fsg, slot);
+            graph.add_pass(
+                "Full Screen Pass (after post)",
+                |b| {
+                    b.read(src).write(dst);
+                },
+                move |ctx| {
+                    fsg.borrow_mut().run(
+                        ctx.device,
+                        ctx.queue,
+                        ctx.encoder,
+                        assets,
+                        s,
+                        shader,
+                        params,
+                        time,
+                        &ctx.view(src),
+                        depth_copy,
+                        &ctx.view(dst),
+                        dst_format,
+                        (w, h),
+                    )
+                },
+            );
+            cur = dst;
+            slot += 1;
+        }
+        graph.execute(&gpu.device, &gpu.queue, &mut encoder, &mut self.graph_pool);
         gpu.queue.submit([encoder.finish()]);
         stats
     }
@@ -1492,7 +1606,13 @@ impl SceneRenderer {
             mode = AntiAliasing::Fxaa;
         }
         let taa = mode == AntiAliasing::Taa;
-        let fx = capture.is_none() && crate::postfx::PostFx::wanted(&frame.environment.post);
+        // Depth is copied for depth-based post effects and Full Screen Pass shaders.
+        let fx = capture.is_none()
+            && (crate::postfx::PostFx::wanted(&frame.environment.post)
+                || frame
+                    .renderer_features
+                    .iter()
+                    .any(|f| matches!(f, RendererFeature::FullScreen { .. })));
         // SSAO for a single camera (its AO texture covers the whole target).
         let ssao = frame
             .environment
@@ -1902,6 +2022,23 @@ impl SceneRenderer {
 
         // ---- per-camera culling and batching -------------------------------------------
         let mut camera_batches: Vec<(Vec<Batch>, Vec<Batch>)> = Vec::new();
+        let mut camera_features: Vec<Vec<(RenderPassEvent, Vec<Batch>)>> = Vec::new();
+        // Override materials of Render Objects features: (id, transparent, double sided).
+        let feature_materials: Vec<Option<(AssetId, bool, bool)>> = frame
+            .renderer_features
+            .iter()
+            .map(|f| match f {
+                RendererFeature::RenderObjects {
+                    override_material: Some(m),
+                    ..
+                } => {
+                    let id = self.gpu_assets.ensure_material(device, queue, assets, *m);
+                    let gm = &self.gpu_assets.materials[&id];
+                    Some((id, gm.transparent, gm.double_sided))
+                }
+                _ => None,
+            })
+            .collect();
         // (jittered, unjittered view-projection, frustum) of the TAA camera.
         let mut taa_matrices: Option<(Matrix4x4, Matrix4x4, [Vector4; 6])> = None;
         // Projection (jittered with TAA) of the first camera, for SSAO.
@@ -2054,6 +2191,8 @@ impl SceneRenderer {
                     transparent: false,
                     double_sided: r.double_sided,
                     skinned: r.item.joint_offset.is_some(),
+                    depth_test: DepthTest::LessEqual,
+                    depth_write: true,
                 };
                 let idx = instances.len() as u32;
                 instances.push(make_instance(r));
@@ -2087,6 +2226,8 @@ impl SceneRenderer {
                             transparent: true,
                             double_sided: r.double_sided,
                             skinned: r.item.joint_offset.is_some(),
+                            depth_test: DepthTest::LessEqual,
+                            depth_write: false,
                         },
                         material: r.material,
                         mesh: r.item.mesh,
@@ -2096,6 +2237,53 @@ impl SceneRenderer {
                 })
                 .collect();
             camera_batches.push((ob, tb));
+
+            // Render Objects features: the camera's renderers on their layers, again.
+            let mut fb: Vec<(RenderPassEvent, Vec<Batch>)> = Vec::new();
+            for (feature, override_mat) in frame.renderer_features.iter().zip(&feature_materials) {
+                let RendererFeature::RenderObjects {
+                    event,
+                    layer_mask,
+                    depth_test,
+                    write_depth,
+                    ..
+                } = feature
+                else {
+                    continue;
+                };
+                let mut list = Vec::new();
+                for r in &resolved {
+                    let bit = 1u32 << (r.item.layer & 31);
+                    if r.item.shadows_only
+                        || cam.culling_mask & layer_mask & bit == 0
+                        || (r.radius.is_finite() && !sphere_visible(&planes, r.center, r.radius))
+                    {
+                        continue;
+                    }
+                    let (material, transparent, double_sided) = match override_mat {
+                        Some((m, t, d)) => (*m, *t, *d),
+                        None => (r.material, r.transparent, r.double_sided),
+                    };
+                    let idx = instances.len() as u32;
+                    instances.push(make_instance(r));
+                    list.push(Batch {
+                        key: MainKey {
+                            samples,
+                            transparent,
+                            double_sided,
+                            skinned: r.item.joint_offset.is_some(),
+                            depth_test: *depth_test,
+                            depth_write: *write_depth,
+                        },
+                        material,
+                        mesh: r.item.mesh,
+                        submesh: r.item.submesh,
+                        instances: idx..idx + 1,
+                    });
+                }
+                fb.push((*event, list));
+            }
+            camera_features.push(fb);
             let mut tl = Vec::new();
             for (t, c, r, b) in &terrain_items {
                 let probes = self.reflections.select(*c, exclude);
@@ -2241,6 +2429,9 @@ impl SceneRenderer {
             for b in o.iter().chain(t) {
                 self.main_pipeline(device, b.key);
             }
+        }
+        for b in camera_features.iter().flatten().flat_map(|(_, list)| list) {
+            self.main_pipeline(device, b.key);
         }
         for list in shadow_batches
             .iter()
@@ -2498,27 +2689,45 @@ impl SceneRenderer {
                         pass.draw_indexed(range, 0, idx..idx + 1);
                     }
                 }
-                let (ob, tb) = &camera_batches[ci];
-                for b in ob.iter().chain(tb) {
-                    let mesh = &self.gpu_assets.meshes[&b.mesh];
-                    let mat = &self.gpu_assets.materials[&b.material];
-                    pass.set_pipeline(&self.main_pipelines[&b.key]);
-                    pass.set_bind_group(1, &mat.bind_group, &[]);
-                    pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-                    if b.key.skinned {
-                        let Some(skin) = &mesh.skin else { continue };
-                        pass.set_vertex_buffer(2, skin.slice(..));
+                let draw_batches = |pass: &mut wgpu::RenderPass,
+                                    list: &[Batch],
+                                    stats: &mut RenderStats| {
+                    for b in list {
+                        let mesh = &self.gpu_assets.meshes[&b.mesh];
+                        let mat = &self.gpu_assets.materials[&b.material];
+                        pass.set_pipeline(&self.main_pipelines[&b.key]);
+                        pass.set_bind_group(1, &mat.bind_group, &[]);
+                        pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                        if b.key.skinned {
+                            let Some(skin) = &mesh.skin else { continue };
+                            pass.set_vertex_buffer(2, skin.slice(..));
+                        }
+                        pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                        let range = mesh.submeshes[b.submesh as usize].clone();
+                        let n = b.instances.end - b.instances.start;
+                        stats.triangles += ((range.end - range.start) / 3) as u64 * n as u64;
+                        stats.instances += n;
+                        stats.draw_calls += 1;
+                        pass.draw_indexed(range, 0, b.instances.clone());
                     }
-                    pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-                    let range = mesh.submeshes[b.submesh as usize].clone();
-                    let n = b.instances.end - b.instances.start;
-                    stats.triangles += ((range.end - range.start) / 3) as u64 * n as u64;
-                    stats.instances += n;
-                    stats.draw_calls += 1;
-                    pass.draw_indexed(range, 0, b.instances.clone());
+                };
+                let features_at = |event: RenderPassEvent| {
+                    camera_features[ci]
+                        .iter()
+                        .filter(move |(e, _)| *e == event)
+                        .map(|(_, l)| l)
+                };
+                let (ob, tb) = &camera_batches[ci];
+                draw_batches(&mut pass, ob, &mut stats);
+                for list in features_at(RenderPassEvent::AfterRenderingOpaques) {
+                    draw_batches(&mut pass, list, &mut stats);
                 }
+                draw_batches(&mut pass, tb, &mut stats);
                 if !particle_ranges.is_empty() {
                     stats.draw_calls += self.particles.draw(&mut pass, &particle_ranges, samples);
+                }
+                for list in features_at(RenderPassEvent::AfterRenderingTransparents) {
+                    draw_batches(&mut pass, list, &mut stats);
                 }
                 if !frame.lines.is_empty() {
                     pass.set_pipeline(&fixed.line);

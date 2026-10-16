@@ -37,6 +37,9 @@ pub struct AssetServer {
     pub audio: Assets<AudioClip>,
     pub terrains: Assets<crate::terrain::TerrainData>,
     pub render_textures: Assets<crate::render_texture::RenderTexture>,
+    pub shaders: Assets<crate::shader::Shader>,
+    /// Modification times of files read, for [`AssetServer::reload_changed`].
+    mtimes: std::sync::Mutex<std::collections::HashMap<String, std::time::SystemTime>>,
 }
 
 pub const DEFAULT_MATERIAL: &str = "builtin:Default-Material";
@@ -56,6 +59,8 @@ impl AssetServer {
             audio: Assets::default(),
             terrains: Assets::default(),
             render_textures: Assets::default(),
+            shaders: Assets::default(),
+            mtimes: Default::default(),
         };
         for p in PrimitiveType::ALL {
             s.meshes.insert(p.mesh_path(), p.mesh());
@@ -100,7 +105,68 @@ impl AssetServer {
 
     fn read(&self, path: &str) -> Result<Vec<u8>, String> {
         let full = self.full_path(path);
-        std::fs::read(&full).map_err(|e| format!("cannot read {}: {e}", full.display()))
+        let bytes =
+            std::fs::read(&full).map_err(|e| format!("cannot read {}: {e}", full.display()))?;
+        let stamp = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+        let mut mtimes = self.mtimes.lock().expect("mtimes lock");
+        if let Some(t) = stamp(&full) {
+            mtimes.insert(path.to_owned(), t);
+        }
+        // Texture import settings live next to the texture.
+        if let Some(t) = stamp(&self.full_path(&format!("{path}.meta"))) {
+            mtimes.insert(format!("{path}.meta"), t);
+        }
+        Ok(bytes)
+    }
+
+    /// Re-imports textures, materials, shaders and render textures whose files (or texture
+    /// `.meta` files) changed on disk since they were read, like Unity's Asset Database
+    /// refresh. Returns the reloaded paths.
+    pub fn reload_changed(&mut self) -> Vec<String> {
+        let changed: Vec<String> = {
+            let mtimes = self.mtimes.lock().expect("mtimes lock");
+            mtimes
+                .iter()
+                .filter(|(p, t)| {
+                    std::fs::metadata(self.full_path(p))
+                        .and_then(|m| m.modified())
+                        .is_ok_and(|now| now > **t)
+                })
+                .map(|(p, _)| p.trim_end_matches(".meta").to_owned())
+                .collect()
+        };
+        let mut done = Vec::new();
+        for path in changed {
+            if done.contains(&path) {
+                continue;
+            }
+            let ext = Path::new(&path)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            let result = match ext.as_str() {
+                "png" | "jpg" | "jpeg" | "tga" | "bmp" | "hdr" | "ktx2" => {
+                    self.load_texture(&path).map(|_| ())
+                }
+                "mat" => self.load_material(&path).map(|_| ()),
+                "wgsl" => self.load_shader(&path).map(|_| ()),
+                "rendertexture" => self.load_render_texture(&path).map(|_| ()),
+                _ => {
+                    // Not hot-reloadable yet: remember the new time so it isn't retried.
+                    let _ = self.read(&path);
+                    continue;
+                }
+            };
+            match result {
+                Ok(()) => done.push(path),
+                Err(e) => {
+                    oxide_core::debug_log_error!("{e}");
+                    let _ = self.read(&path);
+                }
+            }
+        }
+        done
     }
 
     /// Import settings of a texture: its `.meta` file, or defaults guessed from the name.
@@ -275,6 +341,19 @@ impl AssetServer {
         Ok(self.materials.insert(path.to_owned(), material.clone()))
     }
 
+    /// Loads (or reloads) a `.wgsl` shader file.
+    pub fn load_shader(&mut self, path: &str) -> Result<Handle<crate::shader::Shader>, String> {
+        let source = String::from_utf8(self.read(path)?).map_err(|e| format!("{path}: {e}"))?;
+        let name = Path::new(path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Shader")
+            .to_owned();
+        Ok(self
+            .shaders
+            .insert(path.to_owned(), crate::shader::Shader { name, source }))
+    }
+
     /// Loads (or reloads) a `.renderTexture` file.
     pub fn load_render_texture(
         &mut self,
@@ -365,6 +444,11 @@ impl AssetServer {
                     self.load_material(file)?;
                 }
             }
+            "wgsl" => {
+                if self.shaders.handle_of(file).is_none() {
+                    self.load_shader(file)?;
+                }
+            }
             "rendertexture" => {
                 if self.render_textures.handle_of(file).is_none() {
                     self.load_render_texture(file)?;
@@ -435,5 +519,35 @@ mod material_file_tests {
             Some("builtin:grid")
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[cfg(test)]
+mod reload_tests {
+    use super::*;
+
+    #[test]
+    fn edited_files_are_reloaded() {
+        let dir = std::env::temp_dir().join(format!("oxide-reload-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("Assets")).unwrap();
+        let file = dir.join("Assets/fx.wgsl");
+        std::fs::write(&file, "// v1").unwrap();
+        let mut a = AssetServer::new(&dir);
+        let h = a.load_shader("Assets/fx.wgsl").unwrap();
+        assert!(a.reload_changed().is_empty(), "nothing changed yet");
+
+        std::fs::write(&file, "// v2").unwrap();
+        // Make sure the timestamp moves even on coarse file systems.
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+        std::fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        assert_eq!(a.reload_changed(), vec!["Assets/fx.wgsl".to_owned()]);
+        assert_eq!(a.shaders.get(&h).unwrap().source, "// v2");
+        assert!(a.reload_changed().is_empty(), "reloaded once");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

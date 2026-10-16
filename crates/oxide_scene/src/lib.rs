@@ -49,6 +49,8 @@ pub fn register_builtin(reg: &mut ComponentRegistry) {
     reg.register::<OcclusionPortal>("Rendering/Occlusion Portal");
     reg.register::<ReflectionProbe>("Rendering/Reflection Probe");
     volume::register(reg);
+    reg.register::<FullScreenPassRendererFeature>("Rendering/Renderer Features/Full Screen Pass");
+    reg.register::<RenderObjectsRendererFeature>("Rendering/Renderer Features/Render Objects");
 }
 
 #[cfg(test)]
