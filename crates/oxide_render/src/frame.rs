@@ -252,6 +252,149 @@ pub enum FogKind {
     ExponentialSquared { density: f32 },
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TonemapMode {
+    None,
+    /// Unity's Neutral curve: compresses the range, keeps hue and saturation.
+    Neutral,
+    #[default]
+    Aces,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BloomSettings {
+    pub intensity: f32,
+    /// Gamma-space brightness above which pixels bloom.
+    pub threshold: f32,
+    /// 0..1: how far the glow spreads.
+    pub scatter: f32,
+    /// Linear tint.
+    pub tint: [f32; 3],
+    /// Brightest value that can bloom.
+    pub clamp: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VignetteSettings {
+    /// Linear color.
+    pub color: [f32; 3],
+    pub center: [f32; 2],
+    pub intensity: f32,
+    pub smoothness: f32,
+    pub rounded: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LensDistortionSettings {
+    pub intensity: f32,
+    pub multiplier: [f32; 2],
+    pub center: [f32; 2],
+    pub scale: f32,
+}
+
+/// The resolved post-processing stack (Unity's Volume stack for the camera).
+/// Trackball values (`lift`, `shadows`, ...) are Unity's: `xyz` color with 1 = neutral and
+/// `w` offset.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PostSettings {
+    /// Off for cameras with post-processing disabled (tonemapping and grading too).
+    pub enabled: bool,
+    /// Linear multiplier before grading (RenderSettings exposure × 2^post exposure).
+    pub exposure: f32,
+    pub tonemapping: TonemapMode,
+    pub bloom: BloomSettings,
+    /// White balance `(temperature, tint)`, -100..100.
+    pub white_balance: [f32; 2],
+    /// -100..100.
+    pub contrast: f32,
+    pub saturation: f32,
+    /// Degrees.
+    pub hue_shift: f32,
+    /// Linear color.
+    pub color_filter: [f32; 3],
+    /// Output rows in percent: `[r_out, g_out, b_out]` each `[r_in, g_in, b_in]`.
+    pub channel_mixer: [[f32; 3]; 3],
+    pub lift: [f32; 4],
+    pub gamma: [f32; 4],
+    pub gain: [f32; 4],
+    pub shadows: [f32; 4],
+    pub midtones: [f32; 4],
+    pub highlights: [f32; 4],
+    /// Shadows start/end, highlights start/end.
+    pub smh_ranges: [f32; 4],
+    /// sRGB colors (grey = none).
+    pub split_shadows: [f32; 3],
+    pub split_highlights: [f32; 3],
+    pub split_balance: f32,
+    pub vignette: VignetteSettings,
+    pub chromatic_aberration: f32,
+    /// `(intensity, response)`.
+    pub film_grain: [f32; 2],
+    pub lens_distortion: LensDistortionSettings,
+}
+
+impl Default for PostSettings {
+    fn default() -> Self {
+        let neutral = [1.0, 1.0, 1.0, 0.0];
+        Self {
+            enabled: true,
+            exposure: 1.0,
+            tonemapping: TonemapMode::Aces,
+            bloom: BloomSettings {
+                intensity: 0.4,
+                threshold: 1.0,
+                scatter: 0.7,
+                tint: [1.0; 3],
+                clamp: 65472.0,
+            },
+            white_balance: [0.0; 2],
+            contrast: 0.0,
+            saturation: 0.0,
+            hue_shift: 0.0,
+            color_filter: [1.0; 3],
+            channel_mixer: [[100.0, 0.0, 0.0], [0.0, 100.0, 0.0], [0.0, 0.0, 100.0]],
+            lift: neutral,
+            gamma: neutral,
+            gain: neutral,
+            shadows: neutral,
+            midtones: neutral,
+            highlights: neutral,
+            smh_ranges: [0.0, 0.3, 0.55, 1.0],
+            split_shadows: [0.5; 3],
+            split_highlights: [0.5; 3],
+            split_balance: 0.0,
+            vignette: VignetteSettings {
+                color: [0.0; 3],
+                center: [0.5, 0.5],
+                intensity: 0.0,
+                smoothness: 0.2,
+                rounded: false,
+            },
+            chromatic_aberration: 0.0,
+            film_grain: [0.0, 0.8],
+            lens_distortion: LensDistortionSettings {
+                intensity: 0.0,
+                multiplier: [1.0, 1.0],
+                center: [0.5, 0.5],
+                scale: 1.0,
+            },
+        }
+    }
+}
+
+impl PostSettings {
+    /// The defaults without bloom: ACES tonemapping only (handy for tests).
+    pub fn neutral() -> Self {
+        Self {
+            bloom: BloomSettings {
+                intensity: 0.0,
+                ..Self::default().bloom
+            },
+            ..Self::default()
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Environment {
     /// sRGB inputs, converted in the renderer.
@@ -262,10 +405,8 @@ pub struct Environment {
     pub ambient_intensity: f32,
     pub reflection_intensity: f32,
     pub fog: Option<(FogKind, Color)>,
-    pub exposure: f32,
-    /// `(intensity, threshold)`.
-    pub bloom: Option<(f32, f32)>,
-    pub vignette: f32,
+    /// Post-processing after the Volume stack is evaluated.
+    pub post: PostSettings,
     pub shadow_distance: f32,
     /// MSAA samples (1, 2, 4 or 8; clamped to what the GPU supports).
     pub msaa_samples: u32,
@@ -281,9 +422,7 @@ impl Default for Environment {
             ambient_intensity: 1.0,
             reflection_intensity: 1.0,
             fog: None,
-            exposure: 1.0,
-            bloom: Some((0.4, 1.0)),
-            vignette: 0.15,
+            post: PostSettings::default(),
             shadow_distance: 150.0,
             msaa_samples: 4,
         }

@@ -86,9 +86,7 @@ pub fn environment(rs: &RenderSettings) -> Environment {
             },
             rs.fog_color,
         )),
-        exposure: rs.exposure,
-        bloom: rs.bloom.then_some((rs.bloom_intensity, rs.bloom_threshold)),
-        vignette: rs.vignette,
+        post: crate::volumes::VolumeStack::base(rs).to_post(rs, true),
         shadow_distance: rs.shadow_distance,
         msaa_samples: match rs.msaa {
             MsaaQuality::Disabled => 1,
@@ -110,6 +108,12 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
     let world_matrix =
         |id: oxide_scene::GameObjectId| matrices.get(id.index() as usize).copied().flatten();
 
+    // Post-processing follows the first scene camera's setting (the Scene view always has it).
+    let post_enabled = cameras_override.is_some()
+        || world
+            .query::<Camera>()
+            .min_by(|a, b| a.1.depth.total_cmp(&b.1.depth))
+            .is_none_or(|(_, c)| c.post_processing);
     let mut frame = RenderFrame {
         cameras: cameras_override.unwrap_or_else(|| cameras(world)),
         environment: environment(&settings),
@@ -157,6 +161,13 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
         }
     }
     frame.sun = sun.map(|(_, s)| s);
+    // Volumes are evaluated at the first camera (Unity's default volume trigger).
+    let trigger = frame
+        .cameras
+        .first()
+        .map_or(oxide_math::Vector3::ZERO, |c| c.position);
+    frame.environment.post =
+        crate::volumes::evaluate(world, &settings, trigger).to_post(&settings, post_enabled);
     frame.reflection_probes = reflection_probes(world);
 
     // Terrains choose chunk LODs for the first camera.

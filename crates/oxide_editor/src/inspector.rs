@@ -738,6 +738,31 @@ fn value_ui(
             });
             changed
         }
+        // A Volume parameter: Unity's override checkbox, then the value (greyed out while
+        // not overridden). The field's own info (range, enum options) applies to the value.
+        Value::Object(map)
+            if map.len() == 2
+                && matches!(map.get("override"), Some(Value::Bool(_)))
+                && map.contains_key("value") =>
+        {
+            let mut changed = false;
+            ui.horizontal(|ui| {
+                if let Some(Value::Bool(on)) = map.get_mut("override") {
+                    changed |= ui
+                        .checkbox(on, "")
+                        .on_hover_text("Override this parameter")
+                        .changed();
+                }
+                let on = matches!(map.get("override"), Some(Value::Bool(true)));
+                if let Some(inner) = map.get_mut("value") {
+                    let k = inner.kind();
+                    ui.add_enabled_ui(on, |ui| {
+                        changed |= value_ui(ui, w, f, k, type_name, inner, &format!("{salt}.v"));
+                    });
+                }
+            });
+            changed
+        }
         Value::Object(map) => {
             let mut changed = false;
             ui.vertical(|ui| {

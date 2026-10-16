@@ -103,6 +103,9 @@ pub enum Create {
     PointLight,
     SpotLight,
     ReflectionProbe,
+    GlobalVolume,
+    BoxVolume,
+    SphereVolume,
     Camera,
 }
 
@@ -1049,6 +1052,44 @@ fn create(w: &mut World, kind: Create, active: Option<GameObjectId>) -> GameObje
         Create::ReflectionProbe => {
             let id = w.create("Reflection Probe");
             w.add_component(id, oxide_scene::ReflectionProbe::default());
+            id
+        }
+        Create::GlobalVolume => {
+            let id = w.create("Global Volume");
+            w.add_component(id, oxide_scene::Volume::default());
+            id
+        }
+        Create::BoxVolume | Create::SphereVolume => {
+            let sphere = kind == Create::SphereVolume;
+            let id = w.create(if sphere {
+                "Sphere Volume"
+            } else {
+                "Box Volume"
+            });
+            w.add_component(
+                id,
+                oxide_scene::Volume {
+                    is_global: false,
+                    ..Default::default()
+                },
+            );
+            if sphere {
+                w.add_component(
+                    id,
+                    oxide_physics::SphereCollider {
+                        is_trigger: true,
+                        ..Default::default()
+                    },
+                );
+            } else {
+                w.add_component(
+                    id,
+                    oxide_physics::BoxCollider {
+                        is_trigger: true,
+                        ..Default::default()
+                    },
+                );
+            }
             id
         }
         Create::Camera => {

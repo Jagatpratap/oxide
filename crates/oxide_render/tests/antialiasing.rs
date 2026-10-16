@@ -52,8 +52,7 @@ fn frame(assets: &mut AssetServer, mode: AntiAliasing, msaa: u32, x: f32) -> Ren
             reflection_probe_static: false,
         }],
         environment: Environment {
-            bloom: None,
-            vignette: 0.0,
+            post: PostSettings::neutral(),
             msaa_samples: msaa,
             ..Default::default()
         },

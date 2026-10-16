@@ -980,7 +980,6 @@ impl SceneRenderer {
             }
             None => &targets.resolve,
         };
-        let bloom = env.bloom.filter(|_| !frame.cameras.is_empty());
         let (post_target, post_format) = match &targets.ldr {
             Some(ldr) if out.fxaa => (ldr, crate::aa::LDR_FORMAT),
             _ => (target, format),
@@ -993,9 +992,9 @@ impl SceneRenderer {
             &targets.bloom,
             post_target,
             post_format,
-            env.exposure,
-            bloom,
-            env.vignette,
+            &env.post,
+            w as f32 / h as f32,
+            frame.time,
         );
         if out.fxaa {
             self.aa.fxaa(

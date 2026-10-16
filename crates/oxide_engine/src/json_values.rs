@@ -216,6 +216,18 @@ pub fn json_to_value(f: &FieldInfo, v: &Json, world: &World) -> Result<Value, St
 pub fn json_like(template: &Value, v: &Json, world: &World) -> Result<Value, String> {
     let kind = template.kind();
     match template {
+        // A Volume parameter given as a plain value: override it with that value.
+        Value::Object(map) if !v.is_object() && map.contains_key("override") && map.len() == 2 => {
+            let inner = map.get("value").ok_or("expected an object")?;
+            Ok(Value::Object(
+                [
+                    ("override".to_owned(), Value::Bool(true)),
+                    ("value".to_owned(), json_like(inner, v, world)?),
+                ]
+                .into_iter()
+                .collect(),
+            ))
+        }
         Value::Object(map) => {
             let obj = v.as_object().ok_or("expected an object")?;
             let mut out = std::collections::BTreeMap::new();

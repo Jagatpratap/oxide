@@ -18,6 +18,7 @@ pub mod scene_manager;
 pub mod serialize;
 pub mod system;
 pub mod timers;
+pub mod volume;
 pub mod world;
 
 pub use application::Application;
@@ -31,6 +32,7 @@ pub use scene_manager::{AsyncOperation, PumpResult, SceneOpStatus, SceneOperatio
 pub use serialize::{ComponentData, ObjectData, SceneFile};
 pub use system::{DebugDraw, DebugLine, System};
 pub use timers::Timers;
+pub use volume::*;
 pub use world::{
     GameObject, LayerNames, Phase, ReloadedComponent, SceneHandle, SceneInfo, Space,
     StaticEditorFlags, Transform, World,
@@ -46,6 +48,7 @@ pub fn register_builtin(reg: &mut ComponentRegistry) {
     reg.register::<LODGroup>("Rendering/LOD Group");
     reg.register::<OcclusionPortal>("Rendering/Occlusion Portal");
     reg.register::<ReflectionProbe>("Rendering/Reflection Probe");
+    volume::register(reg);
 }
 
 #[cfg(test)]

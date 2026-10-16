@@ -74,8 +74,7 @@ fn scene(assets: &mut AssetServer) -> RenderFrame {
             ),
         ],
         environment: Environment {
-            bloom: None,
-            vignette: 0.0,
+            post: PostSettings::neutral(),
             ..Default::default()
         },
         ..Default::default()

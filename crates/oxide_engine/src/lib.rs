@@ -19,6 +19,7 @@ pub mod mcp_terrain;
 pub mod mcp_tools;
 pub mod objects;
 pub mod streaming;
+pub mod volumes;
 
 pub use app::{App, AppControl, EngineConfig, McpToolsFn};
 pub use engine::{Engine, GameViewport, Plugin, Shell, init_world};

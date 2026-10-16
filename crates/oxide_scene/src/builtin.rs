@@ -308,6 +308,8 @@ pub struct RenderSettings {
     pub sun: Option<GameObjectId>,
     /// Exposure applied before tonemapping.
     pub exposure: f32,
+    /// Tonemapping when no Volume overrides it.
+    pub tonemapping: crate::volume::TonemappingMode,
     pub bloom: bool,
     pub bloom_intensity: f32,
     pub bloom_threshold: f32,
@@ -341,6 +343,7 @@ impl Default for RenderSettings {
             fog_end_distance: 300.0,
             sun: None,
             exposure: 1.0,
+            tonemapping: crate::volume::TonemappingMode::ACES,
             bloom: true,
             bloom_intensity: 0.4,
             bloom_threshold: 1.0,

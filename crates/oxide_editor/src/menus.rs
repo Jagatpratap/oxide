@@ -126,6 +126,17 @@ fn create_items(prefix: &str) -> Vec<MenuItem> {
         "",
         Action::Create(Create::ReflectionProbe),
     ));
+    for (name, kind) in [
+        ("Global Volume", Create::GlobalVolume),
+        ("Box Volume", Create::BoxVolume),
+        ("Sphere Volume", Create::SphereVolume),
+    ] {
+        v.push(item(
+            &format!("{prefix}Volume/{name}"),
+            "",
+            Action::Create(kind),
+        ));
+    }
     v.push(item(
         &format!("{prefix}Camera"),
         "",
