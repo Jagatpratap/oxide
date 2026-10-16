@@ -11,11 +11,15 @@ pub use oxide_engine::*;
 /// Scripts compiled into a player never meet a different engine build.
 pub const BUILD_ID: &str = "player";
 
-/// Same as `oxide_dylib::scripts!`: declares a Scripts library's components.
+/// Same as `oxide_dylib::scripts!`: declares a Scripts library's components, data asset
+/// types and StateMachineBehaviours.
 #[macro_export]
 macro_rules! scripts {
     // Custom Inspectors (`editors:`) are editor-only: accepted and ignored here.
-    ($($ty:ty => $menu:expr),* $(,)? $(; editors: $($ed:ty),* $(,)?)?) => {
+    ($($ty:ty => $menu:expr),* $(,)?
+     $(; editors: $($ed:ty),* $(,)?)?
+     $(; assets: $($at:ty => ($ext:expr, $amenu:expr)),* $(,)?)?
+     $(; behaviours: $($bt:ty),* $(,)?)?) => {
         pub fn oxide_scripts_build_id() -> &'static str {
             $crate::BUILD_ID
         }
@@ -23,7 +27,36 @@ macro_rules! scripts {
         pub fn oxide_register_scripts(registry: &mut $crate::scene::ComponentRegistry) {
             $( registry.register::<$ty>($menu); )*
         }
+
+        pub fn oxide_register_assets(assets: &mut $crate::assets::AssetServer) {
+            let _ = &assets;
+            $($( $crate::register_script_asset::<$at>(assets, $ext, $amenu); )*)?
+        }
+
+        pub fn oxide_register_behaviours(b: &mut $crate::animation::StateMachineBehaviours) {
+            let _ = &b;
+            $($( b.register::<$bt>(); )*)?
+        }
     };
+}
+
+/// Registers a script's data asset type (what `scripts! { ...; assets: ... }` expands to).
+pub fn register_script_asset<T>(
+    assets: &mut oxide_engine::assets::AssetServer,
+    extension: &'static str,
+    menu: &'static str,
+) where
+    T: core::reflect::Reflect + Clone + Default + Send + Sync + 'static,
+{
+    let name = T::default().type_info().name;
+    let extensions: &'static [&'static str] = Box::leak(Box::new([extension]));
+    let base = menu.rsplit('/').next().unwrap_or(name);
+    let default_name: &'static str = Box::leak(format!("New {base}").into_boxed_str());
+    assets.register_data_asset::<T>(
+        oxide_engine::assets::AssetTypeInfo::new(name, extensions)
+            .menu(menu, default_name, 300)
+            .color(150, 200, 140),
+    );
 }
 
 /// `build.yaml`: what the Build Settings chose.
@@ -64,6 +97,21 @@ pub fn run(register: fn(&mut scene::ComponentRegistry)) -> std::process::ExitCod
     run_scripts(register, |_| {})
 }
 
+/// [`run_scripts`] plus the Scripts' StateMachineBehaviours.
+pub fn run_scripts_with_behaviours(
+    register: fn(&mut scene::ComponentRegistry),
+    register_assets: fn(&mut assets::AssetServer),
+    register_behaviours: fn(&mut animation::StateMachineBehaviours),
+) -> std::process::ExitCode {
+    BEHAVIOURS.with(|b| b.set(Some(register_behaviours)));
+    run_scripts(register, register_assets)
+}
+
+thread_local! {
+    static BEHAVIOURS: std::cell::Cell<Option<fn(&mut animation::StateMachineBehaviours)>> =
+        const { std::cell::Cell::new(None) };
+}
+
 /// [`run`] with the Scripts library's data asset types (`scripts! { ...; assets: ... }`).
 pub fn run_scripts(
     register: fn(&mut scene::ComponentRegistry),
@@ -92,6 +140,14 @@ pub fn run_scripts(
     let mut app = App::with_config(config);
     register(&mut app.world_mut().registry);
     register_assets(app.world_mut().resource_mut::<assets::AssetServer>());
+    if let Some(f) = BEHAVIOURS.with(std::cell::Cell::get) {
+        let w = app.world_mut();
+        if !w.resources.contains::<animation::StateMachineBehaviours>() {
+            w.resources
+                .insert(animation::StateMachineBehaviours::default());
+        }
+        f(w.resource_mut::<animation::StateMachineBehaviours>());
+    }
     app.world_mut().resource_mut::<AppControl>().build_scenes = info.scenes.clone();
     let first = info.scenes.first().cloned();
     let app = app.setup(move |world| match first {

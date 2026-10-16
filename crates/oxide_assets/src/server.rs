@@ -1,7 +1,8 @@
 //! The asset database: typed stores plus loading from the project's `Assets/` folder.
 //! Reference: <https://docs.unity3d.com/Manual/AssetWorkflow.html>
 
-use crate::animation::{AnimationClip, AnimatorController};
+use crate::animation::AnimationClip;
+use crate::animator_controller::AnimatorController;
 use crate::handle::{Asset, Assets, Handle};
 use crate::material::Material;
 use crate::mesh::Mesh;
@@ -50,10 +51,10 @@ pub struct AssetServer {
     pub animations: Assets<AnimationClip>,
     pub controllers: Assets<AnimatorController>,
     /// Avatar Mask assets (`.mask`).
-    pub masks: Assets<crate::animation::AvatarMask>,
+    pub masks: Assets<crate::animator_controller::AvatarMask>,
     /// Animator Override Controllers as authored (their resolved controllers are in
     /// `controllers` under the same path).
-    pub override_controllers: Assets<crate::animation::AnimatorOverrideController>,
+    pub override_controllers: Assets<crate::animator_controller::AnimatorOverrideController>,
     pub audio: Assets<AudioClip>,
     pub terrains: Assets<crate::terrain::TerrainData>,
     pub render_textures: Assets<crate::render_texture::RenderTexture>,

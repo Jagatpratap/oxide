@@ -8,14 +8,19 @@
 //! the fixed step for `AnimatorUpdateMode::AnimatePhysics`.
 //! Reference: <https://docs.unity3d.com/Manual/AnimationOverview.html>
 
+pub mod behaviours;
+mod controller;
 mod humanoid;
 pub mod ik;
+pub mod mirror;
 
+pub use behaviours::{StateMachineBehaviour, StateMachineBehaviours};
+pub use controller::{ActiveTransition, motion_length, tree_weights};
 pub use humanoid::{HumanBodyBones, auto_map, is_human};
 
 use oxide_assets::{
     AnimationClip, AnimatorController, AnimatorLayerBlendingMode, AnimatorStateMachine,
-    AssetServer, AvatarMask, BlendTree2DType, ConditionMode, Handle, Motion, ParameterType,
+    AssetServer, AvatarMask, BlendTree2DType, Handle, Motion, ParameterType,
 };
 use oxide_core::Reflect;
 use oxide_core::Time;
@@ -57,6 +62,8 @@ pub enum AvatarIKHint {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AnimatorStateInfo {
     pub name: String,
+    /// `Layer.SubMachine.State` (Unity `fullPathHash` as a string).
+    pub full_path: String,
     pub tag: String,
     /// Integer part = completed loops, fraction = progress through the current loop.
     pub normalized_time: f32,
@@ -67,8 +74,9 @@ pub struct AnimatorStateInfo {
 }
 
 impl AnimatorStateInfo {
+    /// Unity `IsName`: the state's name or its full path (`Base Layer.Locomotion.Run`).
     pub fn is_name(&self, name: &str) -> bool {
-        self.name == name
+        self.name == name || self.full_path == name
     }
     pub fn is_tag(&self, tag: &str) -> bool {
         self.tag == tag
@@ -104,12 +112,26 @@ pub struct Playing {
 }
 
 impl Playing {
-    fn start(state: usize) -> Self {
+    fn start_at(state: usize, time: f32) -> Self {
         Self {
             state,
-            ..Default::default()
+            time,
+            prev_time: time,
         }
     }
+}
+
+/// A `Play` / `CrossFade` call waiting for the next update.
+#[derive(Clone, Debug, Default)]
+#[doc(hidden)]
+pub struct PendingPlay {
+    pub state: String,
+    pub fade: f32,
+    /// `fade` in seconds (else a fraction of the current state's length).
+    pub fixed: bool,
+    /// `None` = the first layer that has the state.
+    pub layer: Option<usize>,
+    pub normalized_time: Option<f32>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -118,6 +140,10 @@ pub struct LayerRuntime {
     pub current: Option<Playing>,
     /// Crossfade target, elapsed, duration.
     pub next: Option<(Playing, f32, f32)>,
+    /// The transition `next` comes from (none for `CrossFade` calls).
+    pub transition: Option<ActiveTransition>,
+    /// An interrupted transition's destination and its share of the source side.
+    pub interrupted: Option<(Playing, f32)>,
     pub info: AnimatorStateInfo,
     pub next_info: Option<AnimatorStateInfo>,
 }
@@ -128,10 +154,11 @@ pub struct AnimatorRuntime {
     pub params: HashMap<String, f32>,
     pub layers: Vec<LayerRuntime>,
     pub layer_names: Vec<String>,
+    /// The controller's layer weights (until a script sets one).
+    pub default_weights: Vec<f32>,
     /// Weights set by scripts (`SetLayerWeight`); others use the controller's default.
     pub layer_weights: HashMap<usize, f32>,
-    /// State name, crossfade seconds, layer (`None` = first layer that has the state).
-    pub pending: Vec<(String, f32, Option<usize>)>,
+    pub pending: Vec<PendingPlay>,
     pub bindings: HashMap<String, Option<GameObjectId>>,
     pub controller: Option<oxide_assets::AssetId>,
     pub delta_position: Vector3,
@@ -142,6 +169,11 @@ pub struct AnimatorRuntime {
     pub look_at: LookAtState,
     pub human: HashMap<HumanBodyBones, GameObjectId>,
     pub human_mapped: bool,
+    /// Left/right bone pairs (built when a state mirrors).
+    pub mirror: Option<std::sync::Arc<mirror::MirrorMap>>,
+    /// Values animated transforms had before animating (Write Defaults).
+    pub defaults: HashMap<GameObjectId, (Vector3, Quaternion, Vector3)>,
+    pub prop_defaults: HashMap<(GameObjectId, String, String), f32>,
 }
 
 /// Unity `Animator`.
@@ -207,25 +239,56 @@ impl Animator {
 
     // ---- states ----------------------------------------------------------------------
 
+    fn queue(&mut self, state: &str, fade: f32, fixed: bool, layer: Option<usize>, t: Option<f32>) {
+        self.rt.pending.push(PendingPlay {
+            state: state.into(),
+            fade: fade.max(0.0),
+            fixed,
+            layer,
+            normalized_time: t,
+        });
+    }
     /// Unity `Play(stateName)`: jump to a state immediately (in whichever layer has it).
+    /// Accepts the state's name or its full path (`Base Layer.Locomotion.Run`).
     pub fn play(&mut self, state: &str) {
-        self.rt.pending.push((state.into(), 0.0, None));
+        self.queue(state, 0.0, true, None, None);
     }
     /// Unity `Play(stateName, layer)`.
     pub fn play_in_layer(&mut self, state: &str, layer: usize) {
-        self.rt.pending.push((state.into(), 0.0, Some(layer)));
+        self.queue(state, 0.0, true, Some(layer), None);
+    }
+    /// Unity `Play(stateName, layer, normalizedTime)`.
+    pub fn play_at(&mut self, state: &str, layer: usize, normalized_time: f32) {
+        self.queue(state, 0.0, true, Some(layer), Some(normalized_time));
     }
     /// Unity `CrossFadeInFixedTime(stateName, seconds)`.
     pub fn cross_fade(&mut self, state: &str, duration: f32) {
-        self.rt
-            .pending
-            .push((state.into(), duration.max(0.0), None));
+        self.queue(state, duration, true, None, None);
     }
     /// Unity `CrossFadeInFixedTime(stateName, seconds, layer)`.
     pub fn cross_fade_in_layer(&mut self, state: &str, duration: f32, layer: usize) {
-        self.rt
-            .pending
-            .push((state.into(), duration.max(0.0), Some(layer)));
+        self.queue(state, duration, true, Some(layer), None);
+    }
+    /// Unity `CrossFade(stateName, normalizedDuration)`: the duration is a fraction of the
+    /// current state's length.
+    pub fn cross_fade_normalized(&mut self, state: &str, normalized_duration: f32) {
+        self.queue(state, normalized_duration, false, None, None);
+    }
+    /// Unity `CrossFadeInFixedTime(stateName, seconds, layer, fixedTimeOffset)` with the
+    /// offset as normalized time.
+    pub fn cross_fade_at(&mut self, state: &str, seconds: f32, layer: usize, normalized_time: f32) {
+        self.queue(state, seconds, true, Some(layer), Some(normalized_time));
+    }
+    /// Unity `GetAnimatorTransitionInfo(layer)`: normalized progress of the current
+    /// transition (`None` when not in one).
+    pub fn get_animator_transition_info(&self, layer: usize) -> Option<f32> {
+        let l = self.rt.layers.get(layer)?;
+        let (_, elapsed, dur) = l.next.as_ref()?;
+        Some((elapsed / dur.max(1e-4)).clamp(0.0, 1.0))
+    }
+    /// Unity `parameters`: names and current values.
+    pub fn parameters(&self) -> &HashMap<String, f32> {
+        &self.rt.params
     }
     /// Base Layer crossfade in progress.
     pub fn is_in_transition(&self) -> bool {
@@ -266,7 +329,12 @@ impl Animator {
         if layer == 0 {
             return 1.0;
         }
-        self.rt.layer_weights.get(&layer).copied().unwrap_or(1.0)
+        self.rt
+            .layer_weights
+            .get(&layer)
+            .or_else(|| self.rt.default_weights.get(layer))
+            .copied()
+            .unwrap_or(1.0)
     }
 
     // ---- root motion -----------------------------------------------------------------
@@ -531,6 +599,11 @@ struct Sampler<'a> {
     root: GameObjectId,
     bindings: &'a mut HashMap<String, Option<GameObjectId>>,
     mask: Option<&'a AvatarMask>,
+    /// Transforms of humanoid body parts the mask leaves out.
+    excluded: Option<&'a std::collections::HashSet<GameObjectId>>,
+    mirror_map: Option<&'a mirror::MirrorMap>,
+    /// The rest pose (Direct blend trees whose weights sum below 1 blend toward it).
+    rest: Option<&'a HashMap<GameObjectId, (Vector3, Quaternion, Vector3)>>,
     /// Extract root motion (Base Layer with `apply_root_motion`).
     root_motion: bool,
     /// Sample every clip at this time instead (additive reference pose).
@@ -718,7 +791,102 @@ pub fn write_property(
     }
 }
 
-impl Sampler<'_> {
+impl<'a> Sampler<'a> {
+    fn new(
+        world: &'a World,
+        assets: &'a AssetServer,
+        root: GameObjectId,
+        bindings: &'a mut HashMap<String, Option<GameObjectId>>,
+    ) -> Self {
+        Self {
+            world,
+            assets,
+            root,
+            bindings,
+            mask: None,
+            excluded: None,
+            mirror_map: None,
+            rest: None,
+            root_motion: false,
+            time_override: None,
+            collect_events: true,
+            pose: HashMap::new(),
+            rm: RootAcc::default(),
+            events: vec![],
+            props: HashMap::new(),
+            objs: HashMap::new(),
+        }
+    }
+
+    fn add(
+        &mut self,
+        id: GameObjectId,
+        p: Option<Vector3>,
+        r: Option<Quaternion>,
+        s: Option<Vector3>,
+        w: f32,
+    ) {
+        if self.excluded.is_some_and(|x| x.contains(&id)) {
+            return;
+        }
+        let e = self.pose.entry(id).or_default();
+        if let Some(p) = p {
+            e.pos += p * w;
+            e.pw += w;
+        }
+        if let Some(r) = r {
+            let r = if e.rot.dot(r) < 0.0 { -r } else { r };
+            e.rot += r * w;
+            e.rw += w;
+        }
+        if let Some(s) = s {
+            e.scale += s * w;
+            e.sw += w;
+        }
+    }
+
+    /// The rest pose with weight `w`.
+    fn rest_pose(&mut self, w: f32) {
+        let Some(rest) = self.rest else { return };
+        for (id, (p, r, s)) in rest {
+            self.add(*id, Some(*p), Some(*r), Some(*s), w);
+        }
+    }
+
+    /// Samples a clip, mirrored left/right when `mirror` is set.
+    #[allow(clippy::too_many_arguments)]
+    fn clip_mirrored(
+        &mut self,
+        clip: &AnimationClip,
+        prev: f32,
+        now: f32,
+        looping: bool,
+        w: f32,
+        events: bool,
+        mirror: bool,
+    ) {
+        let Some(map) = self.mirror_map.filter(|m| mirror && !m.is_empty()) else {
+            self.clip(clip, prev, now, looping, w, events);
+            return;
+        };
+        // Sample into a scratch pose, mirror it, then add it.
+        let pose = std::mem::take(&mut self.pose);
+        let rm = std::mem::take(&mut self.rm);
+        self.clip(clip, prev, now, looping, 1.0, events);
+        let sampled = std::mem::replace(&mut self.pose, pose);
+        let d = std::mem::replace(&mut self.rm, rm);
+        let mut samples: Vec<mirror::Sample> = finalize(sampled)
+            .into_iter()
+            .map(|(id, (p, r, s))| (id, p, r, s))
+            .collect();
+        map.apply(&mut samples);
+        for (id, p, r, s) in samples {
+            self.add(id, p, r, s, w);
+        }
+        self.rm.position += Vector3::new(-d.position.x, d.position.y, d.position.z) * w;
+        self.rm.yaw -= d.yaw * w;
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn clip(
         &mut self,
@@ -756,20 +924,7 @@ impl Sampler<'_> {
             if rc == Some(ci) && id != self.root {
                 (p, r) = self.extract_root(c, id, prev, now, len, looping, w, p, r);
             }
-            let e = self.pose.entry(id).or_default();
-            if let Some(p) = p {
-                e.pos += p * w;
-                e.pw += w;
-            }
-            if let Some(r) = r {
-                let r = if e.rot.dot(r) < 0.0 { -r } else { r };
-                e.rot += r * w;
-                e.rw += w;
-            }
-            if let Some(s) = s {
-                e.scale += s * w;
-                e.sw += w;
-            }
+            self.add(id, p, r, s, w);
         }
         for pc in &clip.properties {
             if let Some(m) = self.mask
@@ -872,95 +1027,6 @@ impl Sampler<'_> {
         let out_r = r.map(|r| mrot.inverse() * Quaternion::from_rotation_y(-yaw_now) * mrot * r);
         (out_p, out_r)
     }
-
-    /// Samples one state with weight `w`; blend trees normalize time so differently sized
-    /// clips stay in sync (Unity behaviour).
-    fn state(
-        &mut self,
-        sm: &AnimatorStateMachine,
-        p: &Playing,
-        params: &HashMap<String, f32>,
-        w: f32,
-    ) {
-        let Some(state) = sm.states.get(p.state) else {
-            return;
-        };
-        let looping = state.looping;
-        let children = motion_children(&state.motion, params);
-        match &state.motion {
-            Motion::Clip(_) => {
-                if let Some((h, _)) = children.first()
-                    && let Some(c) = self.assets.animations.get(h)
-                {
-                    self.clip(c, p.prev_time, p.time, looping, w, true);
-                }
-            }
-            Motion::BlendTree1D { .. } | Motion::BlendTree2D { .. } => {
-                let len = motion_length(self.assets, &state.motion, params).max(1e-4);
-                let dominant = children
-                    .iter()
-                    .enumerate()
-                    .max_by(|a, b| a.1.1.total_cmp(&b.1.1))
-                    .map(|(i, _)| i);
-                for (i, (h, bw)) in children.iter().enumerate() {
-                    if let Some(c) = self.assets.animations.get(h) {
-                        let k = c.length / len;
-                        self.clip(
-                            c,
-                            p.prev_time * k,
-                            p.time * k,
-                            looping,
-                            w * bw,
-                            Some(i) == dominant,
-                        );
-                    }
-                }
-            }
-            Motion::Empty => {}
-        }
-    }
-}
-
-/// The clips a motion plays and their blend weights (summing to 1).
-fn motion_children<'m>(
-    m: &'m Motion,
-    params: &HashMap<String, f32>,
-) -> Vec<(&'m Handle<AnimationClip>, f32)> {
-    let param = |n: &str| params.get(n).copied().unwrap_or(0.0);
-    match m {
-        Motion::Clip(h) => vec![(h, 1.0)],
-        Motion::BlendTree1D {
-            parameter,
-            children,
-        } => blend_weights_1d(children.iter().map(|c| c.0), param(parameter))
-            .into_iter()
-            .map(|(i, w)| (&children[i].1, w))
-            .collect(),
-        Motion::BlendTree2D {
-            parameter_x,
-            parameter_y,
-            kind,
-            children,
-        } => {
-            let pts: Vec<Vector2> = children.iter().map(|c| c.0).collect();
-            let p = Vector2::new(param(parameter_x), param(parameter_y));
-            blend_weights_2d(&pts, p, *kind)
-                .into_iter()
-                .enumerate()
-                .filter(|(_, w)| *w > 1e-4)
-                .map(|(i, w)| (&children[i].1, w))
-                .collect()
-        }
-        Motion::Empty => vec![],
-    }
-}
-
-/// Length of a state's motion (weighted for blend trees).
-fn motion_length(assets: &AssetServer, m: &Motion, params: &HashMap<String, f32>) -> f32 {
-    motion_children(m, params)
-        .into_iter()
-        .map(|(h, w)| assets.animations.get(h).map_or(0.0, |c| c.length) * w)
-        .sum()
 }
 
 fn blend_weights_1d(thresholds: impl Iterator<Item = f32>, v: f32) -> Vec<(usize, f32)> {
@@ -1050,324 +1116,6 @@ pub fn blend_weights_2d(points: &[Vector2], p: Vector2, kind: BlendTree2DType) -
     w
 }
 
-fn conditions_met(t: &oxide_assets::Transition, params: &HashMap<String, f32>) -> bool {
-    t.conditions.iter().all(|c| {
-        let v = params.get(&c.parameter).copied().unwrap_or(0.0);
-        match c.mode {
-            ConditionMode::If => v != 0.0,
-            ConditionMode::IfNot => v == 0.0,
-            ConditionMode::Greater(x) => v > x,
-            ConditionMode::Less(x) => v < x,
-            ConditionMode::Equals(x) => (v - x).abs() < 1e-4,
-            ConditionMode::NotEqual(x) => (v - x).abs() >= 1e-4,
-        }
-    })
-}
-
-/// Advances one layer's state machine by `dt`: playback time, crossfades, transitions.
-fn step_layer(
-    ctrl: &AnimatorController,
-    sm: &AnimatorStateMachine,
-    lrt: &mut LayerRuntime,
-    params: &mut HashMap<String, f32>,
-    assets: &AssetServer,
-    dt: f32,
-) {
-    let speed = |i: usize| sm.states.get(i).map_or(1.0, |s| s.speed);
-    let cur = lrt
-        .current
-        .get_or_insert_with(|| Playing::start(sm.default_state));
-    cur.prev_time = cur.time;
-    cur.time += dt * speed(cur.state);
-    let mut finished = false;
-    if let Some((n, elapsed, dur)) = lrt.next.as_mut() {
-        n.prev_time = n.time;
-        n.time += dt * speed(n.state);
-        *elapsed += dt;
-        finished = *elapsed >= *dur;
-    }
-    if finished && let Some((n, _, _)) = lrt.next.take() {
-        lrt.current = Some(n);
-    }
-    if lrt.next.is_some() {
-        return;
-    }
-    let cur = lrt.current.clone().expect("current");
-    let Some(cur_state) = sm.states.get(cur.state) else {
-        return;
-    };
-    let len = motion_length(assets, &cur_state.motion, params).max(1e-4);
-    let norm = cur.time / len;
-    let pick = sm.transitions.iter().find(|t| {
-        let from_ok = match &t.from {
-            Some(f) => cur_state.name == *f,
-            None => cur_state.name != t.to,
-        };
-        from_ok && (!t.has_exit_time || norm >= t.exit_time) && conditions_met(t, params)
-    });
-    let Some(t) = pick else { return };
-    let Some(to) = sm.state_index(&t.to) else {
-        return;
-    };
-    // Consume the triggers this transition used.
-    for c in &t.conditions {
-        if ctrl
-            .parameters
-            .iter()
-            .any(|p| p.name == c.parameter && p.kind == ParameterType::Trigger)
-        {
-            params.insert(c.parameter.clone(), 0.0);
-        }
-    }
-    if t.duration > 0.0 {
-        lrt.next = Some((Playing::start(to), 0.0, t.duration));
-    } else {
-        lrt.current = Some(Playing::start(to));
-    }
-}
-
-fn state_info(
-    assets: &AssetServer,
-    sm: &AnimatorStateMachine,
-    p: &Playing,
-    params: &HashMap<String, f32>,
-) -> AnimatorStateInfo {
-    let Some(s) = sm.states.get(p.state) else {
-        return AnimatorStateInfo::default();
-    };
-    let len = motion_length(assets, &s.motion, params);
-    AnimatorStateInfo {
-        name: s.name.clone(),
-        tag: s.tag.clone(),
-        normalized_time: if len > 0.0 { p.time / len } else { 0.0 },
-        length: len,
-        speed: s.speed,
-        looping: s.looping,
-    }
-}
-
-/// The result of one Animator update.
-#[derive(Default)]
-struct Output {
-    pose: HashMap<GameObjectId, Trs>,
-    /// Root motion in the object's local space.
-    root_position: Vector3,
-    root_yaw: f32,
-    events: Vec<(String, Value)>,
-    props: HashMap<PropKey, f32>,
-    objs: HashMap<PropKey, String>,
-}
-
-fn sample_layer(
-    s: &mut Sampler,
-    sm: &AnimatorStateMachine,
-    lrt: &LayerRuntime,
-    params: &HashMap<String, f32>,
-) {
-    let cur = lrt.current.clone().unwrap_or_default();
-    match &lrt.next {
-        Some((n, elapsed, dur)) => {
-            let w = (elapsed / dur.max(1e-4)).clamp(0.0, 1.0);
-            s.state(sm, &cur, params, 1.0 - w);
-            s.state(sm, n, params, w);
-        }
-        None => s.state(sm, &cur, params, 1.0),
-    }
-}
-
-/// Advances one Animator and computes its pose.
-fn evaluate(
-    world: &World,
-    assets: &AssetServer,
-    root: GameObjectId,
-    a: &mut Animator,
-    dt: f32,
-) -> Option<Output> {
-    let ctrl = assets.controllers.get(a.controller.as_ref()?)?;
-    let rt = &mut a.rt;
-    let cid = a.controller.as_ref().map(|h| h.id());
-    if rt.controller != cid || rt.layers.len() != ctrl.layers.len() {
-        rt.controller = cid;
-        rt.layers = ctrl
-            .layers
-            .iter()
-            .map(|l| LayerRuntime {
-                current: Some(Playing::start(
-                    l.state_machine
-                        .default_state
-                        .min(l.state_machine.states.len().saturating_sub(1)),
-                )),
-                ..Default::default()
-            })
-            .collect();
-        rt.layer_names = ctrl.layers.iter().map(|l| l.name.clone()).collect();
-        rt.bindings.clear();
-        rt.human_mapped = false;
-        for p in &ctrl.parameters {
-            rt.params.entry(p.name.clone()).or_insert(p.default);
-        }
-    }
-    for (name, fade, layer) in std::mem::take(&mut rt.pending) {
-        let li = layer.or_else(|| {
-            ctrl.layers
-                .iter()
-                .position(|l| l.state_machine.state_index(&name).is_some())
-        });
-        let Some((li, i)) =
-            li.and_then(|li| Some((li, ctrl.layers.get(li)?.state_machine.state_index(&name)?)))
-        else {
-            continue;
-        };
-        let lrt = &mut rt.layers[li];
-        if fade <= 0.0 || lrt.current.is_none() {
-            lrt.current = Some(Playing::start(i));
-            lrt.next = None;
-        } else {
-            lrt.next = Some((Playing::start(i), 0.0, fade));
-        }
-    }
-    let mut out = Output::default();
-    for (li, layer) in ctrl.layers.iter().enumerate() {
-        let sm = &layer.state_machine;
-        if sm.states.is_empty() {
-            continue;
-        }
-        step_layer(ctrl, sm, &mut rt.layers[li], &mut rt.params, assets, dt);
-        let lrt = &mut rt.layers[li];
-        if let Some(c) = &lrt.current {
-            lrt.info = state_info(assets, sm, c, &rt.params);
-        }
-        lrt.next_info = lrt
-            .next
-            .as_ref()
-            .map(|(n, _, _)| state_info(assets, sm, n, &rt.params));
-        let weight = if li == 0 {
-            1.0
-        } else {
-            rt.layer_weights
-                .get(&li)
-                .copied()
-                .unwrap_or(layer.default_weight)
-        };
-        if weight <= 0.0 {
-            continue;
-        }
-        let lrt = rt.layers[li].clone();
-        let mut s = Sampler {
-            world,
-            assets,
-            root,
-            bindings: &mut rt.bindings,
-            mask: layer.avatar_mask.as_ref(),
-            root_motion: li == 0 && a.apply_root_motion,
-            time_override: None,
-            collect_events: true,
-            pose: HashMap::new(),
-            rm: RootAcc::default(),
-            events: vec![],
-            props: HashMap::new(),
-            objs: HashMap::new(),
-        };
-        sample_layer(&mut s, sm, &lrt, &rt.params);
-        let (pose, rm, events) = (finalize(s.pose), s.rm, s.events);
-        let props = finalize_props(s.props);
-        // Later layers with any weight replace object keys (they can't blend).
-        out.objs
-            .extend(s.objs.into_iter().map(|(k, (v, _))| (k, v)));
-        out.events.extend(events);
-        if li == 0 {
-            out.pose = pose;
-            out.props = props;
-            out.root_position = rm.position;
-            out.root_yaw = rm.yaw;
-            continue;
-        }
-        // Properties blend like positions: over the layers below by the layer weight.
-        let additive = layer.blending_mode == AnimatorLayerBlendingMode::Additive;
-        for ((pid, comp, prop), v) in props {
-            let base = out
-                .props
-                .get(&(pid, comp.clone(), prop.clone()))
-                .copied()
-                .or_else(|| read_property(world, pid, &comp, &prop))
-                .unwrap_or(0.0);
-            let nv = if additive {
-                base + v * weight
-            } else {
-                base + (v - base) * weight
-            };
-            out.props.insert((pid, comp, prop), nv);
-        }
-        let base_of = |out: &Output, id: GameObjectId| -> (Vector3, Quaternion, Vector3) {
-            let t = world.transform(id);
-            let cur = out.pose.get(&id);
-            (
-                cur.and_then(|c| c.0)
-                    .or(t.map(|t| t.local_position))
-                    .unwrap_or_default(),
-                cur.and_then(|c| c.1)
-                    .or(t.map(|t| t.local_rotation))
-                    .unwrap_or_default(),
-                cur.and_then(|c| c.2)
-                    .or(t.map(|t| t.local_scale))
-                    .unwrap_or(Vector3::ONE),
-            )
-        };
-        match layer.blending_mode {
-            AnimatorLayerBlendingMode::Override => {
-                for (id, (p, r, sc)) in pose {
-                    let (bp, br, bs) = base_of(&out, id);
-                    let e = out.pose.entry(id).or_default();
-                    if let Some(p) = p {
-                        e.0 = Some(bp.lerp(p, weight));
-                    }
-                    if let Some(r) = r {
-                        e.1 = Some(br.slerp(r, weight));
-                    }
-                    if let Some(sc) = sc {
-                        e.2 = Some(bs.lerp(sc, weight));
-                    }
-                }
-            }
-            AnimatorLayerBlendingMode::Additive => {
-                let mut rs = Sampler {
-                    world,
-                    assets,
-                    root,
-                    bindings: &mut rt.bindings,
-                    mask: layer.avatar_mask.as_ref(),
-                    root_motion: false,
-                    time_override: Some(0.0),
-                    collect_events: false,
-                    pose: HashMap::new(),
-                    rm: RootAcc::default(),
-                    events: vec![],
-                    props: HashMap::new(),
-                    objs: HashMap::new(),
-                };
-                sample_layer(&mut rs, sm, &lrt, &rt.params);
-                let reference = finalize(rs.pose);
-                for (id, (p, r, sc)) in pose {
-                    let (rp, rr, rsc) = reference.get(&id).copied().unwrap_or_default();
-                    let (bp, br, bs) = base_of(&out, id);
-                    let e = out.pose.entry(id).or_default();
-                    if let (Some(p), Some(rp)) = (p, rp) {
-                        e.0 = Some(bp + (p - rp) * weight);
-                    }
-                    if let (Some(r), Some(rr)) = (r, rr) {
-                        let d = Quaternion::IDENTITY.slerp(rr.inverse() * r, weight);
-                        e.1 = Some((br * d).normalize());
-                    }
-                    if let (Some(sc), Some(rsc)) = (sc, rsc) {
-                        e.2 = Some(bs + (sc - rsc) * weight);
-                    }
-                }
-            }
-        }
-    }
-    Some(out)
-}
-
 fn apply(world: &mut World, pose: HashMap<GameObjectId, Trs>) {
     for (id, (p, r, s)) in pose {
         if let Some(t) = world.transform_mut(id) {
@@ -1396,11 +1144,7 @@ fn update_animator(
         return;
     };
     let step = dt * a.speed;
-    let out = evaluate(world, assets, id, &mut a, step);
-    if !a.rt.human_mapped {
-        a.rt.human = auto_map(world, id);
-        a.rt.human_mapped = true;
-    }
+    let out = controller::evaluate(world, assets, id, &mut a, step);
     let Some(out) = out else {
         if let Some(c) = world.component_mut::<Animator>(id, cid) {
             c.rt = a.rt;
@@ -1415,10 +1159,11 @@ fn update_animator(
     a.rt.delta_position = to_world.transform_vector3(out.root_position);
     a.rt.delta_rotation = Quaternion::from_rotation_y(out.root_yaw);
     a.rt.delta_time = step;
-    let ik_layers: Vec<usize> = a
+    let ctrl = a
         .controller
         .as_ref()
-        .and_then(|h| assets.controllers.get(h))
+        .and_then(|h| assets.controllers.get(h));
+    let ik_layers: Vec<usize> = ctrl
         .map(|c| {
             c.layers
                 .iter()
@@ -1428,10 +1173,23 @@ fn update_animator(
                 .collect()
         })
         .unwrap_or_default();
+    // Current (and incoming) states per layer, for OnStateMove / OnStateIK.
+    let playing: Vec<(usize, usize)> =
+        a.rt.layers
+            .iter()
+            .enumerate()
+            .flat_map(|(li, l)| {
+                l.current
+                    .iter()
+                    .chain(l.next.iter().map(|n| &n.0))
+                    .map(move |p| (li, p.state))
+            })
+            .collect();
     let apply_rm = a.apply_root_motion;
     if let Some(c) = world.component_mut::<Animator>(id, cid) {
         c.rt = a.rt;
     }
+    behaviours_dispatch(world, assets, id, cid, &out.state_events);
     if apply_rm && !world.send_message(id, "OnAnimatorMove", Value::Null) {
         let (dp, dq) = {
             let c = world.component::<Animator>(id, cid).expect("alive");
@@ -1441,9 +1199,20 @@ fn update_animator(
         world.set_position(id, p + dp);
         world.set_rotation(id, (r * dq).normalize());
     }
+    let moves: Vec<(usize, controller::StateEvent)> = playing
+        .iter()
+        .map(|&(l, s)| (l, controller::StateEvent::Move(s)))
+        .collect();
+    behaviours_dispatch(world, assets, id, cid, &moves);
     if !ik_layers.is_empty() {
         for &l in &ik_layers {
             world.send_message(id, "OnAnimatorIK", Value::Int(l as i64));
+            let iks: Vec<(usize, controller::StateEvent)> = playing
+                .iter()
+                .filter(|(pl, _)| *pl == l)
+                .map(|&(l, s)| (l, controller::StateEvent::Ik(s)))
+                .collect();
+            behaviours_dispatch(world, assets, id, cid, &iks);
         }
         if let Some(c) = world.component::<Animator>(id, cid).cloned() {
             solve_ik(world, id, &c);
@@ -1452,6 +1221,149 @@ fn update_animator(
     for (name, arg) in out.events {
         world.send_message(id, &name, arg);
     }
+}
+
+/// Runs StateMachineBehaviour callbacks for `events` (Play mode only).
+fn behaviours_dispatch(
+    world: &mut World,
+    assets: &AssetServer,
+    id: GameObjectId,
+    cid: oxide_scene::ComponentId,
+    events: &[(usize, controller::StateEvent)],
+) {
+    use controller::StateEvent as E;
+    if events.is_empty() || !world.run_scripts {
+        return;
+    }
+    let Some(ctrl) = world
+        .component::<Animator>(id, cid)
+        .and_then(|a| a.controller.as_ref())
+        .and_then(|h| assets.controllers.get(h))
+    else {
+        return;
+    };
+    fn has_behaviours(m: &AnimatorStateMachine) -> bool {
+        !m.behaviours.is_empty()
+            || m.states.iter().any(|s| !s.behaviours.is_empty())
+            || m.state_machines.iter().any(has_behaviours)
+    }
+    let has_any = ctrl.layers.iter().any(|l| has_behaviours(&l.state_machine));
+    if !has_any {
+        return;
+    }
+    let Some(mut reg) = world.resources.remove::<StateMachineBehaviours>() else {
+        return;
+    };
+    let ctrl = ctrl.clone();
+    for (li, ev) in events {
+        let Some(layer) = ctrl.layers.get(*li) else {
+            continue;
+        };
+        if layer.synced_layer_index.is_some() {
+            continue;
+        }
+        let root = &layer.state_machine;
+        let flat = root.flatten();
+        let info_for = |world: &World, s: usize| -> AnimatorStateInfo {
+            let a = world.component::<Animator>(id, cid);
+            let st = flat[s].1;
+            let name = &st.name;
+            a.and_then(|a| a.rt.layers.get(*li))
+                .and_then(|l| {
+                    [Some(&l.info), l.next_info.as_ref()]
+                        .into_iter()
+                        .flatten()
+                        .find(|i| &i.name == name)
+                        .cloned()
+                })
+                .unwrap_or_else(|| AnimatorStateInfo {
+                    name: name.clone(),
+                    full_path: format!("{}.{}", layer.name, name),
+                    tag: st.tag.clone(),
+                    looping: st.looping,
+                    speed: st.speed,
+                    ..Default::default()
+                })
+        };
+        match ev {
+            E::Enter(s) | E::Update(s) | E::Exit(s) | E::Move(s) | E::Ik(s) => {
+                let Some((path, st)) = flat.get(*s) else {
+                    continue;
+                };
+                // The state's own behaviours, then those of the machines around it.
+                let mut owners: Vec<(String, &[oxide_assets::StateBehaviour])> =
+                    vec![(format!("s{s}"), st.behaviours.as_slice())];
+                for d in 0..=path.machine.len() {
+                    if let Some(m) = root.machine(&path.machine[..d]) {
+                        owners.push((
+                            format!("m{:?}", &path.machine[..d]),
+                            m.behaviours.as_slice(),
+                        ));
+                    }
+                }
+                let info = info_for(world, *s);
+                for (owner, list) in owners {
+                    for (bi, b) in list.iter().enumerate() {
+                        let key = behaviours::InstanceKey {
+                            animator: (id, cid),
+                            layer: *li,
+                            owner: owner.clone(),
+                            index: bi,
+                        };
+                        if !reg.instances.contains_key(&key) {
+                            let Some(inst) = reg.instantiate(b) else {
+                                continue;
+                            };
+                            reg.instances.insert(key.clone(), inst);
+                        }
+                        let inst = reg.instances.get_mut(&key).expect("inserted");
+                        let mut ctx = oxide_scene::Ctx {
+                            world,
+                            this: id,
+                            component: cid,
+                        };
+                        match ev {
+                            E::Enter(_) => inst.on_state_enter(&mut ctx, &info, *li),
+                            E::Update(_) => inst.on_state_update(&mut ctx, &info, *li),
+                            E::Exit(_) => inst.on_state_exit(&mut ctx, &info, *li),
+                            E::Move(_) => inst.on_state_move(&mut ctx, &info, *li),
+                            E::Ik(_) => inst.on_state_ik(&mut ctx, &info, *li),
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            E::MachineEnter(p) | E::MachineExit(p) => {
+                let Some(m) = root.machine(p) else { continue };
+                for (bi, b) in m.behaviours.iter().enumerate() {
+                    let key = behaviours::InstanceKey {
+                        animator: (id, cid),
+                        layer: *li,
+                        owner: format!("m{p:?}"),
+                        index: bi,
+                    };
+                    if !reg.instances.contains_key(&key) {
+                        let Some(inst) = reg.instantiate(b) else {
+                            continue;
+                        };
+                        reg.instances.insert(key.clone(), inst);
+                    }
+                    let inst = reg.instances.get_mut(&key).expect("inserted");
+                    let mut ctx = oxide_scene::Ctx {
+                        world,
+                        this: id,
+                        component: cid,
+                    };
+                    if matches!(ev, E::MachineEnter(_)) {
+                        inst.on_state_machine_enter(&mut ctx, &m.name);
+                    } else {
+                        inst.on_state_machine_exit(&mut ctx, &m.name);
+                    }
+                }
+            }
+        }
+    }
+    world.resources.insert(reg);
 }
 
 /// Which way a humanoid faces, from its rig: the hip line (left → right) crossed with up.
@@ -1594,21 +1506,7 @@ fn update_legacy(world: &mut World, assets: &AssetServer, dt: f32) {
             if !a.looping && a.time >= clip.length {
                 a.playing = Some(false);
             }
-            let mut s = Sampler {
-                world,
-                assets,
-                root: id,
-                bindings: &mut a.bindings,
-                mask: None,
-                root_motion: false,
-                time_override: None,
-                collect_events: true,
-                pose: HashMap::new(),
-                rm: RootAcc::default(),
-                events: vec![],
-                props: HashMap::new(),
-                objs: HashMap::new(),
-            };
+            let mut s = Sampler::new(world, assets, id, &mut a.bindings);
             s.clip(clip, prev, a.time, a.looping, 1.0, true);
             pose = finalize(s.pose);
             props = finalize_props(s.props);
@@ -1651,6 +1549,9 @@ pub fn install(world: &mut World) -> Box<dyn System> {
     world
         .registry
         .register::<Animation>("Miscellaneous/Animation");
+    if !world.resources.contains::<StateMachineBehaviours>() {
+        world.resources.insert(StateMachineBehaviours::default());
+    }
     Box::new(AnimationSystem)
 }
 

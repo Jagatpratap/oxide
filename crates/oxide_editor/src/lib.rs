@@ -688,6 +688,25 @@ impl Editor {
             .iter_all_tabs()
             .find(|(_, t)| **t == tab)
             .map(|(p, _)| p);
+        // A working window left in a side panel by an older layout moves beside the Scene.
+        if let Some(path) = found
+            && matches!(tab, Tab::Animator | Tab::Animation | Tab::AudioMixer)
+            && self.dock.iter_all_tabs().any(|(p, t)| {
+                p.node_path() == path.node_path()
+                    && matches!(
+                        t,
+                        Tab::Hierarchy | Tab::Inspector | Tab::Project | Tab::Console
+                    )
+            })
+            && let Some(scene) = self.dock.find_tab(&Tab::Scene)
+        {
+            let _ = self.dock.remove_tab(path);
+            if let Some(scene) = self.dock.find_tab(&Tab::Scene).or(Some(scene)) {
+                self.dock.set_focused_node_and_surface(scene.node_path());
+            }
+            self.dock.push_to_focused_leaf(tab);
+            return;
+        }
         if let Some(path) = found {
             let _ = self.dock.set_active_tab(path);
         } else if matches!(
@@ -709,6 +728,16 @@ impl Editor {
                 ws.set_position(egui::pos2(220.0, 110.0)).set_size(size);
             }
         } else {
+            // Big working windows dock beside the Scene view, as in Unity's default layout,
+            // not into whichever small panel had focus.
+            if matches!(tab, Tab::Animator | Tab::Animation | Tab::AudioMixer)
+                && let Some(p) = self
+                    .dock
+                    .find_tab(&Tab::Scene)
+                    .or_else(|| self.dock.find_tab(&Tab::Game))
+            {
+                self.dock.set_focused_node_and_surface(p.node_path());
+            }
             self.dock.push_to_focused_leaf(tab);
         }
     }
@@ -1217,6 +1246,13 @@ impl Editor {
         let paths = st.remember_paths(w);
         w.clear(false);
         w.run_scripts = false;
+        // StateMachineBehaviour instances start fresh next Play (Unity).
+        if let Some(b) = w
+            .resources
+            .get_mut::<oxide_engine::animation::StateMachineBehaviours>()
+        {
+            b.clear();
+        }
         if let Some(snap) = st.play_snapshot.take() {
             st.selection = snap.restore(w);
         }

@@ -1,5 +1,7 @@
 use super::*;
-use oxide_assets::{BlendTree2DType, Condition, Interpolation, Track, TransformCurves};
+use oxide_assets::{
+    BlendTree2DType, Condition, ConditionMode, Interpolation, Track, TransformCurves,
+};
 use oxide_math::Vector2;
 
 fn clip(name: &str, y: f32) -> AnimationClip {
@@ -185,6 +187,7 @@ fn layers_override_with_mask_and_additive() {
         l.avatar_mask = Some(oxide_assets::AvatarMask {
             name: "Arm".into(),
             transform_paths: vec!["Bone/Arm".into()],
+            ..Default::default()
         });
         l.default_weight = 0.5;
         l.state_machine.add_state("Aim", Motion::Clip(upper));
@@ -393,4 +396,407 @@ fn object_curves_flip_sprites() {
     assert_eq!(sprite(&w).as_deref(), Some("builtin:frame1"));
     tick(&mut w, &mut sys, 0.25);
     assert_eq!(sprite(&w).as_deref(), Some("builtin:frame2"));
+}
+
+/// A constant pose: Bone at `y` (one-second looping clip).
+fn hold(assets: &mut AssetServer, name: &str, y: f32) -> Handle<AnimationClip> {
+    assets.animations.insert(
+        name,
+        clip_of(vec![track("Bone", Vector3::Y * y, Vector3::Y * y, 1.0)]),
+    )
+}
+
+fn cond(p: &str, mode: ConditionMode) -> Condition {
+    Condition {
+        parameter: p.into(),
+        mode,
+    }
+}
+
+fn bone_y(w: &World, bone: GameObjectId) -> f32 {
+    w.transform(bone).unwrap().local_position.y
+}
+
+fn state_name(w: &World, root: GameObjectId) -> String {
+    w.get_component::<Animator>(root)
+        .unwrap()
+        .get_current_animator_state_info(0)
+        .name
+}
+
+#[test]
+fn sub_state_machines_entry_and_exit() {
+    use oxide_assets::{TransitionSource, TransitionTarget};
+    let (mut w, mut sys, [root, bone, _]) = rig(|a| {
+        let (idle, walk, run, land) = (
+            hold(a, "i", 1.0),
+            hold(a, "w", 2.0),
+            hold(a, "r", 3.0),
+            hold(a, "l", 4.0),
+        );
+        let mut c = AnimatorController::default();
+        c.add_parameter("Move", ParameterType::Bool)
+            .add_parameter("Fast", ParameterType::Bool)
+            .add_parameter("Stop", ParameterType::Trigger);
+        c.add_state("Idle", Motion::Clip(idle));
+        c.add_state("Land", Motion::Clip(land));
+        let loco = c.base().add_state_machine("Locomotion");
+        loco.add_state("Walk", Motion::Clip(walk));
+        loco.add_state("Run", Motion::Clip(run));
+        // Entry picks Run when Fast is set, else the default (Walk).
+        loco.transitions.push(oxide_assets::Transition {
+            source: TransitionSource::Entry,
+            to: "Run".into(),
+            conditions: vec![cond("Fast", ConditionMode::If)],
+            ..Default::default()
+        });
+        // Walk → Exit on Stop.
+        loco.transitions.push(oxide_assets::Transition {
+            from: Some("Walk".into()),
+            target: TransitionTarget::Exit,
+            conditions: vec![cond("Stop", ConditionMode::If)],
+            duration: 0.0,
+            ..Default::default()
+        });
+        let sm = c.base();
+        sm.transitions.push(oxide_assets::Transition {
+            from: Some("Idle".into()),
+            to: "Locomotion".into(),
+            target: TransitionTarget::StateMachine,
+            conditions: vec![cond("Move", ConditionMode::If)],
+            duration: 0.0,
+            ..Default::default()
+        });
+        // Leaving Locomotion goes to Land (state machine transition).
+        sm.transitions.push(oxide_assets::Transition {
+            from: Some("Locomotion".into()),
+            source: TransitionSource::StateMachine,
+            to: "Land".into(),
+            ..Default::default()
+        });
+        c
+    });
+    tick(&mut w, &mut sys, 0.1);
+    assert_eq!(state_name(&w, root), "Idle");
+    w.get_component_mut::<Animator>(root)
+        .unwrap()
+        .set_bool("Move", true);
+    tick(&mut w, &mut sys, 0.1);
+    assert_eq!(state_name(&w, root), "Walk");
+    let info = w
+        .get_component::<Animator>(root)
+        .unwrap()
+        .get_current_animator_state_info(0);
+    assert!(
+        info.is_name("Base Layer.Locomotion.Walk"),
+        "{}",
+        info.full_path
+    );
+    tick(&mut w, &mut sys, 0.1);
+    assert!((bone_y(&w, bone) - 2.0).abs() < 1e-3);
+    {
+        let a = w.get_component_mut::<Animator>(root).unwrap();
+        a.set_bool("Move", false);
+        a.set_trigger("Stop");
+    }
+    tick(&mut w, &mut sys, 0.1);
+    assert_eq!(
+        state_name(&w, root),
+        "Land",
+        "exit → state machine transition"
+    );
+    // Entering again with Fast set takes the entry transition to Run.
+    {
+        let a = w.get_component_mut::<Animator>(root).unwrap();
+        a.set_bool("Fast", true);
+        a.play("Idle");
+    }
+    tick(&mut w, &mut sys, 0.1);
+    w.get_component_mut::<Animator>(root)
+        .unwrap()
+        .set_bool("Move", true);
+    tick(&mut w, &mut sys, 0.1);
+    assert_eq!(state_name(&w, root), "Run");
+}
+
+#[test]
+fn interruption_solo_mute_and_offsets() {
+    use oxide_assets::InterruptionSource;
+    let (mut w, mut sys, [root, bone, _]) = rig(|a| {
+        let (x, y, z) = (hold(a, "x", 0.0), hold(a, "y", 10.0), hold(a, "z", 20.0));
+        let mut c = AnimatorController::default();
+        c.add_parameter("Go", ParameterType::Bool)
+            .add_parameter("Cut", ParameterType::Bool);
+        c.add_state("A", Motion::Clip(x));
+        c.add_state("B", Motion::Clip(y));
+        c.add_state("C", Motion::Clip(z.clone()));
+        c.add_state("Muted", Motion::Clip(z));
+        let t = c.add_transition(Some("A"), "B", vec![cond("Go", ConditionMode::If)], 1.0);
+        t.interruption_source = InterruptionSource::Source;
+        t.ordered_interruption = false;
+        c.add_transition(Some("A"), "C", vec![cond("Cut", ConditionMode::If)], 0.0);
+        c.add_transition(Some("A"), "Muted", vec![cond("Go", ConditionMode::If)], 0.0)
+            .mute = true;
+        c
+    });
+    tick(&mut w, &mut sys, 0.1);
+    w.get_component_mut::<Animator>(root)
+        .unwrap()
+        .set_bool("Go", true);
+    tick(&mut w, &mut sys, 0.1);
+    tick(&mut w, &mut sys, 0.25);
+    tick(&mut w, &mut sys, 0.25);
+    // Halfway through A → B (the muted transition never fires).
+    let y = bone_y(&w, bone);
+    assert!((y - 5.0).abs() < 0.6, "{y}");
+    w.get_component_mut::<Animator>(root)
+        .unwrap()
+        .set_bool("Cut", true);
+    tick(&mut w, &mut sys, 0.01);
+    tick(&mut w, &mut sys, 0.01);
+    assert_eq!(
+        state_name(&w, root),
+        "C",
+        "the source's transition interrupted"
+    );
+    // Ordered interruption: a transition listed after the active one cannot interrupt.
+    let mut c2 = AnimatorController::default();
+    c2.add_parameter("Go", ParameterType::Bool)
+        .add_parameter("Cut", ParameterType::Bool);
+    c2.add_state("A", Motion::Empty);
+    c2.add_state("B", Motion::Empty);
+    c2.add_state("C", Motion::Empty);
+    let t = c2.add_transition(Some("A"), "B", vec![cond("Go", ConditionMode::If)], 1.0);
+    t.interruption_source = InterruptionSource::Source;
+    c2.add_transition(Some("A"), "C", vec![cond("Cut", ConditionMode::If)], 0.0);
+    let h = w
+        .resource_mut::<AssetServer>()
+        .controllers
+        .insert("ordered", c2);
+    let other = w.create("Other");
+    let mut an = Animator::new(h);
+    an.set_bool("Go", true);
+    w.add_component(other, an);
+    tick(&mut w, &mut sys, 0.1);
+    w.get_component_mut::<Animator>(other)
+        .unwrap()
+        .set_bool("Cut", true);
+    tick(&mut w, &mut sys, 0.1);
+    let a = w.get_component::<Animator>(other).unwrap();
+    assert!(
+        a.is_in_transition(),
+        "lower-priority transition must not interrupt"
+    );
+    assert!(a.get_next_animator_state_info(0).unwrap().is_name("B"));
+}
+
+#[test]
+fn state_parameters_and_direct_trees() {
+    use oxide_assets::{BlendTree, BlendTreeType, ChildMotion};
+    let (mut w, mut sys, [root, bone, _]) = rig(|a| {
+        let ramp = a.animations.insert(
+            "ramp",
+            clip_of(vec![track("Bone", Vector3::ZERO, Vector3::Y * 10.0, 1.0)]),
+        );
+        let ten = hold(a, "ten", 10.0);
+        let mut c = AnimatorController::default();
+        c.add_parameter("T", ParameterType::Float)
+            .add_parameter("Speed", ParameterType::Float)
+            .add_parameter("D", ParameterType::Float);
+        let s = c.add_state("Scrub", Motion::Clip(ramp.clone()));
+        s.time_parameter_active = true;
+        s.time_parameter = "T".into();
+        let s = c.add_state("Fast", Motion::Clip(ramp));
+        s.speed_parameter_active = true;
+        s.speed_parameter = "Speed".into();
+        s.looping = false;
+        c.add_state(
+            "Direct",
+            Motion::tree(BlendTree {
+                blend_type: BlendTreeType::Direct,
+                children: vec![ChildMotion {
+                    motion: Motion::Clip(ten),
+                    direct_blend_parameter: "D".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+        );
+        c
+    });
+    w.get_component_mut::<Animator>(root)
+        .unwrap()
+        .set_float("T", 0.25);
+    tick(&mut w, &mut sys, 0.1);
+    assert!((bone_y(&w, bone) - 2.5).abs() < 1e-3, "motion time from T");
+    {
+        let a = w.get_component_mut::<Animator>(root).unwrap();
+        a.set_float("Speed", 2.0);
+        a.play("Fast");
+    }
+    tick(&mut w, &mut sys, 0.1);
+    tick(&mut w, &mut sys, 0.1);
+    assert!(
+        (bone_y(&w, bone) - 4.0).abs() < 1e-3,
+        "speed × 2: {}",
+        bone_y(&w, bone)
+    );
+    {
+        let a = w.get_component_mut::<Animator>(root).unwrap();
+        a.set_float("D", 0.25);
+        a.play("Direct");
+    }
+    tick(&mut w, &mut sys, 0.1);
+    tick(&mut w, &mut sys, 0.1);
+    // A quarter of the way from the rest pose (y = 0) to 10.
+    assert!(
+        (bone_y(&w, bone) - 2.5).abs() < 1e-2,
+        "{}",
+        bone_y(&w, bone)
+    );
+}
+
+#[test]
+fn write_defaults_and_synced_layers() {
+    let (mut w, mut sys, [root, bone, arm]) = rig(|a| {
+        let arm_up = a.animations.insert(
+            "arm",
+            clip_of(vec![track(
+                "Bone/Arm",
+                Vector3::Y * 5.0,
+                Vector3::Y * 5.0,
+                1.0,
+            )]),
+        );
+        let bone_up = hold(a, "bone", 3.0);
+        let hurt = hold(a, "hurt", 7.0);
+        let mut c = AnimatorController::default();
+        c.add_parameter("Next", ParameterType::Trigger);
+        c.add_state("Arm", Motion::Clip(arm_up));
+        c.add_state("Bone", Motion::Clip(bone_up.clone()));
+        c.add_transition(
+            Some("Arm"),
+            "Bone",
+            vec![cond("Next", ConditionMode::If)],
+            0.0,
+        );
+        let l = c.add_layer("Hurt");
+        l.synced_layer_index = Some(0);
+        *l.synced_motion_mut("Bone") = Motion::Clip(hurt);
+        l.default_weight = 0.0;
+        let _ = bone_up;
+        c
+    });
+    w.transform_mut(arm).unwrap().local_position = Vector3::new(0.0, 1.0, 0.0);
+    tick(&mut w, &mut sys, 0.1);
+    assert!((w.transform(arm).unwrap().local_position.y - 5.0).abs() < 1e-4);
+    w.get_component_mut::<Animator>(root)
+        .unwrap()
+        .set_trigger("Next");
+    tick(&mut w, &mut sys, 0.1);
+    // "Bone" doesn't animate the arm: Write Defaults puts it back to 1.
+    assert!((w.transform(arm).unwrap().local_position.y - 1.0).abs() < 1e-4);
+    assert!((bone_y(&w, bone) - 3.0).abs() < 1e-4);
+    // The synced layer follows the base layer's state with its own motion.
+    w.get_component_mut::<Animator>(root)
+        .unwrap()
+        .set_layer_weight(1, 1.0);
+    tick(&mut w, &mut sys, 0.1);
+    assert!(
+        (bone_y(&w, bone) - 7.0).abs() < 1e-4,
+        "{}",
+        bone_y(&w, bone)
+    );
+    let a = w.get_component::<Animator>(root).unwrap();
+    assert!(a.get_current_animator_state_info(1).is_name("Bone"));
+}
+
+#[test]
+fn humanoid_body_part_masks() {
+    let mut m = oxide_assets::AvatarMask::default();
+    m.set_body_part_active(oxide_assets::AvatarMaskBodyPart::LeftArm, false);
+    let mut w = World::new();
+    let root = w.create("R");
+    let mut human = HashMap::new();
+    let arm = w.create("LeftUpperArm");
+    let hand = w.create("LeftHand");
+    let finger = w.create("Index");
+    w.set_parent(arm, Some(root), false).unwrap();
+    w.set_parent(hand, Some(arm), false).unwrap();
+    w.set_parent(finger, Some(hand), false).unwrap();
+    human.insert(HumanBodyBones::LeftUpperArm, arm);
+    human.insert(HumanBodyBones::LeftHand, hand);
+    let x = controller::excluded_bones_for_test(&w, &human, &m);
+    assert!(x.contains(&arm) && x.contains(&hand));
+    assert!(!x.contains(&finger), "fingers are their own part");
+    m.set_body_part_active(oxide_assets::AvatarMaskBodyPart::LeftFingers, false);
+    assert!(controller::excluded_bones_for_test(&w, &human, &m).contains(&finger));
+}
+
+#[derive(Clone, Default, oxide_core::Reflect)]
+struct Counter {
+    pub tag: String,
+}
+
+static LOG: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+impl StateMachineBehaviour for Counter {
+    fn on_state_enter(&mut self, _: &mut oxide_scene::Ctx, s: &AnimatorStateInfo, _: usize) {
+        LOG.lock()
+            .unwrap()
+            .push(format!("{} enter {}", self.tag, s.name));
+    }
+    fn on_state_exit(&mut self, _: &mut oxide_scene::Ctx, s: &AnimatorStateInfo, _: usize) {
+        LOG.lock()
+            .unwrap()
+            .push(format!("{} exit {}", self.tag, s.name));
+    }
+    fn on_state_machine_enter(&mut self, _: &mut oxide_scene::Ctx, m: &str) {
+        LOG.lock()
+            .unwrap()
+            .push(format!("{} machine-enter {m}", self.tag));
+    }
+}
+
+#[test]
+fn state_machine_behaviours_get_callbacks() {
+    let (mut w, mut sys, [root, _, _]) = rig(|a| {
+        let x = hold(a, "x", 0.0);
+        let mut c = AnimatorController::default();
+        c.add_parameter("Go", ParameterType::Trigger);
+        let s = c.add_state("A", Motion::Clip(x.clone()));
+        s.behaviours.push(oxide_assets::StateBehaviour {
+            type_name: "Counter".into(),
+            fields: [("tag".to_owned(), Value::String("sA".into()))].into(),
+        });
+        let sub = c.base().add_state_machine("Sub");
+        sub.behaviours.push(oxide_assets::StateBehaviour {
+            type_name: "Counter".into(),
+            fields: [("tag".to_owned(), Value::String("mSub".into()))].into(),
+        });
+        sub.add_state("B", Motion::Clip(x));
+        c.add_transition(Some("A"), "B", vec![cond("Go", ConditionMode::If)], 0.0);
+        c
+    });
+    let mut reg = StateMachineBehaviours::default();
+    reg.register::<Counter>();
+    w.resources.insert(reg);
+    w.run_scripts = true;
+    LOG.lock().unwrap().clear();
+    tick(&mut w, &mut sys, 0.1);
+    w.get_component_mut::<Animator>(root)
+        .unwrap()
+        .set_trigger("Go");
+    tick(&mut w, &mut sys, 0.1);
+    let log = LOG.lock().unwrap().clone();
+    assert_eq!(
+        log,
+        [
+            "sA enter A",
+            "mSub enter B",
+            "sA exit A",
+            "mSub machine-enter Sub"
+        ],
+        "{log:?}"
+    );
 }

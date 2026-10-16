@@ -12,6 +12,7 @@
 
 pub mod anim_files;
 pub mod animation;
+pub mod animator_controller;
 pub mod asset_types;
 pub mod gltf_import;
 pub mod handle;
@@ -32,11 +33,15 @@ pub mod texture;
 pub mod texture_compress;
 
 pub use animation::{
-    AnimationClip, AnimationEvent, AnimatorController, AnimatorControllerLayer,
-    AnimatorLayerBlendingMode, AnimatorOverrideController, AnimatorState, AnimatorStateMachine,
-    AvatarMask, BlendTree2DType, ClipOverride, Condition, ConditionMode, Interpolation, Motion,
-    ObjectCurve, ObjectKey, Parameter, ParameterType, PropertyCurve, Track, TransformCurves,
-    Transition,
+    AnimationClip, AnimationEvent, Interpolation, ObjectCurve, ObjectKey, PropertyCurve, Track,
+    TransformCurves,
+};
+pub use animator_controller::{
+    AnimatorController, AnimatorControllerLayer, AnimatorLayerBlendingMode,
+    AnimatorOverrideController, AnimatorState, AnimatorStateMachine, AvatarMask,
+    AvatarMaskBodyPart, BlendTree, BlendTree2DType, BlendTreeType, ChildMotion, ClipOverride,
+    Condition, ConditionMode, InterruptionSource, Motion, Parameter, ParameterType, StateBehaviour,
+    StatePath, SyncedMotion, Transition, TransitionSource, TransitionTarget,
 };
 pub use asset_types::{AssetTypeInfo, AssetTypeRegistry, CreateKind, DataAsset, DataAssets};
 pub use handle::{Asset, AssetId, Assets, Handle};

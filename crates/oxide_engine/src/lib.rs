@@ -185,12 +185,13 @@ pub mod prelude {
     pub use crate::{App, AppControl, CustomEditor, InspectorGui, MessageType};
     pub use oxide_animation::{
         Animation, Animator, AnimatorStateInfo, AnimatorUpdateMode, AvatarIKGoal, AvatarIKHint,
-        HumanBodyBones,
+        HumanBodyBones, StateMachineBehaviour, StateMachineBehaviours,
     };
     pub use oxide_assets::{
         AnimationClip, AnimationEvent, AnimatorController, AnimatorControllerLayer,
-        AnimatorLayerBlendingMode, AvatarMask, BlendTree2DType, Condition, ConditionMode, Motion,
-        ParameterType,
+        AnimatorLayerBlendingMode, AnimatorStateMachine, AvatarMask, AvatarMaskBodyPart, BlendTree,
+        BlendTree2DType, BlendTreeType, ChildMotion, Condition, ConditionMode, InterruptionSource,
+        Motion, ParameterType, Transition, TransitionSource, TransitionTarget,
     };
     pub use oxide_assets::{
         AssetServer, Handle, Material, Mesh, PrimitiveType, ShaderKind, SurfaceType, Texture2D,

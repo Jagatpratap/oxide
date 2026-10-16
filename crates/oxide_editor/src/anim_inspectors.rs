@@ -9,7 +9,7 @@ use crate::{Action, EditorState};
 use egui::{Color32, RichText};
 use oxide_assets::{
     AnimationClip, AnimatorController, AnimatorOverrideController, AssetServer, AvatarMask,
-    ClipOverride, Handle,
+    AvatarMaskBodyPart, ClipOverride, Handle,
 };
 use oxide_core::reflect::Value;
 use oxide_engine::Engine;
@@ -377,6 +377,15 @@ pub fn avatar_mask(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui,
         return;
     };
     let before = m.clone();
+    egui::CollapsingHeader::new("Humanoid")
+        .default_open(true)
+        .show(ui, |ui| {
+            ui.weak("Click body parts to leave them out (red) of layers using this mask. Works on rigs with a humanoid bone mapping.");
+            humanoid_figure(ui, &mut m);
+        });
+    egui::CollapsingHeader::new("Transform")
+        .default_open(true)
+        .show(ui, |ui| {
     ui.weak("A layer using this mask animates only the checked transforms (and everything below them). Empty = everything.");
     ui.add_space(4.0);
     // Import the transform tree from a model, like Unity's "Import skeleton".
@@ -446,6 +455,7 @@ pub fn avatar_mask(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui,
     if shown.is_empty() {
         ui.weak("Pick a model above to list its transforms.");
     }
+        });
     if m != before {
         m.transform_paths.sort();
         if let Err(e) = engine
@@ -456,6 +466,128 @@ pub fn avatar_mask(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui,
             st.status = e;
         }
     }
+}
+
+/// Unity's Avatar Mask humanoid figure: each body part is a clickable shape, green when the
+/// mask includes it and red when it doesn't.
+fn humanoid_figure(ui: &mut egui::Ui, m: &mut AvatarMask) {
+    use AvatarMaskBodyPart as P;
+    use egui::{Pos2, Rect, Sense, Stroke, pos2, vec2};
+    let (rect, resp) = ui.allocate_exact_size(vec2(220.0, 300.0), Sense::click());
+    let p = ui.painter_at(rect);
+    p.rect_filled(rect, 4.0, Color32::from_gray(30));
+    let o = rect.min;
+    let at = |x: f32, y: f32| o + vec2(x, y);
+    // (part, shape): rectangles in figure space, circles for the head and IK goals.
+    let rects: [(P, Rect); 8] = [
+        (
+            P::Body,
+            Rect::from_min_max(at(85.0, 60.0), at(135.0, 150.0)),
+        ),
+        (
+            P::LeftArm,
+            Rect::from_min_max(at(138.0, 62.0), at(156.0, 150.0)),
+        ),
+        (
+            P::RightArm,
+            Rect::from_min_max(at(64.0, 62.0), at(82.0, 150.0)),
+        ),
+        (
+            P::LeftFingers,
+            Rect::from_min_max(at(140.0, 168.0), at(158.0, 186.0)),
+        ),
+        (
+            P::RightFingers,
+            Rect::from_min_max(at(62.0, 168.0), at(80.0, 186.0)),
+        ),
+        (
+            P::LeftLeg,
+            Rect::from_min_max(at(112.0, 154.0), at(132.0, 262.0)),
+        ),
+        (
+            P::RightLeg,
+            Rect::from_min_max(at(88.0, 154.0), at(108.0, 262.0)),
+        ),
+        (
+            P::Root,
+            Rect::from_min_max(at(80.0, 278.0), at(140.0, 290.0)),
+        ),
+    ];
+    let circles: [(P, Pos2, f32); 5] = [
+        (P::Head, at(110.0, 36.0), 20.0),
+        (P::LeftHandIK, at(149.0, 160.0), 5.0),
+        (P::RightHandIK, at(71.0, 160.0), 5.0),
+        (P::LeftFootIK, at(122.0, 268.0), 5.0),
+        (P::RightFootIK, at(98.0, 268.0), 5.0),
+    ];
+    let col = |on: bool| {
+        if on {
+            Color32::from_rgb(90, 180, 90)
+        } else {
+            Color32::from_rgb(200, 70, 70)
+        }
+    };
+    let pointer = ui
+        .input(|i| i.pointer.latest_pos())
+        .filter(|p| rect.contains(*p));
+    let mut hovered: Option<P> = None;
+    for (part, r) in rects {
+        p.rect_filled(r, 3.0, col(m.body_part_active(part)));
+        if pointer.is_some_and(|q| r.contains(q)) {
+            hovered = Some(part);
+        }
+    }
+    for (part, c, rad) in circles {
+        p.circle_filled(c, rad, col(m.body_part_active(part)));
+        if pointer.is_some_and(|q| q.distance(c) <= rad + 3.0) {
+            hovered = Some(part);
+        }
+    }
+    if let Some(h) = hovered {
+        for (part, r) in rects {
+            if part == h {
+                p.rect_stroke(
+                    r,
+                    3.0,
+                    Stroke::new(2.0, Color32::WHITE),
+                    egui::StrokeKind::Outside,
+                );
+            }
+        }
+        for (part, c, rad) in circles {
+            if part == h {
+                p.circle_stroke(c, rad + 1.0, Stroke::new(2.0, Color32::WHITE));
+            }
+        }
+        p.text(
+            pos2(rect.left() + 6.0, rect.top() + 6.0),
+            egui::Align2::LEFT_TOP,
+            format!("{h:?}"),
+            egui::FontId::proportional(12.0),
+            Color32::WHITE,
+        );
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    // One toggle per click, even when egui runs the frame twice.
+    // (The frame's input time is the same in both passes; frame numbers aren't kept here.)
+    let frame = ui.input(|i| i.time).to_bits();
+    let id = resp.id.with("toggled");
+    if resp.clicked()
+        && let Some(h) = hovered
+        && ui.ctx().data(|d| d.get_temp::<u64>(id)) != Some(frame)
+    {
+        ui.ctx().data_mut(|d| d.insert_temp(id, frame));
+        let on = m.body_part_active(h);
+        m.set_body_part_active(h, !on);
+    }
+    ui.horizontal(|ui| {
+        if ui.small_button("All").clicked() {
+            m.disabled_body_parts.clear();
+        }
+        if ui.small_button("None").clicked() {
+            m.disabled_body_parts = P::ALL.to_vec();
+        }
+    });
 }
 
 /// Unity's Extract Animations: copies a model's clips to editable `.anim` files beside it.

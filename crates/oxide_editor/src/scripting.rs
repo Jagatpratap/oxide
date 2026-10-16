@@ -55,6 +55,8 @@ pub struct ScriptHost {
     pub script_types: Vec<String>,
     /// Data asset types the loaded library registered (`scripts! { ...; assets: ... }`).
     pub script_asset_types: Vec<String>,
+    /// StateMachineBehaviour types the loaded library registered.
+    pub script_behaviour_types: Vec<String>,
     libraries: Vec<libloading::Library>,
     generation: u32,
     pub last_build_seconds: f32,
@@ -168,6 +170,7 @@ impl ScriptHost {
             errors: Vec::new(),
             script_types: Vec::new(),
             script_asset_types: Vec::new(),
+            script_behaviour_types: Vec::new(),
             libraries: Vec::new(),
             generation: 0,
             last_build_seconds: 0.0,
@@ -293,6 +296,9 @@ impl ScriptHost {
             unsafe { lib.get(b"oxide_register_editors") }.ok();
         let register_assets: Option<libloading::Symbol<fn(&mut AssetServer)>> =
             unsafe { lib.get(b"oxide_register_assets") }.ok();
+        let register_behaviours: Option<
+            libloading::Symbol<fn(&mut oxide_engine::animation::StateMachineBehaviours)>,
+        > = unsafe { lib.get(b"oxide_register_behaviours") }.ok();
 
         let w = &mut engine.world;
         let old = std::mem::take(&mut self.script_types);
@@ -312,6 +318,24 @@ impl ScriptHost {
             .map(|r| r.info.name.to_owned())
             .filter(|n| !before.contains(n))
             .collect();
+        // StateMachineBehaviours: drop the old library's types and instances, add the new.
+        {
+            use oxide_engine::animation::StateMachineBehaviours;
+            if !w.resources.contains::<StateMachineBehaviours>() {
+                w.resources.insert(StateMachineBehaviours::default());
+            }
+            let b = w.resource_mut::<StateMachineBehaviours>();
+            b.remove(&std::mem::take(&mut self.script_behaviour_types));
+            if let Some(f) = &register_behaviours {
+                let before = b.names();
+                f(b);
+                self.script_behaviour_types = b
+                    .names()
+                    .into_iter()
+                    .filter(|n| !before.contains(n))
+                    .collect();
+            }
+        }
         if let Some(f) = register_editors {
             if !w.resources.contains::<oxide_engine::CustomEditors>() {
                 w.resources.insert(oxide_engine::CustomEditors::default());

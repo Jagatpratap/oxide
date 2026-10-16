@@ -1,7 +1,8 @@
 //! Animation asset files: `.anim` clips, `.controller` Animator Controllers, `.mask`
 //! Avatar Masks and `.overrideController` Animator Override Controllers, as YAML.
 
-use crate::animation::{AnimationClip, AnimatorController, AnimatorOverrideController, AvatarMask};
+use crate::animation::AnimationClip;
+use crate::animator_controller::{AnimatorController, AnimatorOverrideController, AvatarMask};
 use crate::handle::Handle;
 use crate::server::AssetServer;
 use std::path::Path;
@@ -59,7 +60,34 @@ impl AssetServer {
         m: &AvatarMask,
     ) -> Result<Handle<AvatarMask>, String> {
         self.write_yaml(path, m)?;
-        Ok(self.masks.insert(path.to_owned(), m.clone()))
+        let h = self.masks.insert(path.to_owned(), m.clone());
+        // Controllers using the mask see the edit straight away.
+        let users: Vec<String> = self
+            .controllers
+            .iter()
+            .filter(|(_, c)| {
+                c.layers.iter().any(|l| {
+                    l.avatar_mask_asset
+                        .as_ref()
+                        .is_some_and(|a| a.path() == path)
+                })
+            })
+            .map(|(p, _)| p.to_owned())
+            .collect();
+        for p in users {
+            let ch: Handle<AnimatorController> = Handle::from_path(p);
+            if let Some(c) = self.controllers.get_mut(&ch) {
+                for l in &mut c.layers {
+                    if l.avatar_mask_asset
+                        .as_ref()
+                        .is_some_and(|a| a.path() == path)
+                    {
+                        l.avatar_mask = Some(m.clone());
+                    }
+                }
+            }
+        }
+        Ok(h)
     }
 
     /// Loads (or reloads) an Animator Controller, with the clips and masks it uses.
@@ -71,6 +99,7 @@ impl AssetServer {
         if c.name.is_empty() {
             c.name = stem(path);
         }
+        c.upgrade();
         self.load_controller_dependencies(path, &mut c);
         let h = self.controllers.insert(path.to_owned(), c);
         // Override controllers built on this one pick up the change.
@@ -109,7 +138,10 @@ impl AssetServer {
             }
         }
         self.write_yaml(path, &file)?;
-        let h = self.controllers.insert(path.to_owned(), c.clone());
+        // Keep the in-memory copy's masks resolved (the window may have just picked one).
+        let mut c = c.clone();
+        self.load_controller_dependencies(path, &mut c);
+        let h = self.controllers.insert(path.to_owned(), c);
         self.refresh_override_controllers(path);
         Ok(h)
     }
@@ -180,9 +212,8 @@ impl AssetServer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::animation::{
-        ClipOverride, Interpolation, Motion, PropertyCurve, Track, TransformCurves,
-    };
+    use crate::animation::{Interpolation, PropertyCurve, Track, TransformCurves};
+    use crate::animator_controller::{ClipOverride, Motion};
     use oxide_math::Vector3;
 
     #[test]
@@ -226,6 +257,7 @@ mod tests {
             &AvatarMask {
                 name: "Upper".into(),
                 transform_paths: vec!["Hips/Spine".into()],
+                ..Default::default()
             },
         )
         .unwrap();

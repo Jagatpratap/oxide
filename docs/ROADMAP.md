@@ -396,7 +396,7 @@ runner, native plugins.
 **Exit:** a playable 3D third-person controller demo and a 2D tilemap platformer, both built only in the editor.
 
 ### P8 — Animation, Audio, UI, VFX, Terrain, Video
-- ◐ Animation: AnimationClip ☑, Animation window (dopesheet/curves, keyframe recording, any-property and object-reference keys) ☑, Animator Controller (state machine, transitions, parameters, layers, masks, blend trees 1D/2D) ☑ with `.controller` files, Override Controllers, Avatar Masks and the Animator window ☑, humanoid bone mapping ☑ / retargeting ☐, root motion ☑, IK (goals, hints, LookAt) ☑, animation events ☑, update modes ☑
+- ◐ Animation: AnimationClip ☑, Animation window (dopesheet/curves, keyframe recording, any-property and object-reference keys) ☑, Animator Controller ☑: sub-state machines with Entry/Exit/Any State and entry / state machine transitions, transitions with exit time, fixed or normalized duration, offset, interruption sources and ordered interruption, solo/mute; blend trees 1D, 2D (simple directional, freeform directional, freeform cartesian) and Direct, nested, with per-motion time scale, cycle offset and mirror; state speed multiplier, motion time, mirror and cycle offset parameters, Write Defaults; layers with weights, Avatar Masks (transforms and humanoid body parts), Override/Additive, Sync (with timing), IK pass; StateMachineBehaviours (`scripts! { ...; behaviours: T }`); `.controller` files, Override Controllers, Avatar Masks; Animator window with layers/parameters panels (live values in Play), graph (zoom, box select, copy/paste, sub-machine breadcrumbs), blend tree graph with live weights, transition timeline, Compute Thresholds, undo/redo ☑, humanoid bone mapping ☑ / retargeting ☐, root motion ☑, IK (goals, hints, LookAt) ☑, animation events ☑, update modes ☑
   ([Mecanim](https://docs.unity3d.com/Manual/animation-mecanim.html))
 - ☐ Timeline-style sequencer for cutscenes
 - ◐ Audio: AudioClip import settings, AudioSource/Listener, 3D rolloff, Doppler, Audio Mixer (groups, snapshots, effects, exposed parameters ☑; sends, ducking ☐), reverb zones, filters, random containers
@@ -494,7 +494,7 @@ needs, and where the engine is:
 |---|---|---|---|
 | Editor to build levels | ✔ | ✔ | ☑ P2 editor, prefabs |
 | Vehicle physics (WheelCollider) | ✔ | ✔ (vehicles) | ☑ Rapier ray-cast vehicles, CarController |
-| Character controller + animation | | ✔ | ◐ CharacterController; Animator with layers (Override/Additive, Avatar Masks), 1D/2D blend trees, root motion, animation events, humanoid bone mapping, IK goals/hints + LookAt; retargeting between rigs, Animator window ☐ |
+| Character controller + animation | | ✔ | ◐ CharacterController; Animator with layers (Override/Additive, Avatar Masks), 1D/2D blend trees, root motion, animation events, humanoid bone mapping, IK goals/hints + LookAt, sub-state machines, interruption, Direct/nested blend trees, sync layers, StateMachineBehaviours, Animator window ☑; retargeting between rigs ☐ |
 | Terrain + foliage | ✔ | ✔ | ◐ chunked LOD terrain, trees; missing grass/details, sculpt tools, streaming |
 | Big worlds (8×8 km) | | ✔ | ◐ LOD Groups (+ `_LODn` model import, LOD bias); occlusion culling ✔; world streaming ✔ (scene cells; assets still load on the main thread); floating origin ☐ |
 | Weapons, hits, ragdolls | | ✔ | ◐ raycasts, CharacterJoint, Ragdoll Wizard (from the humanoid map), animated ↔ limp switch; hit boxes ☐ |

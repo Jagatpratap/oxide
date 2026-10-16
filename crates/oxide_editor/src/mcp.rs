@@ -525,6 +525,45 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
         s,
         bus,
         ToolDef::new(
+            "editor_animator",
+            "Animator window",
+            "The Animator window (Animator Controller graph): returns the open controller, layer, sub-state \
+             machine path, blend tree view, selection and every drawn node with its screen rectangle (for \
+             `editor_ui_input`). `open` a .controller, pick a `layer` (index or name), go into `machine` \
+             (sub-state machine names from the layer root, [] for the root), `open_tree` (a state with a \
+             blend tree) or `close_tree`, `select` a node by name (state, sub-machine, Entry, Any State, \
+             Exit) or `select_transition` (index in the current machine), `frame` to fit the graph.",
+            schema(
+                json!({
+                    "open": { "type": "string" }, "layer": {}, "machine": { "type": "array" },
+                    "open_tree": { "type": "string" }, "close_tree": { "type": "boolean" },
+                    "select": { "type": "string" }, "select_transition": { "type": "integer" },
+                    "frame": { "type": "boolean" }
+                }),
+                &[],
+            ),
+        ),
+        |args, e| {
+            with_editor(e, |ed, e| {
+                if let Some(p) = args.get("open").and_then(Json::as_str) {
+                    let assets = e.world.resource_mut::<AssetServer>();
+                    if let Err(err) = assets.ensure_loaded(p) {
+                        return ToolResult::error(err);
+                    }
+                }
+                let assets = e.world.resource::<AssetServer>();
+                if let Err(err) = ed.st.animator.control(assets, &Json::Object(args.clone())) {
+                    return ToolResult::error(err);
+                }
+                ToolResult::json(ed.st.animator.state_json(assets))
+            })
+        },
+    );
+
+    tool(
+        s,
+        bus,
+        ToolDef::new(
             "editor_ui_input",
             "Click, drag, scroll or type in the editor UI",
             "Sends synthetic mouse and keyboard input to the editor's UI, for testing windows that need \

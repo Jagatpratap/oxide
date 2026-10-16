@@ -114,6 +114,7 @@ only when the editor is running (not with `--player`).
 | `editor_game_view` | Game view control bar: `size` (aspect or fixed resolution), `scale`, maximize on play, stats, gizmos | yes |
 | `editor_inspector` | Locks the Inspector to the current selection (`lock`: true) or unlocks it, toggles Debug mode, `scroll_to` a component, and returns which objects the Inspector shows | yes |
 | `editor_animation` | The Animation window (it edits the clips of the selected object's Animator): target, clip, playhead, record and preview state; `time`, `record`, `preview`, `clip`, and `add_sprites` (keys a sprite sheet as a 12 fps flipbook) | yes |
+| `editor_animator` | The Animator window: open controller, layer, sub-state machine path, blend tree view, selection and every drawn node with its screen rectangle; `open`, `layer`, `machine` (sub-machine names), `open_tree` / `close_tree`, `select` (node name), `select_transition`, `frame` | yes |
 | `editor_preferences` | Reads the per-user editor Preferences; `values` changes some | yes |
 | `editor_capture` | PNG of the whole editor window (menus, Hierarchy, Scene/Game views, Inspector, ...), as the user sees it | no |
 | `reflection_probes` | Lists Reflection Probes (box, mode, refresh mode, importance) and the last frame's reflection stats (`active` = probes with a captured cubemap, up to 15; `captures` = cubemaps captured that frame, sky included). | yes |
