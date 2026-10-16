@@ -12,6 +12,7 @@ use crate::Gpu;
 use crate::frame::*;
 use crate::gpu_assets::{GpuAssets, SkinVertex, Vertex};
 use crate::post::PostProcessor;
+use crate::reflection::{PROBE_SIZE, ReflectionProbes};
 use oxide_assets::{AssetId, AssetServer};
 use oxide_math::{Matrix4x4, Matrix4x4Ext, Vector3, Vector4};
 use std::collections::HashMap;
@@ -101,6 +102,7 @@ struct Targets {
     last_used: u64,
     bloom: Vec<(wgpu::TextureView, u32, u32)>,
     msaa: Option<wgpu::TextureView>,
+    resolve_tex: wgpu::Texture,
     resolve: wgpu::TextureView,
     depth: wgpu::TextureView,
 }
@@ -162,7 +164,20 @@ pub struct SceneRenderer {
     /// One occlusion buffer per camera of the last frame.
     occlusion: Vec<crate::occlusion::OcclusionBuffer>,
     pub last_stats: RenderStats,
+    reflections: ReflectionProbes,
 }
+
+/// A cube capture in progress: shadows cover a sphere around `center`, and the probe being
+/// captured doesn't reflect itself.
+#[derive(Clone, Copy)]
+struct Capture {
+    center: Vector3,
+    exclude: Option<u32>,
+}
+
+/// Probe captures render all six faces into one 3×2 atlas.
+const CAPTURE_W: u32 = PROBE_SIZE * 3;
+const CAPTURE_H: u32 = PROBE_SIZE * 2;
 
 fn vertex_layouts(skinned: bool) -> Vec<Option<wgpu::VertexBufferLayout<'static>>> {
     const VERTEX: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
@@ -263,6 +278,24 @@ impl SceneRenderer {
                     count: None,
                 },
                 storage_entry(4, wgpu::ShaderStages::VERTEX),
+                storage_entry(5, wgpu::ShaderStages::FRAGMENT),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::CubeArray,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                storage_entry(8, wgpu::ShaderStages::FRAGMENT),
             ],
         });
         let shadow_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -542,6 +575,7 @@ impl SceneRenderer {
             post,
             occlusion: Vec::new(),
             last_stats: RenderStats::default(),
+            reflections: ReflectionProbes::new(device, &gpu.queue),
         }
     }
 
@@ -683,12 +717,21 @@ impl SceneRenderer {
         let ra = wgpu::TextureUsages::RENDER_ATTACHMENT;
         let msaa =
             (self.sample_count > 1).then(|| tex("hdr msaa", HDR_FORMAT, self.sample_count, ra));
-        let resolve = tex(
-            "hdr",
-            HDR_FORMAT,
-            1,
-            ra | wgpu::TextureUsages::TEXTURE_BINDING,
-        );
+        let resolve_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("hdr"),
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: HDR_FORMAT,
+            usage: ra | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let resolve = resolve_tex.create_view(&Default::default());
         let depth = tex("depth", DEPTH_FORMAT, self.sample_count, ra);
         let bloom = PostProcessor::bloom_chain(device, w, h);
         self.targets.insert(
@@ -697,6 +740,7 @@ impl SceneRenderer {
                 last_used: now,
                 bloom,
                 msaa,
+                resolve_tex,
                 resolve,
                 depth,
             },
@@ -745,6 +789,24 @@ impl SceneRenderer {
                             binding: 4,
                             resource: self.joint_buffer.as_entire_binding(),
                         },
+                        wgpu::BindGroupEntry {
+                            binding: 5,
+                            resource: self.reflections.probe_buffer.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 6,
+                            resource: wgpu::BindingResource::TextureView(
+                                &self.reflections.cube_array,
+                            ),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 7,
+                            resource: wgpu::BindingResource::Sampler(&self.reflections.sampler),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 8,
+                            resource: self.reflections.sh_buffer.as_entire_binding(),
+                        },
                     ],
                 })
             })
@@ -790,9 +852,170 @@ impl SceneRenderer {
         width: u32,
         height: u32,
     ) -> RenderStats {
+        let (w, h) = (width.max(1), height.max(1));
+        let captures = self.update_reflections(gpu, assets, frame);
+        let (mut encoder, mut stats) = self.render_scene(gpu, assets, frame, w, h, None);
+        stats.reflection_probes = self.reflections.active_count();
+        stats.probe_captures = captures;
+
+        // ---- post-processing into the target ------------------------------------------
+        let env = &frame.environment;
+        let targets = self.targets.get(&(w, h)).expect("targets");
+        let bloom = env.bloom.filter(|_| !frame.cameras.is_empty());
+        self.post.run(
+            &gpu.device,
+            &gpu.queue,
+            &mut encoder,
+            &targets.resolve,
+            &targets.bloom,
+            target,
+            format,
+            env.exposure,
+            bloom,
+            env.vignette,
+        );
+        gpu.queue.submit([encoder.finish()]);
+        self.last_stats = stats;
+        stats
+    }
+
+    /// Captures the sky and the reflection probes that need it this frame; returns how many
+    /// cubemaps were captured.
+    fn update_reflections(&mut self, gpu: &Gpu, assets: &AssetServer, frame: &RenderFrame) -> u32 {
+        let env = &frame.environment;
+        let sky_key = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            let mut f = |v: f32| v.to_bits().hash(&mut h);
+            for c in [env.sky_tint, env.ground_color] {
+                f(c.r);
+                f(c.g);
+                f(c.b);
+            }
+            f(env.sky_exposure);
+            f(env.sun_size);
+            if let Some(s) = &frame.sun {
+                f(s.direction.x);
+                f(s.direction.y);
+                f(s.direction.z);
+                s.color.iter().for_each(|&c| f(c));
+            }
+            if let Some((kind, c)) = env.fog {
+                f(c.r);
+                f(c.g);
+                f(c.b);
+                format!("{kind:?}").hash(&mut h);
+            }
+            h.finish()
+        };
+        let jobs = self
+            .reflections
+            .plan(&gpu.queue, sky_key, &frame.reflection_probes, frame.time);
+        let count = jobs.len() as u32;
+        for job in jobs {
+            let (center, capture_frame) = match &job.probe {
+                None => {
+                    let sun = frame.sun.clone().map(|mut s| {
+                        s.shadows = None;
+                        s
+                    });
+                    let f = RenderFrame {
+                        cameras: face_cameras(Vector3::ZERO, 0.1, 10.0, ClearMode::Sky, 0),
+                        sun,
+                        environment: frame.environment.clone(),
+                        time: frame.time,
+                        ..Default::default()
+                    };
+                    (Vector3::ZERO, f)
+                }
+                Some(p) => {
+                    let mut environment = frame.environment.clone();
+                    environment.shadow_distance = environment.shadow_distance.min(p.far);
+                    let f = RenderFrame {
+                        cameras: face_cameras(p.position, p.near, p.far, p.clear, p.culling_mask),
+                        sun: frame.sun.clone(),
+                        lights: frame.lights.clone(),
+                        draws: frame
+                            .draws
+                            .iter()
+                            .filter(|d| !p.baked || d.reflection_probe_static)
+                            .cloned()
+                            .collect(),
+                        terrain_draws: frame.terrain_draws.clone(),
+                        particles: if p.baked {
+                            Vec::new()
+                        } else {
+                            frame.particles.clone()
+                        },
+                        joints: frame.joints.clone(),
+                        environment,
+                        time: frame.time,
+                        ..Default::default()
+                    };
+                    (p.position, f)
+                }
+            };
+            let capture = Capture {
+                center,
+                exclude: job.probe.as_ref().map(|_| job.slot),
+            };
+            let (mut encoder, _) = self.render_scene(
+                gpu,
+                assets,
+                &capture_frame,
+                CAPTURE_W,
+                CAPTURE_H,
+                Some(capture),
+            );
+            let targets = &self.targets[&(CAPTURE_W, CAPTURE_H)];
+            for face in 0..6u32 {
+                encoder.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &targets.resolve_tex,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d {
+                            x: (face % 3) * PROBE_SIZE,
+                            y: (face / 3) * PROBE_SIZE,
+                            z: 0,
+                        },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyTextureInfo {
+                        texture: self.reflections.capture_texture(),
+                        mip_level: 0,
+                        origin: wgpu::Origin3d {
+                            x: 0,
+                            y: 0,
+                            z: face,
+                        },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::Extent3d {
+                        width: PROBE_SIZE,
+                        height: PROBE_SIZE,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
+            self.reflections.filter(&mut encoder, job.slot);
+            gpu.queue.submit([encoder.finish()]);
+        }
+        count
+    }
+
+    /// Culls, batches and draws every camera of `frame` into the HDR target of size `w`×`h`
+    /// (shadows first). Returns the unsubmitted encoder.
+    fn render_scene(
+        &mut self,
+        gpu: &Gpu,
+        assets: &AssetServer,
+        frame: &RenderFrame,
+        w: u32,
+        h: u32,
+        capture: Option<Capture>,
+    ) -> (wgpu::CommandEncoder, RenderStats) {
         let device = &gpu.device;
         let queue = &gpu.queue;
-        let (w, h) = (width.max(1), height.max(1));
         self.ensure_targets(device, w, h);
         let mut stats = RenderStats {
             cameras: frame.cameras.len() as u32,
@@ -812,7 +1035,10 @@ impl SceneRenderer {
             double_sided: bool,
             cast: bool,
             priority: i32,
+            /// Reflection probes chosen for this object (instance `extra.zw`).
+            probes: [u32; 2],
         }
+        let exclude = capture.and_then(|c| c.exclude);
         let mut resolved = Vec::with_capacity(frame.draws.len());
         for d in &frame.draws {
             if !self.gpu_assets.ensure_mesh(device, assets, d.mesh) {
@@ -839,7 +1065,16 @@ impl SceneRenderer {
                     .max(d.model.z_axis.truncate().length());
                 (c, mesh.bounds.extents.length() * s)
             };
+            // Skinned draws are in world space: use the first bone's position for probes.
+            let probe_pos = match d.joint_offset {
+                Some(o) => frame
+                    .joints
+                    .get(o as usize)
+                    .map_or(center, |m| m.w_axis.truncate()),
+                None => center,
+            };
             resolved.push(Resolved {
+                probes: self.reflections.select(probe_pos, exclude),
                 item: d,
                 material: mat,
                 center,
@@ -917,7 +1152,8 @@ impl SceneRenderer {
 
         let env = &frame.environment;
         let mut instances: Vec<Instance> = Vec::with_capacity(resolved.len());
-        let make_instance = |d: &DrawItem| {
+        let make_instance = |r: &Resolved| {
+            let d = r.item;
             let m = d.model;
             let n =
                 Matrix4x4::from_mat3(oxide_math::glam::Mat3::from_mat4(m).inverse().transpose());
@@ -928,7 +1164,12 @@ impl SceneRenderer {
                     n.y_axis.to_array(),
                     n.z_axis.to_array(),
                 ],
-                extra: [d.joint_offset.unwrap_or(0), d.receive_shadows as u32, 0, 0],
+                extra: [
+                    d.joint_offset.unwrap_or(0),
+                    d.receive_shadows as u32,
+                    r.probes[0],
+                    r.probes[1],
+                ],
             }
         };
 
@@ -941,13 +1182,22 @@ impl SceneRenderer {
         let aspect0 =
             |c: &CameraView| (w as f32 * c.viewport[2]) / (h as f32 * c.viewport[3]).max(1.0);
         if let (Some((sun, _)), Some(cam)) = (shadows, frame.cameras.first()) {
-            let cascades = compute_cascades(
-                cam,
-                aspect0(cam),
-                sun.direction,
-                env.shadow_distance,
-                self.shadow_size,
-            );
+            let cascades = match capture {
+                Some(c) => cascades_around(
+                    c.center,
+                    cam.near,
+                    sun.direction,
+                    env.shadow_distance,
+                    self.shadow_size,
+                ),
+                None => compute_cascades(
+                    cam,
+                    aspect0(cam),
+                    sun.direction,
+                    env.shadow_distance,
+                    self.shadow_size,
+                ),
+            };
             for (i, c) in cascades.iter().enumerate() {
                 cascade_vp[i] = c.view_proj;
                 splits[i] = c.split;
@@ -978,7 +1228,7 @@ impl SceneRenderer {
                         skinned: r.item.joint_offset.is_some(),
                     };
                     let idx = instances.len() as u32;
-                    instances.push(make_instance(r.item));
+                    instances.push(make_instance(r));
                     if let Some(last) = list.last_mut()
                         && !key.skinned
                         && last.key == key
@@ -1129,7 +1379,7 @@ impl SceneRenderer {
                     skinned: r.item.joint_offset.is_some(),
                 };
                 let idx = instances.len() as u32;
-                instances.push(make_instance(r.item));
+                instances.push(make_instance(r));
                 if let Some(last) = ob.last_mut()
                     && !key.skinned
                     && last.key == key
@@ -1153,7 +1403,7 @@ impl SceneRenderer {
                 .into_iter()
                 .map(|(_, r)| {
                     let idx = instances.len() as u32;
-                    instances.push(make_instance(r.item));
+                    instances.push(make_instance(r));
                     Batch {
                         key: MainKey {
                             transparent: true,
@@ -1170,6 +1420,7 @@ impl SceneRenderer {
             camera_batches.push((ob, tb));
             let mut tl = Vec::new();
             for (t, c, r, b) in &terrain_items {
+                let probes = self.reflections.select(*c, exclude);
                 if !sphere_visible(&planes, *c, *r) {
                     stats.culled += 1;
                     continue;
@@ -1186,7 +1437,7 @@ impl SceneRenderer {
                         [0.0, 1.0, 0.0, 0.0],
                         [0.0, 0.0, 1.0, 0.0],
                     ],
-                    extra: [0, t.receive_shadows as u32, 0, 0],
+                    extra: [0, t.receive_shadows as u32, probes[0], probes[1]],
                 });
                 tl.push((t.data, t.mesh, idx));
             }
@@ -1451,25 +1702,39 @@ impl SceneRenderer {
             }
         }
 
-        // ---- post-processing into the target ------------------------------------------
-        let bloom = env.bloom.filter(|_| !frame.cameras.is_empty());
-        self.post.run(
-            device,
-            queue,
-            &mut encoder,
-            &targets.resolve,
-            &targets.bloom,
-            target,
-            format,
-            env.exposure,
-            bloom,
-            env.vignette,
-        );
-        queue.submit([encoder.finish()]);
         self.occlusion = occlusion;
-        self.last_stats = stats;
-        stats
+        (encoder, stats)
     }
+}
+
+/// The six cube-face cameras of a capture at `position`, tiled 3×2 in the capture atlas
+/// (face `i` at column `i % 3`, row `i / 3` from the top).
+fn face_cameras(
+    position: Vector3,
+    near: f32,
+    far: f32,
+    clear: ClearMode,
+    culling_mask: u32,
+) -> Vec<CameraView> {
+    crate::reflection::face_rotations()
+        .into_iter()
+        .enumerate()
+        .map(|(i, rotation)| {
+            let (col, row) = ((i % 3) as f32, (i / 3) as f32);
+            CameraView {
+                position,
+                rotation,
+                projection: ProjectionKind::Perspective { fov: 90.0 },
+                near: near.max(0.01),
+                far: far.max(near + 0.1),
+                // Bottom-left origin: row 0 (top) starts halfway up.
+                viewport: [col / 3.0, 0.5 - row * 0.5, 1.0 / 3.0, 0.5],
+                clear,
+                culling_mask,
+                occlusion_culling: false,
+            }
+        })
+        .collect()
 }
 
 struct Cascade {
@@ -1504,13 +1769,7 @@ fn compute_cascades(
     let near = cam.near.max(0.01);
     let far = cam.far.min(shadow_distance).max(near + 1.0);
     let lambda = 0.8;
-    let dir = sun_dir.normalize_or(Vector3::NEG_Y);
-    let up = if dir.y.abs() > 0.99 {
-        Vector3::Z
-    } else {
-        Vector3::Y
-    };
-    let light_view = Matrix4x4::look_to(Vector3::ZERO, dir, up);
+    let light_view = sun_view(sun_dir);
     let mut out = Vec::new();
     let mut prev = near;
     for i in 0..CASCADES {
@@ -1535,36 +1794,77 @@ fn compute_cascades(
             .map(|v| cam.position + cam.rotation * v)
             .collect();
         let center_ws = corners.iter().copied().sum::<Vector3>() / corners.len() as f32;
-        let mut radius = corners
+        let radius = corners
             .iter()
             .map(|c| c.distance(center_ws))
             .fold(0.0, f32::max);
-        radius = (radius * 16.0).ceil() / 16.0;
-        let texel = radius * 2.0 / res as f32;
-        let mut c = light_view.transform_point3(center_ws);
-        // Snap to whole texels so the shadow doesn't shimmer as the camera moves.
-        c.x = (c.x / texel).floor() * texel;
-        c.y = (c.y / texel).floor() * texel;
-        let back = radius.max(300.0);
-        let proj = Matrix4x4::ortho(
-            c.x - radius,
-            c.x + radius,
-            c.y - radius,
-            c.y + radius,
-            c.z - back,
-            c.z + radius,
-        );
-        out.push(Cascade {
-            view_proj: proj * light_view,
-            split,
-            texel,
-            light_view,
-            center: c,
-            radius,
-        });
+        out.push(make_cascade(light_view, center_ws, radius, split, res));
         prev = split;
     }
     out
+}
+
+fn sun_view(sun_dir: Vector3) -> Matrix4x4 {
+    let dir = sun_dir.normalize_or(Vector3::NEG_Y);
+    let up = if dir.y.abs() > 0.99 {
+        Vector3::Z
+    } else {
+        Vector3::Y
+    };
+    Matrix4x4::look_to(Vector3::ZERO, dir, up)
+}
+
+fn make_cascade(
+    light_view: Matrix4x4,
+    center_ws: Vector3,
+    radius: f32,
+    split: f32,
+    res: u32,
+) -> Cascade {
+    let radius = (radius * 16.0).ceil() / 16.0;
+    let texel = radius * 2.0 / res as f32;
+    let mut c = light_view.transform_point3(center_ws);
+    // Snap to whole texels so the shadow doesn't shimmer as the camera moves.
+    c.x = (c.x / texel).floor() * texel;
+    c.y = (c.y / texel).floor() * texel;
+    let back = radius.max(300.0);
+    let proj = Matrix4x4::ortho(
+        c.x - radius,
+        c.x + radius,
+        c.y - radius,
+        c.y + radius,
+        c.z - back,
+        c.z + radius,
+    );
+    Cascade {
+        view_proj: proj * light_view,
+        split,
+        texel,
+        light_view,
+        center: c,
+        radius,
+    }
+}
+
+/// Cascades for a cube capture: spheres around `center`. A point at view depth `d` in a
+/// 90° face is at most `d·√3` away, so each sphere is sized to cover its split that way.
+fn cascades_around(
+    center: Vector3,
+    near: f32,
+    sun_dir: Vector3,
+    shadow_distance: f32,
+    res: u32,
+) -> Vec<Cascade> {
+    let near = near.max(0.01);
+    let far = shadow_distance.max(near + 1.0);
+    let light_view = sun_view(sun_dir);
+    (0..CASCADES)
+        .map(|i| {
+            let p = (i + 1) as f32 / CASCADES as f32;
+            let split = 0.8 * near * (far / near).powf(p) + 0.2 * (near + (far - near) * p);
+            make_cascade(light_view, center, split * 1.75, split, res)
+        })
+        .collect()
 }
 
 fn frustum_planes(m: &Matrix4x4) -> [Vector4; 6] {

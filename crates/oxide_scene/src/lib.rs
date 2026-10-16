@@ -45,6 +45,7 @@ pub fn register_builtin(reg: &mut ComponentRegistry) {
     reg.register::<SkinnedMeshRenderer>("Mesh/Skinned Mesh Renderer");
     reg.register::<LODGroup>("Rendering/LOD Group");
     reg.register::<OcclusionPortal>("Rendering/Occlusion Portal");
+    reg.register::<ReflectionProbe>("Rendering/Reflection Probe");
 }
 
 #[cfg(test)]

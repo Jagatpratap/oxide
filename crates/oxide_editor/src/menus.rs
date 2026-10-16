@@ -122,6 +122,11 @@ fn create_items(prefix: &str) -> Vec<MenuItem> {
         Action::Create(Create::SpotLight),
     ));
     v.push(item(
+        &format!("{prefix}Light/Reflection Probe"),
+        "",
+        Action::Create(Create::ReflectionProbe),
+    ));
+    v.push(item(
         &format!("{prefix}Camera"),
         "",
         Action::Create(Create::Camera),

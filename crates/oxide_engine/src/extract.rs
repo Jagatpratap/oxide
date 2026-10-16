@@ -4,13 +4,14 @@
 use oxide_assets::{AssetId, AssetServer, DEFAULT_MATERIAL};
 use oxide_math::{Color, Matrix4x4, Matrix4x4Ext};
 use oxide_render::{
-    CameraView, ClearMode, DrawItem, Environment, FogKind, ProjectionKind, PunctualLight,
-    RenderFrame, ShadowSettings, SunLight,
+    CameraView, ClearMode, DrawItem, Environment, FogKind, ProbeRefresh, ProjectionKind,
+    PunctualLight, ReflectionProbeView, RenderFrame, ShadowSettings, SunLight,
 };
 use oxide_scene::{
     Camera, CameraClearFlags, DebugDraw, FogMode, LODGroup, Light, LightShadows, LightType,
-    MeshFilter, MeshRenderer, OcclusionPortal, Projection, RenderSettings, ShadowCastingMode,
-    SkinnedMeshRenderer, StaticEditorFlags, World,
+    MeshFilter, MeshRenderer, OcclusionPortal, Projection, ReflectionProbe,
+    ReflectionProbeClearFlags, ReflectionProbeMode, ReflectionProbeRefreshMode, RenderSettings,
+    ShadowCastingMode, SkinnedMeshRenderer, StaticEditorFlags, World,
 };
 
 pub fn camera_view(world: &World, id: oxide_scene::GameObjectId, c: &Camera) -> CameraView {
@@ -137,6 +138,7 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
         }
     }
     frame.sun = sun.map(|(_, s)| s);
+    frame.reflection_probes = reflection_probes(world);
 
     // Terrains choose chunk LODs for the first camera.
     let cam_pos = frame
@@ -158,6 +160,7 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
     let occludee = |id, allow_dynamic: bool| {
         allow_dynamic || flags_of(id).contains(StaticEditorFlags::OCCLUDEE_STATIC)
     };
+    let probe_static = |id| flags_of(id).contains(StaticEditorFlags::REFLECTION_PROBE_STATIC);
     for (id, p) in world.query::<OcclusionPortal>() {
         if !p.open
             && let Some(m) = world_matrix(id)
@@ -206,6 +209,7 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
                 joint_offset: None,
                 occluder: flags_of(id).contains(StaticEditorFlags::OCCLUDER_STATIC),
                 occludee: occludee(id, r.allow_occlusion_when_dynamic),
+                reflection_probe_static: probe_static(id),
             });
         }
     }
@@ -241,6 +245,7 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
                     joint_offset: None,
                     occluder: false,
                     occludee: occludee(id, r.allow_occlusion_when_dynamic),
+                    reflection_probe_static: probe_static(id),
                 });
             }
             continue;
@@ -270,6 +275,7 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
                 joint_offset: Some(offset),
                 occluder: false,
                 occludee: false,
+                reflection_probe_static: probe_static(id),
             });
         }
     }
@@ -280,6 +286,45 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
         }
     }
     frame
+}
+
+/// Active reflection probes as the renderer sees them.
+pub fn reflection_probes(world: &World) -> Vec<ReflectionProbeView> {
+    world
+        .query::<ReflectionProbe>()
+        .map(|(id, p)| {
+            let position = world.position(id);
+            let (box_min, box_max) = p.bounds(position);
+            let bg = p.background_color.linear();
+            ReflectionProbeView {
+                id: id.to_bits(),
+                position,
+                box_min,
+                box_max,
+                box_projection: p.box_projection,
+                blend_distance: p.blend_distance,
+                importance: p.importance,
+                intensity: p.intensity,
+                near: p.near_clip_plane.max(0.01),
+                far: p.far_clip_plane.max(p.near_clip_plane + 0.1),
+                culling_mask: p.culling_mask,
+                clear: match p.clear_flags {
+                    ReflectionProbeClearFlags::Skybox => ClearMode::Sky,
+                    ReflectionProbeClearFlags::SolidColor => {
+                        ClearMode::Color(Color::new(bg.r, bg.g, bg.b, 1.0))
+                    }
+                },
+                baked: p.mode == ReflectionProbeMode::Baked,
+                refresh: match (p.mode, p.refresh_mode) {
+                    (ReflectionProbeMode::Baked, _) => ProbeRefresh::OnAwake,
+                    (_, ReflectionProbeRefreshMode::OnAwake) => ProbeRefresh::OnAwake,
+                    (_, ReflectionProbeRefreshMode::EveryFrame) => ProbeRefresh::EveryFrame,
+                    (_, ReflectionProbeRefreshMode::ViaScripting) => ProbeRefresh::ViaScripting,
+                },
+                render_requests: p.render_requests,
+            }
+        })
+        .collect()
 }
 
 /// World-space bounding sphere of a LOD group: from `size` if set, else from its first

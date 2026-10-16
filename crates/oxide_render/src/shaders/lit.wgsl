@@ -47,6 +47,7 @@ struct VertexOut {
     @location(3) uv: vec2f,
     @location(4) color: vec4f,
     @location(5) @interpolate(flat) receive_shadows: u32,
+    @location(6) @interpolate(flat) probes: vec2u,
 };
 
 fn finish_vertex(v: VertexIn, world: vec4f, n: vec3f, t: vec3f) -> VertexOut {
@@ -58,6 +59,7 @@ fn finish_vertex(v: VertexIn, world: vec4f, n: vec3f, t: vec3f) -> VertexOut {
     o.uv = v.uv * material.tiling_offset.xy + material.tiling_offset.zw;
     o.color = v.color;
     o.receive_shadows = v.extra.y;
+    o.probes = v.extra.zw;
     return o;
 }
 
@@ -126,7 +128,7 @@ fn fs_main(in: VertexOut, @builtin(front_facing) front: bool) -> FragOut {
     let ao = mix(1.0, textureSample(occlusion_map, mat_sampler, uv).r, material.pbr.w);
 
     let albedo = base.rgb;
-    var color = shade(in.world_pos, n, normalize(in.normal), albedo, metallic, rough, ao, in.receive_shadows != 0u);
+    var color = shade(in.world_pos, n, normalize(in.normal), albedo, metallic, rough, ao, in.receive_shadows != 0u, in.probes);
     color += emission;
 
     color = apply_fog(color, in.world_pos);

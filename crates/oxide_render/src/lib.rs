@@ -14,6 +14,7 @@ pub mod gpu_assets;
 pub mod occlusion;
 pub mod particles;
 pub mod post;
+pub mod reflection;
 pub mod renderer;
 pub mod terrain;
 

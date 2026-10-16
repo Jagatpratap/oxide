@@ -120,6 +120,8 @@ pub struct DrawItem {
     pub occluder: bool,
     /// May be hidden by occluders.
     pub occludee: bool,
+    /// Drawn into Baked reflection probes (Reflection Probe Static).
+    pub reflection_probe_static: bool,
 }
 
 /// One terrain chunk drawn with the terrain (splat) shader.
@@ -157,6 +159,42 @@ pub struct ParticleBatch {
     pub texture: Option<AssetId>,
     pub blend: ParticleBlend,
     pub particles: Vec<ParticleInstance>,
+}
+
+/// When a reflection probe captures its surroundings (Unity `ReflectionProbeRefreshMode`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProbeRefresh {
+    /// Once, and again when the probe moves or its settings change.
+    OnAwake,
+    /// Every frame (at most a couple of probes per frame, round robin).
+    EveryFrame,
+    /// Only when [`ReflectionProbeView::render_requests`] changes (`RenderProbe()`).
+    ViaScripting,
+}
+
+/// One reflection probe: a cubemap captured at `position`, used by renderers inside its box.
+/// <https://docs.unity3d.com/Manual/class-ReflectionProbe.html>
+#[derive(Clone, Debug)]
+pub struct ReflectionProbeView {
+    /// Stable identity (the probe's GameObject), so captures persist across frames.
+    pub id: u64,
+    pub position: Vector3,
+    /// World-space influence box.
+    pub box_min: Vector3,
+    pub box_max: Vector3,
+    pub box_projection: bool,
+    pub blend_distance: f32,
+    pub importance: i32,
+    pub intensity: f32,
+    pub near: f32,
+    pub far: f32,
+    pub culling_mask: u32,
+    pub clear: ClearMode,
+    /// Capture only Reflection Probe Static renderers (Unity "Baked" type).
+    pub baked: bool,
+    pub refresh: ProbeRefresh,
+    /// Bumped by `RenderProbe()`; a change triggers a capture.
+    pub render_requests: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -221,6 +259,7 @@ pub struct RenderFrame {
     /// centered on the origin under each matrix.
     pub occluder_boxes: Vec<Matrix4x4>,
     pub particles: Vec<ParticleBatch>,
+    pub reflection_probes: Vec<ReflectionProbeView>,
 
     /// World-space skinning matrices (bone local-to-world × bind pose).
     pub joints: Vec<Matrix4x4>,
@@ -259,4 +298,8 @@ pub struct RenderStats {
     pub occluder_triangles: u32,
     /// CPU time spent rasterizing occluders and testing bounds.
     pub occlusion_ms: f32,
+    /// Reflection probes with a cubemap slot.
+    pub reflection_probes: u32,
+    /// Cubemap captures done this frame (sky included).
+    pub probe_captures: u32,
 }

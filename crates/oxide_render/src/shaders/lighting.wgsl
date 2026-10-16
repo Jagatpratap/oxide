@@ -97,23 +97,57 @@ fn env_brdf_approx(f0: vec3f, rough: f32, nv: f32) -> vec3f {
     return f0 * ab.x + ab.y;
 }
 
+// Diffuse ambient from the sky's spherical harmonics (Unity "Environment Lighting: Skybox").
 fn ambient_diffuse(n: vec3f) -> vec3f {
-    // Gradient ambient sampled from the sky (Unity "Environment Lighting: Skybox").
-    let up = sky_color(vec3f(0.0, 1.0, 0.0), false);
-    let side = sky_color(normalize(vec3f(n.x, 0.0, n.z) + vec3f(0.0, 0.001, 0.0)), false);
-    let down = frame.ground_color.rgb * 0.35 * clamp(frame.sky_zenith.w, 0.0, 4.0);
-    var c: vec3f;
-    if (n.y >= 0.0) {
-        c = mix(side, up, n.y);
-    } else {
-        c = mix(side, down, -n.y);
-    }
-    return c * frame.ground_color.w;
+    let c = ambient_sh;
+    let e = c[0].rgb * 0.282095
+        + c[1].rgb * (0.488603 * n.y)
+        + c[2].rgb * (0.488603 * n.z)
+        + c[3].rgb * (0.488603 * n.x)
+        + c[4].rgb * (1.092548 * n.x * n.y)
+        + c[5].rgb * (1.092548 * n.y * n.z)
+        + c[6].rgb * (0.315392 * (3.0 * n.z * n.z - 1.0))
+        + c[7].rgb * (1.092548 * n.x * n.z)
+        + c[8].rgb * (0.546274 * (n.x * n.x - n.y * n.y));
+    return max(e, vec3f(0.0)) * frame.ground_color.w;
 }
 
+// Unity's perceptualRoughnessToMipmapLevel (6 LOD steps).
+fn roughness_mip(rough: f32) -> f32 {
+    return rough * (1.7 - 0.7 * rough) * 6.0;
+}
+
+// Prefiltered radiance from one probe slot, box-projected when the probe asks for it.
+fn sample_probe(slot: u32, r: vec3f, pos: vec3f, mip: f32) -> vec3f {
+    let p = probes[slot];
+    var dir = r;
+    if (p.position.w > 0.5) {
+        let rd = select(r, vec3f(1e-5), abs(r) < vec3f(1e-5));
+        let t1 = (p.box_max.xyz - pos) / rd;
+        let t2 = (p.box_min.xyz - pos) / rd;
+        let tf = max(t1, t2);
+        let t = max(min(min(tf.x, tf.y), tf.z), 0.0);
+        dir = pos + r * t - p.position.xyz;
+    }
+    return textureSampleLevel(probe_cubes, probe_sampler, dir, i32(slot), mip).rgb * p.box_min.w;
+}
+
+// Specular environment: probe A blended over probe B (or the sky) by A's weight.
+// `sel` = (slot_a | slot_b << 16, bitcast weight_a), from the instance data.
+fn env_specular(r: vec3f, pos: vec3f, rough: f32, sel: vec2u) -> vec3f {
+    let mip = roughness_mip(rough);
+    let a = sel.x & 0xffffu;
+    let b = sel.x >> 16u;
+    let w = bitcast<f32>(sel.y);
+    let cb = sample_probe(b, r, pos, mip);
+    if (w <= 0.0) {
+        return cb;
+    }
+    return mix(cb, sample_probe(a, r, pos, mip), w);
+}
 
 // Full surface shading: sun (with shadows), punctual lights, sky ambient and reflections.
-fn shade(world_pos: vec3f, n: vec3f, geo_n: vec3f, albedo: vec3f, metallic: f32, rough: f32, ao: f32, receive_shadows: bool) -> vec3f {
+fn shade(world_pos: vec3f, n: vec3f, geo_n: vec3f, albedo: vec3f, metallic: f32, rough: f32, ao: f32, receive_shadows: bool, probe_sel: vec2u) -> vec3f {
     let f0 = mix(vec3f(0.04), albedo, metallic);
     let v = normalize(frame.camera_pos.xyz - world_pos);
     let nv = max(dot(n, v), 1e-4);
@@ -147,11 +181,10 @@ fn shade(world_pos: vec3f, n: vec3f, geo_n: vec3f, albedo: vec3f, metallic: f32,
         }
         color += brdf(n, v, l, albedo, f0, rough, metallic) * L.color.rgb * atten;
     }
-    // Environment: diffuse gradient + rough sky reflection.
+    // Environment: SH diffuse ambient + prefiltered reflection probes / sky.
     let diffuse_amb = ambient_diffuse(n) * albedo * (1.0 - metallic);
     let r = reflect(-v, n);
-    let sky_r = sky_color(r, false);
-    let spec_env = mix(sky_r * frame.ground_color.w, ambient_diffuse(r), clamp(rough * 1.2, 0.0, 1.0));
+    let spec_env = env_specular(r, world_pos, rough, probe_sel);
     let horizon_occ = clamp(1.0 + dot(r, geo_n), 0.0, 1.0);
     color += (diffuse_amb + spec_env * env_brdf_approx(f0, rough, nv) * frame.fog_params.w * horizon_occ * horizon_occ) * ao;
     return color;

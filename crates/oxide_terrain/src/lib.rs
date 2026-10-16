@@ -376,6 +376,7 @@ pub fn extract(
                     joint_offset: None,
                     occluder: false,
                     occludee: false,
+                    reflection_probe_static: true,
                 });
             }
         }
@@ -426,6 +427,7 @@ pub fn extract(
                     joint_offset: None,
                     occluder: false,
                     occludee: true,
+                    reflection_probe_static: true,
                 });
             }
         }

@@ -33,6 +33,19 @@ struct PunctualLight {
 @group(0) @binding(3) var shadow_sampler: sampler_comparison;
 @group(0) @binding(4) var<storage, read> joints: array<mat4x4f>;
 
+struct ReflectionProbe {
+    position: vec4f,        // capture position, w = 1 for box projection
+    box_min: vec4f,         // w = intensity
+    box_max: vec4f,
+};
+
+// Slot 0 is the sky; others are reflection probes (see reflection.rs).
+@group(0) @binding(5) var<storage, read> probes: array<ReflectionProbe>;
+@group(0) @binding(6) var probe_cubes: texture_cube_array<f32>;
+@group(0) @binding(7) var probe_sampler: sampler;
+// Diffuse ambient from the sky: L2 spherical harmonics (irradiance / PI).
+@group(0) @binding(8) var<storage, read> ambient_sh: array<vec4f, 9>;
+
 const PI: f32 = 3.14159265;
 
 fn sun_to_light() -> vec3f {

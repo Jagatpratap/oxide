@@ -36,6 +36,7 @@ struct VertexOut {
     @location(1) normal: vec3f,
     @location(2) uv: vec2f,
     @location(3) @interpolate(flat) receive_shadows: u32,
+    @location(4) @interpolate(flat) probes: vec2u,
 };
 
 @vertex
@@ -49,6 +50,7 @@ fn vs_main(v: VertexIn) -> VertexOut {
     o.normal = nmat * v.normal;
     o.uv = v.uv;
     o.receive_shadows = v.extra.y;
+    o.probes = v.extra.zw;
     return o;
 }
 
@@ -77,7 +79,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
         metal += t.w * weights[i];
     }
     let n = normalize(in.normal);
-    var color = shade(in.world_pos, n, n, albedo, metal, clamp(1.0 - smooth_, 0.045, 1.0), 1.0, in.receive_shadows != 0u);
+    var color = shade(in.world_pos, n, n, albedo, metal, clamp(1.0 - smooth_, 0.045, 1.0), 1.0, in.receive_shadows != 0u, in.probes);
     color = apply_fog(color, in.world_pos);
     return vec4f(color, 1.0);
 }

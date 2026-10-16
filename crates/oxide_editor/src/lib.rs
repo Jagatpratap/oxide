@@ -102,6 +102,7 @@ pub enum Create {
     DirectionalLight,
     PointLight,
     SpotLight,
+    ReflectionProbe,
     Camera,
 }
 
@@ -1043,6 +1044,11 @@ fn create(w: &mut World, kind: Create, active: Option<GameObjectId>) -> GameObje
                     ..Default::default()
                 },
             );
+            id
+        }
+        Create::ReflectionProbe => {
+            let id = w.create("Reflection Probe");
+            w.add_component(id, oxide_scene::ReflectionProbe::default());
             id
         }
         Create::Camera => {

@@ -457,3 +457,132 @@ impl Component for OcclusionPortal {
         false
     }
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
+pub enum ReflectionProbeMode {
+    /// Captures only Reflection Probe Static objects, once (and again when edited).
+    Baked,
+    /// Captures everything on the culling mask, as `refresh_mode` says.
+    #[default]
+    Realtime,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
+pub enum ReflectionProbeRefreshMode {
+    /// When the probe first appears, and again when it moves or its settings change.
+    #[default]
+    OnAwake,
+    EveryFrame,
+    /// Only when a script calls [`ReflectionProbe::render_probe`].
+    ViaScripting,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
+pub enum ReflectionProbeClearFlags {
+    #[default]
+    Skybox,
+    SolidColor,
+}
+
+/// Unity `ReflectionProbe`: captures its surroundings into a cubemap that renderers inside
+/// its box use for reflections. <https://docs.unity3d.com/Manual/class-ReflectionProbe.html>
+#[derive(Clone, Debug, Reflect)]
+pub struct ReflectionProbe {
+    pub mode: ReflectionProbeMode,
+    pub refresh_mode: ReflectionProbeRefreshMode,
+    /// Higher importance wins where boxes overlap; equal importance prefers the smaller box.
+    pub importance: i32,
+    #[reflect(range(0, 4))]
+    pub intensity: f32,
+    /// Project reflections onto the box (good for rooms and corridors).
+    pub box_projection: bool,
+    /// Distance inside the box over which the probe fades into the next one.
+    pub blend_distance: f32,
+    /// World-aligned box size (not affected by rotation or scale).
+    pub size: Vector3,
+    /// Box center relative to the object's position.
+    pub center: Vector3,
+    pub near_clip_plane: f32,
+    pub far_clip_plane: f32,
+    pub clear_flags: ReflectionProbeClearFlags,
+    pub background_color: Color,
+    pub culling_mask: u32,
+    /// Bumped by [`ReflectionProbe::render_probe`].
+    #[reflect(skip)]
+    pub render_requests: u32,
+}
+
+impl Default for ReflectionProbe {
+    fn default() -> Self {
+        Self {
+            mode: ReflectionProbeMode::Realtime,
+            refresh_mode: ReflectionProbeRefreshMode::OnAwake,
+            importance: 1,
+            intensity: 1.0,
+            box_projection: false,
+            blend_distance: 1.0,
+            size: Vector3::splat(10.0),
+            center: Vector3::ZERO,
+            near_clip_plane: 0.3,
+            far_clip_plane: 1000.0,
+            clear_flags: ReflectionProbeClearFlags::Skybox,
+            background_color: Color::rgb(49.0 / 255.0, 77.0 / 255.0, 121.0 / 255.0),
+            culling_mask: u32::MAX,
+            render_requests: 0,
+        }
+    }
+}
+
+impl ReflectionProbe {
+    /// Unity `ReflectionProbe.RenderProbe()`: capture again on the next frame (any refresh
+    /// mode; the only trigger for `ViaScripting`).
+    pub fn render_probe(&mut self) {
+        self.render_requests = self.render_requests.wrapping_add(1);
+    }
+
+    /// World-space box `(min, max)` for a probe at `position`.
+    pub fn bounds(&self, position: Vector3) -> (Vector3, Vector3) {
+        let c = position + self.center;
+        let h = self.size.abs() * 0.5;
+        (c - h, c + h)
+    }
+}
+
+impl Component for ReflectionProbe {
+    fn on_draw_gizmos(
+        &self,
+        world: &crate::World,
+        id: GameObjectId,
+        gizmos: &mut crate::component::Gizmos,
+    ) {
+        gizmos.color = Color::rgb(1.0, 0.85, 0.35);
+        let (min, max) = self.bounds(world.position(id));
+        let corner = |i: usize| {
+            Vector3::new(
+                if i & 1 == 0 { min.x } else { max.x },
+                if i & 2 == 0 { min.y } else { max.y },
+                if i & 4 == 0 { min.z } else { max.z },
+            )
+        };
+        for (a, b) in [
+            (0, 1),
+            (2, 3),
+            (4, 5),
+            (6, 7),
+            (0, 2),
+            (1, 3),
+            (4, 6),
+            (5, 7),
+            (0, 4),
+            (1, 5),
+            (2, 6),
+            (3, 7),
+        ] {
+            gizmos.draw_line(corner(a), corner(b));
+        }
+    }
+
+    fn allow_multiple(&self) -> bool {
+        false
+    }
+}

@@ -68,6 +68,30 @@ impl Gpu {
         })
     }
 
+    /// A device without a window (tests, offline rendering). `None` when no GPU is present.
+    pub fn headless() -> Option<Self> {
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            ..Default::default()
+        }))
+        .ok()?;
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("oxide headless device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
+            ..Default::default()
+        }))
+        .ok()?;
+        Some(Self {
+            instance,
+            adapter,
+            device,
+            queue,
+        })
+    }
+
     pub fn adapter_info(&self) -> wgpu::AdapterInfo {
         self.adapter.get_info()
     }
