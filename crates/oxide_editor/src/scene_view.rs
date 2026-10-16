@@ -1325,6 +1325,11 @@ pub fn render(st: &mut EditorState, engine: &mut Engine) {
     if st.scene_ui.grid {
         add_grid(&mut rf, &st.scene_cam);
     }
+    if st.scene_ui.gizmos {
+        for (a, b, c) in engine.world.collect_gizmos().lines {
+            rf.line(a, b, c);
+        }
+    }
     let assets = engine.world.resource::<AssetServer>();
     engine
         .renderer

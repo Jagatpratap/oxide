@@ -432,7 +432,7 @@ needs, and where the engine is:
 | Game scripts in the editor | ✔ | ✔ | ☑ project Scripts crate, hot reload in Edit and Play mode |
 | HUD, menus | ✔ | ✔ | ◐ Canvas UI + immediate GUI; UI Toolkit-style layout ☐ |
 | Audio (engine, 3D, mixer) | ✔ | ✔ | ◐ 3D sources, car audio; mixer ☐ |
-| AI (opponents, bots) | ✔ | ✔ | ☐ NavMesh, waypoint tools |
+| AI (opponents, bots) | ✔ | ✔ | ◐ WaypointCircuit + CarAIControl racing AI; NavMesh ☐ |
 | Multiplayer | ◐ | ✔ | ☐ netcode (server-authoritative, prediction, interpolation), dedicated server |
 | Ship the game | ✔ | ✔ | ◐ desktop player builds (macOS/Windows/Linux); Android/iOS ☐ |
 

@@ -63,6 +63,9 @@ pub trait Component: Reflect + ComponentClone {
         false
     }
 
+    /// Unity `OnDrawGizmos`: lines the editor draws in the Scene view (not in the game).
+    fn on_draw_gizmos(&self, world: &crate::World, id: GameObjectId, gizmos: &mut Gizmos) {}
+
     /// Whether more than one of this component may live on one GameObject
     /// (Unity `[DisallowMultipleComponent]` when false).
     fn allow_multiple(&self) -> bool {
@@ -149,5 +152,36 @@ impl ComponentRegistry {
 
     pub fn iter(&self) -> impl Iterator<Item = &ComponentRegistration> {
         self.types.values()
+    }
+}
+
+/// Lines collected from [`Component::on_draw_gizmos`] (Unity `Gizmos`).
+#[derive(Default)]
+pub struct Gizmos {
+    pub lines: Vec<(oxide_math::Vector3, oxide_math::Vector3, oxide_math::Color)>,
+    /// Color for the next lines (Unity `Gizmos.color`).
+    pub color: oxide_math::Color,
+}
+
+impl Gizmos {
+    pub fn draw_line(&mut self, a: oxide_math::Vector3, b: oxide_math::Vector3) {
+        self.lines.push((a, b, self.color));
+    }
+
+    pub fn draw_wire_sphere(&mut self, c: oxide_math::Vector3, r: f32) {
+        use oxide_math::Vector3;
+        for (u, v) in [
+            (Vector3::X, Vector3::Y),
+            (Vector3::Y, Vector3::Z),
+            (Vector3::Z, Vector3::X),
+        ] {
+            let mut prev = c + u * r;
+            for i in 1..=24 {
+                let a = i as f32 / 24.0 * std::f32::consts::TAU;
+                let p = c + (u * a.cos() + v * a.sin()) * r;
+                self.draw_line(prev, p);
+                prev = p;
+            }
+        }
     }
 }

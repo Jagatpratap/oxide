@@ -21,7 +21,7 @@ pub mod world;
 
 pub use application::Application;
 pub use builtin::*;
-pub use component::{Collision, Component, ComponentRegistry, ContactPoint};
+pub use component::{Collision, Component, ComponentRegistry, ContactPoint, Gizmos};
 pub use ctx::{Ctx, TransformRef};
 pub use id::{ComponentId, GameObjectId};
 pub use prefab::{ObjectProperty, PrefabOverride, is_prefab_path};

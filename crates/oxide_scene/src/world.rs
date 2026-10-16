@@ -845,6 +845,30 @@ impl World {
         }
     }
 
+    /// Collects every active component's [`Component::on_draw_gizmos`] lines.
+    pub fn collect_gizmos(&self) -> crate::Gizmos {
+        let mut g = crate::Gizmos {
+            color: oxide_math::Color::WHITE,
+            ..Default::default()
+        };
+        for (id, o) in self.objects() {
+            if !o.active_in_hierarchy {
+                continue;
+            }
+            for e in o
+                .components
+                .iter()
+                .filter(|e| e.enabled && !e.destroy_pending)
+            {
+                if let Some(c) = e.comp.as_deref() {
+                    g.color = oxide_math::Color::WHITE;
+                    c.on_draw_gizmos(self, id, &mut g);
+                }
+            }
+        }
+        g
+    }
+
     /// Takes out every component whose type `is_script` (before a script reload), keeping
     /// what is needed to put it back: position, fields and lifecycle state. Scripts get
     /// `OnDisable`, not `OnDestroy`, like Unity's domain reload.

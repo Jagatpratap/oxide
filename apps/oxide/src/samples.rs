@@ -255,6 +255,47 @@ pub fn vehicle(world: &mut World) {
         set_material(world, c, cone.clone());
         world.add_component(c, Rigidbody::with_mass(4.0));
     }
+    // A loop with two AI opponents (WaypointCircuit + CarAIControl).
+    let circuit = world.create("Circuit");
+    for (i, (x, z)) in [
+        (-40.0, -40.0),
+        (40.0, -60.0),
+        (90.0, -20.0),
+        (110.0, 60.0),
+        (60.0, 140.0),
+        (-20.0, 160.0),
+        (-90.0, 110.0),
+        (-110.0, 20.0),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let wp = world.create(&format!("Waypoint {i}"));
+        world.set_parent(wp, Some(circuit), false).unwrap();
+        world.set_position(wp, Vector3::new(x, 0.5, z));
+    }
+    world.add_component(circuit, WaypointCircuit::default());
+    for (i, paint) in [Color::rgb(0.1, 0.3, 0.9), Color::rgb(0.1, 0.7, 0.2)]
+        .into_iter()
+        .enumerate()
+    {
+        let ai = spawn_car(
+            world,
+            Vector3::new(-45.0 + i as f32 * 6.0, 0.5, -35.0),
+            paint,
+        );
+        world.get_mut(ai).unwrap().name = format!("AI Car {i}");
+        world.set_euler_angles(ai, Vector3::new(0.0, 100.0, 0.0));
+        world.add_component(
+            ai,
+            CarAIControl {
+                circuit: Some(circuit),
+                top_speed_kmh: 90.0 + i as f32 * 15.0,
+                ..Default::default()
+            },
+        );
+    }
+
     // Barrier walls around a 200 m square.
     let wall = mat(world, "Barrier", Color::rgb(0.9, 0.9, 0.9), 0.0, 0.3);
     for (p, s) in [

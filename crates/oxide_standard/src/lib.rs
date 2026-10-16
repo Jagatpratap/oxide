@@ -7,11 +7,13 @@
 //! - [`FirstPersonController`], [`ThirdPersonController`]: CharacterController players.
 //! - [`Rotator`], [`Lifetime`]: small utilities.
 
+pub mod ai;
 pub mod cameras;
 pub mod car;
 pub mod car_audio;
 pub mod characters;
 
+pub use ai::{CarAIControl, WaypointCircuit};
 pub use cameras::{FlyCamera, FollowCamera, OrbitCamera};
 pub use car::{CarController, DriveType};
 pub use car_audio::CarAudio;
@@ -60,6 +62,8 @@ impl Component for Lifetime {
 pub fn register(reg: &mut ComponentRegistry) {
     reg.register::<CarController>("Vehicles/Car Controller");
     reg.register::<CarAudio>("Vehicles/Car Audio");
+    reg.register::<CarAIControl>("Vehicles/Car AI Control");
+    reg.register::<WaypointCircuit>("Vehicles/Waypoint Circuit");
     reg.register::<FollowCamera>("Camera/Follow Camera");
     reg.register::<OrbitCamera>("Camera/Orbit Camera");
     reg.register::<FlyCamera>("Camera/Fly Camera");
