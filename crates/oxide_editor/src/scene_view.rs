@@ -40,6 +40,8 @@ enum Handle3 {
     Plane(usize),
     Ring(usize),
     Uniform,
+    /// Rect tool: an edge or corner (`(su, sv)` signs, one may be 0), or `(0, 0)` = inside.
+    Rect(i8, i8),
 }
 
 struct Drag {
@@ -59,11 +61,48 @@ struct Drag {
     objects: Vec<(GameObjectId, Vector3, Quaternion, Vector3)>,
     /// Current scale factor (drawn on the scale handle).
     factor: f32,
+    /// Rect tool: the rect at the start of the drag.
+    rect: Option<RectGeom>,
+}
+
+/// Scene view effect toggles (Unity's Effects dropdown).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SceneEffects {
+    pub enabled: bool,
+    pub skybox: bool,
+    pub fog: bool,
+    pub particles: bool,
+    pub post_processing: bool,
+}
+
+impl Default for SceneEffects {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            skybox: true,
+            fog: true,
+            particles: true,
+            post_processing: true,
+        }
+    }
+}
+
+impl SceneEffects {
+    fn on(&self, flag: bool) -> bool {
+        self.enabled && flag
+    }
 }
 
 pub struct SceneViewState {
     /// Draw mode (Shaded, Wireframe, Albedo, ...): Scene view only.
     pub draw_mode: oxide_render::DebugView,
+    /// Scene lighting; off lights the view with a light from the camera (Unity's bulb toggle).
+    pub lighting: bool,
+    pub effects: SceneEffects,
+    /// 2D mode: orthographic, looking down +Z, no rotation.
+    pub mode_2d: bool,
+    /// The 3D camera to restore when 2D mode is turned off.
+    saved_3d: Option<crate::SceneCamera>,
     pub grid: bool,
     pub gizmos: bool,
     pub frame_request: bool,
@@ -77,6 +116,10 @@ impl Default for SceneViewState {
     fn default() -> Self {
         Self {
             draw_mode: oxide_render::DebugView::Shaded,
+            lighting: true,
+            effects: SceneEffects::default(),
+            mode_2d: false,
+            saved_3d: None,
             grid: true,
             gizmos: true,
             frame_request: false,
@@ -84,6 +127,27 @@ impl Default for SceneViewState {
             nav: Nav::None,
             drag: None,
         }
+    }
+}
+
+/// Turns 2D mode on (front orthographic view) or off (back to the previous 3D view).
+pub fn set_2d(st: &mut EditorState, on: bool) {
+    if st.scene_ui.mode_2d == on {
+        return;
+    }
+    st.scene_ui.mode_2d = on;
+    let cam = &mut st.scene_cam;
+    if on {
+        st.scene_ui.saved_3d = Some(cam.clone());
+        cam.yaw = 0.0;
+        cam.pitch = 0.0;
+        cam.orthographic = true;
+    } else if let Some(prev) = st.scene_ui.saved_3d.take() {
+        cam.yaw = prev.yaw;
+        cam.pitch = prev.pitch;
+        cam.orthographic = prev.orthographic;
+    } else {
+        cam.orthographic = false;
     }
 }
 
@@ -119,8 +183,10 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
 
     let proj = Projector::new(&st.scene_cam.camera_view(), rect);
     let world = &engine.world;
+    st.visibility.prune(world);
+    let hidden = st.visibility.hidden_bits(world);
     let icons = if st.scene_ui.gizmos {
-        draw_icons(world, &proj, &painter)
+        draw_icons(world, &proj, &painter, &hidden)
     } else {
         Vec::new()
     };
@@ -134,12 +200,15 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
         && let Some(pos) = resp.interact_pointer_pos()
     {
         let world = &engine.world;
+        let vis = &st.visibility;
         let icon_hit = icons
             .iter()
-            .filter(|(_, p)| p.distance(pos) < 12.0)
+            .filter(|(id, p)| p.distance(pos) < 12.0 && vis.can_pick(world, *id))
             .min_by(|a, b| a.1.distance(pos).total_cmp(&b.1.distance(pos)))
             .map(|(id, _)| *id);
-        let hit = icon_hit.or_else(|| pick(world, &proj.ray(pos)).map(|(id, _)| id));
+        let hit = icon_hit.or_else(|| {
+            pick_where(world, &proj.ray(pos), |id| vis.can_pick(world, id)).map(|(id, _)| id)
+        });
         let additive = ui.input(|i| i.modifiers.shift || i.modifiers.command);
         match (hit, additive) {
             (Some(id), true) => st.toggle_select(id),
@@ -161,7 +230,9 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
         drop_model(st, engine, &payload.0, &proj.ray(pos));
     }
 
-    orientation_gizmo(st, ui, rect);
+    if !st.scene_ui.mode_2d {
+        orientation_gizmo(st, ui, rect);
+    }
 }
 
 fn overlay_bar(st: &mut EditorState, ui: &mut egui::Ui) {
@@ -175,6 +246,40 @@ fn overlay_bar(st: &mut EditorState, ui: &mut egui::Ui) {
             })
             .response
             .on_hover_text("Draw Mode");
+        let mut two_d = st.scene_ui.mode_2d;
+        if ui
+            .toggle_value(&mut two_d, "2D")
+            .on_hover_text("2D mode")
+            .changed()
+        {
+            set_2d(st, two_d);
+        }
+        ui.toggle_value(&mut st.scene_ui.lighting, "Light")
+            .on_hover_text("Scene lighting (off: lit from the camera)");
+        let fx = &mut st.scene_ui.effects;
+        let fx_label = if fx.enabled {
+            "Effects"
+        } else {
+            "Effects (off)"
+        };
+        ui.menu_button(fx_label, |ui| {
+            ui.checkbox(&mut fx.enabled, "Enabled");
+            ui.separator();
+            ui.checkbox(&mut fx.skybox, "Skybox");
+            ui.checkbox(&mut fx.fog, "Fog");
+            ui.checkbox(&mut fx.particles, "Particle Systems");
+            ui.checkbox(&mut fx.post_processing, "Post Processing");
+        })
+        .response
+        .on_hover_text("Effects");
+        let mut vis_on = !st.visibility.show_all;
+        if ui
+            .toggle_value(&mut vis_on, "Vis")
+            .on_hover_text("Scene visibility: off shows objects hidden in the Hierarchy")
+            .changed()
+        {
+            st.visibility.show_all = !vis_on;
+        }
         ui.toggle_value(&mut st.scene_ui.grid, "#")
             .on_hover_text("Grid");
         ui.toggle_value(&mut st.scene_ui.gizmos, "Gizmos");
@@ -184,7 +289,7 @@ fn overlay_bar(st: &mut EditorState, ui: &mut egui::Ui) {
             "Persp"
         };
         if ui
-            .button(label)
+            .add_enabled(!st.scene_ui.mode_2d, egui::Button::new(label))
             .on_hover_text("Perspective / Isometric")
             .clicked()
         {
@@ -228,12 +333,14 @@ fn navigate(st: &mut EditorState, ui: &egui::Ui, resp: &egui::Response) {
         )
     });
     let hovered = resp.hovered();
+    let mode_2d = st.scene_ui.mode_2d;
     let nav = &mut st.scene_ui.nav;
     if *nav == Nav::None && hovered {
         if press[1] {
-            *nav = Nav::Fly;
+            // 2D mode has no rotation: right drag pans.
+            *nav = if mode_2d { Nav::Pan } else { Nav::Fly };
         } else if press[0] && alt {
-            *nav = Nav::Orbit;
+            *nav = if mode_2d { Nav::Pan } else { Nav::Orbit };
         } else if press[2] || (press[0] && st.tool == Tool::Hand) {
             *nav = Nav::Pan;
         }
@@ -241,7 +348,7 @@ fn navigate(st: &mut EditorState, ui: &egui::Ui, resp: &egui::Response) {
     let still = match *nav {
         Nav::Fly => down[1],
         Nav::Orbit => down[0],
-        Nav::Pan => down[0] || down[2],
+        Nav::Pan => down[0] || down[1] || down[2],
         Nav::None => false,
     };
     if !still {
@@ -380,10 +487,19 @@ fn ray_terrain(world: &World, id: GameObjectId, ray: &Ray) -> Option<f32> {
 /// Closest object under a world ray (meshes by triangle, skinned meshes by bounds, terrain
 /// by heightmap). Returns the object and hit distance.
 pub fn pick(world: &World, ray: &Ray) -> Option<(GameObjectId, f32)> {
+    pick_where(world, ray, |_| true)
+}
+
+/// [`pick`] limited to objects `keep` accepts (Scene view pickability).
+pub fn pick_where(
+    world: &World,
+    ray: &Ray,
+    keep: impl Fn(GameObjectId) -> bool,
+) -> Option<(GameObjectId, f32)> {
     let assets = world.resource::<AssetServer>();
     let mut best: Option<(GameObjectId, f32)> = None;
     for (id, o) in world.objects() {
-        if !o.active_in_hierarchy() {
+        if !o.active_in_hierarchy() || !keep(id) {
             continue;
         }
         if let Some(t) = ray_terrain(world, id, ray)
@@ -593,10 +709,18 @@ fn basis(n: Vector3) -> (Vector3, Vector3) {
 }
 
 /// Light and camera icons. Returns their screen positions for click picking.
-fn draw_icons(world: &World, proj: &Projector, p: &egui::Painter) -> Vec<(GameObjectId, Pos2)> {
+fn draw_icons(
+    world: &World,
+    proj: &Projector,
+    p: &egui::Painter,
+    hidden: &std::collections::HashSet<u64>,
+) -> Vec<(GameObjectId, Pos2)> {
     let mut out = Vec::new();
+    let shown = |id: GameObjectId| {
+        !hidden.contains(&id.to_bits()) && world.get(id).is_some_and(|o| o.active_in_hierarchy())
+    };
     for (id, light) in world.query::<Light>() {
-        if !world.get(id).is_some_and(|o| o.active_in_hierarchy()) {
+        if !shown(id) {
             continue;
         }
         let Some(s) = proj.project(world.position(id)) else {
@@ -618,7 +742,7 @@ fn draw_icons(world: &World, proj: &Projector, p: &egui::Painter) -> Vec<(GameOb
         out.push((id, s));
     }
     for (id, _) in world.query::<Camera>() {
-        if !world.get(id).is_some_and(|o| o.active_in_hierarchy()) {
+        if !shown(id) {
             continue;
         }
         let Some(s) = proj.project(world.position(id)) else {
@@ -847,6 +971,8 @@ struct HandleGeom {
     center: Vector3,
     axes: [Vector3; 3],
     size: f32,
+    /// Rotation ring radius relative to `size` (larger for the Transform tool).
+    ring: f32,
 }
 
 impl HandleGeom {
@@ -889,7 +1015,7 @@ impl HandleGeom {
             .map(|n| {
                 let a = n as f32 / 64.0 * std::f32::consts::TAU;
                 let d = u * a.cos() + v * a.sin();
-                let wp = self.center + d * self.size;
+                let wp = self.center + d * self.size * self.ring;
                 let front = d.dot(to_cam) >= -0.05;
                 (wp, if front { proj.project(wp) } else { None })
             })
@@ -931,7 +1057,14 @@ impl HandleGeom {
                 }
                 best.map(|(i, _)| Handle3::Ring(i))
             }
-            Tool::Hand => None,
+            Tool::Transform => {
+                if c.distance(m) < 9.0 {
+                    return Some(Handle3::Uniform);
+                }
+                self.hit(Tool::Move, proj, m)
+                    .or_else(|| self.hit(Tool::Rotate, proj, m))
+            }
+            Tool::Hand | Tool::Rect => None,
         }
     }
 
@@ -971,8 +1104,15 @@ fn handles(
     if tool == Tool::Hand {
         return false;
     }
+    if tool == Tool::Rect {
+        return rect_tool(st, engine, ui, resp, proj, painter, active);
+    }
     let w = &engine.world;
-    let center = w.position(active);
+    let center = if st.center_handles {
+        bounds_of(w, &st.top_level_selection(w)).map_or(w.position(active), |(c, _)| c)
+    } else {
+        w.position(active)
+    };
     let rot = w.rotation(active);
     let local = st.local_handles || tool == Tool::Scale;
     let axes = if local {
@@ -981,7 +1121,14 @@ fn handles(
         [Vector3::X, Vector3::Y, Vector3::Z]
     };
     let size = proj.world_per_pixels(center, HANDLE_PX);
-    let geom = HandleGeom { center, axes, size };
+    let ring = if tool == Tool::Transform { 1.35 } else { 1.0 };
+    let geom = HandleGeom {
+        center,
+        axes,
+        size,
+        ring,
+    };
+    let around_center = st.center_handles;
     let (mouse, press_origin, primary_down, snap) = ui.input(|i| {
         (
             i.pointer.hover_pos(),
@@ -1000,6 +1147,13 @@ fn handles(
         && let Some(h) = geom.hit(tool, proj, origin)
     {
         let now = oxide_core::time::realtime_since_startup();
+        // The Transform tool acts as whichever tool owns the grabbed handle.
+        let tool = match (tool, h) {
+            (Tool::Transform, Handle3::Axis(_) | Handle3::Plane(_)) => Tool::Move,
+            (Tool::Transform, Handle3::Ring(_)) => Tool::Rotate,
+            (Tool::Transform, _) => Tool::Scale,
+            (t, _) => t,
+        };
         let label = match tool {
             Tool::Move => "Move",
             Tool::Rotate => "Rotate",
@@ -1029,6 +1183,7 @@ fn handles(
             radius_px: 60.0,
             objects,
             factor: 1.0,
+            rect: None,
         };
         match h {
             Handle3::Axis(i) => d.start_s = closest_on_axis(&ray, center, axes[i]).unwrap_or(0.0),
@@ -1051,7 +1206,7 @@ fn handles(
                     }
                 }
             }
-            Handle3::Uniform => {}
+            Handle3::Uniform | Handle3::Rect(..) => {}
         }
         st.scene_ui.drag = Some(d);
     }
@@ -1098,8 +1253,11 @@ fn handles(
                         deg = (deg / step).round() * step;
                     }
                     let q = Quaternion::angle_axis(deg, d.axes[i]);
-                    for (id, _, r0, _) in &d.objects {
+                    for (id, p0, r0, _) in &d.objects {
                         w.set_rotation(*id, (q * *r0).normalize());
+                        if around_center {
+                            w.set_position(*id, d.center + q * (*p0 - d.center));
+                        }
                     }
                 }
                 (Tool::Scale, h) => {
@@ -1121,7 +1279,23 @@ fn handles(
                         f
                     };
                     d.factor = f;
-                    for (id, _, _, s0) in &d.objects {
+                    let fv = match h {
+                        Handle3::Axis(0) => Vector3::new(f, 1.0, 1.0),
+                        Handle3::Axis(1) => Vector3::new(1.0, f, 1.0),
+                        Handle3::Axis(_) => Vector3::new(1.0, 1.0, f),
+                        _ => Vector3::splat(f),
+                    };
+                    for (id, p0, _, s0) in &d.objects {
+                        if around_center {
+                            // Spread positions out from the center along the handle axes.
+                            let a = &d.axes;
+                            let o = *p0 - d.center;
+                            let p = d.center
+                                + a[0] * (o.dot(a[0]) * fv.x)
+                                + a[1] * (o.dot(a[1]) * fv.y)
+                                + a[2] * (o.dot(a[2]) * fv.z);
+                            w.set_position(*id, p);
+                        }
                         if let Some(t) = w.transform_mut(*id) {
                             t.local_scale = match h {
                                 Handle3::Axis(0) => Vector3::new(s0.x * f, s0.y, s0.z),
@@ -1236,8 +1410,330 @@ fn draw_handles(
             };
             p.rect_filled(egui::Rect::from_center_size(c, vec2(10.0, 10.0)), 0.0, col);
         }
-        Tool::Hand => {}
+        Tool::Transform => {
+            draw_handles(g, Tool::Rotate, hovered, factor, proj, p);
+            draw_handles(g, Tool::Move, hovered, factor, proj, p);
+            let col = if hovered == Some(Handle3::Uniform) {
+                HOVER
+            } else {
+                Color32::from_gray(200)
+            };
+            p.rect_stroke(
+                egui::Rect::from_center_size(c, vec2(12.0, 12.0)),
+                0.0,
+                Stroke::new(2.0, col),
+                egui::StrokeKind::Middle,
+            );
+        }
+        Tool::Hand | Tool::Rect => {}
     }
+}
+
+// ---- rect tool ----------------------------------------------------------------------------
+
+/// The active object's bounds as a rectangle on its local plane that faces the camera most.
+#[derive(Clone, Copy, Debug)]
+struct RectGeom {
+    /// World center of the rect.
+    center: Vector3,
+    /// Unit in-plane directions and plane normal (the object's local axes in world space).
+    u: Vector3,
+    v: Vector3,
+    n: Vector3,
+    /// Half sizes along `u` and `v` (world units).
+    hu: f32,
+    hv: f32,
+    /// Local axis indices of `u` and `v` (which `local_scale` components resize them).
+    iu: usize,
+    iv: usize,
+}
+
+impl RectGeom {
+    fn of(world: &World, id: GameObjectId, view_dir: Vector3) -> Option<Self> {
+        let m = world.local_to_world(id);
+        let (min, max) = mesh_of(world, id)
+            .and_then(|(h, _)| {
+                let b = world.resource::<AssetServer>().meshes.get(&h)?.bounds;
+                Some((b.min(), b.max()))
+            })
+            .unwrap_or((Vector3::splat(-0.5), Vector3::splat(0.5)));
+        let cols = [
+            m.x_axis.truncate(),
+            m.y_axis.truncate(),
+            m.z_axis.truncate(),
+        ];
+        let len = cols.map(|c| c.length());
+        if len.iter().any(|&l| l < 1e-6) {
+            return None;
+        }
+        let dirs = [cols[0] / len[0], cols[1] / len[1], cols[2] / len[2]];
+        let ni = (0..3)
+            .max_by(|&a, &b| {
+                dirs[a]
+                    .dot(view_dir)
+                    .abs()
+                    .total_cmp(&dirs[b].dot(view_dir).abs())
+            })
+            .unwrap_or(2);
+        let (iu, iv) = ((ni + 1) % 3, (ni + 2) % 3);
+        let ext = max - min;
+        Some(Self {
+            center: m.transform_point3((min + max) * 0.5),
+            u: dirs[iu],
+            v: dirs[iv],
+            n: dirs[ni],
+            hu: (ext[iu] * 0.5 * len[iu]).max(1e-4),
+            hv: (ext[iv] * 0.5 * len[iv]).max(1e-4),
+            iu,
+            iv,
+        })
+    }
+
+    /// Dragging edge/corner `(su, sv)` by `(du, dv)` along `u`/`v`: the object's new
+    /// position and local scale (from `p0`, `s0` at the start) and the resulting rect.
+    fn resize(
+        &self,
+        p0: Vector3,
+        s0: Vector3,
+        (su, sv): (i8, i8),
+        (du, dv): (f32, f32),
+        alt: bool,
+        shift: bool,
+    ) -> RectResize {
+        let grow = |s: i8, dd: f32, h: f32| {
+            if s == 0 {
+                1.0
+            } else if alt {
+                (h + s as f32 * dd) / h
+            } else {
+                (2.0 * h + s as f32 * dd) / (2.0 * h)
+            }
+        };
+        let mut fu = grow(su, du, self.hu);
+        let mut fv = grow(sv, dv, self.hv);
+        if shift && su != 0 && sv != 0 {
+            let f = if fu.abs() > fv.abs() { fu } else { fv };
+            (fu, fv) = (f, f);
+        }
+        let clamp = |f: f32| {
+            if f.abs() < 1e-3 {
+                1e-3f32.copysign(f)
+            } else {
+                f
+            }
+        };
+        let (fu, fv) = (clamp(fu), clamp(fv));
+        // The far side stays fixed unless Alt resizes around the center.
+        let shift_by = |s: i8, f: f32, h: f32| if alt { 0.0 } else { s as f32 * (h * f - h) };
+        let (cu, cv) = (shift_by(su, fu, self.hu), shift_by(sv, fv, self.hv));
+        let o = self.center - p0;
+        let center = self.center + self.u * cu + self.v * cv;
+        let position = center
+            - (self.u * (o.dot(self.u) * fu)
+                + self.v * (o.dot(self.v) * fv)
+                + self.n * o.dot(self.n));
+        let mut scale = s0;
+        scale[self.iu] = s0[self.iu] * fu;
+        scale[self.iv] = s0[self.iv] * fv;
+        RectResize {
+            position,
+            scale,
+            rect: Self {
+                center,
+                hu: self.hu * fu.abs(),
+                hv: self.hv * fv.abs(),
+                ..*self
+            },
+        }
+    }
+
+    fn point(&self, su: f32, sv: f32) -> Vector3 {
+        self.center + self.u * (su * self.hu) + self.v * (sv * self.hv)
+    }
+
+    fn hit(&self, proj: &Projector, m: Pos2) -> Option<Handle3> {
+        let sp = |su: f32, sv: f32| proj.project(self.point(su, sv));
+        let corners = [(1, 1), (-1, 1), (-1, -1), (1, -1)];
+        for (su, sv) in corners {
+            if sp(su as f32, sv as f32).is_some_and(|p| p.distance(m) < 7.0) {
+                return Some(Handle3::Rect(su, sv));
+            }
+        }
+        let q = corners.map(|(su, sv)| sp(su as f32, sv as f32));
+        let [Some(a), Some(b), Some(c), Some(d)] = q else {
+            return None;
+        };
+        for (e, (p0, p1)) in [(b, c), (c, d), (d, a), (a, b)].into_iter().enumerate() {
+            if dist_to_segment(m, p0, p1) < 5.0 {
+                // Edges in order: -u, -v, +u, +v.
+                return Some(match e {
+                    0 => Handle3::Rect(-1, 0),
+                    1 => Handle3::Rect(0, -1),
+                    2 => Handle3::Rect(1, 0),
+                    _ => Handle3::Rect(0, 1),
+                });
+            }
+        }
+        point_in_quad(m, &[a, b, c, d]).then_some(Handle3::Rect(0, 0))
+    }
+}
+
+struct RectResize {
+    position: Vector3,
+    scale: Vector3,
+    rect: RectGeom,
+}
+
+/// Unity's Rect tool for 3D objects: drag an edge or corner to resize the active object
+/// (the opposite side stays put; Alt resizes around the center, Shift keeps the aspect
+/// ratio), or drag inside to move the selection on the rect's plane.
+fn rect_tool(
+    st: &mut EditorState,
+    engine: &mut Engine,
+    ui: &egui::Ui,
+    resp: &egui::Response,
+    proj: &Projector,
+    painter: &egui::Painter,
+    active: GameObjectId,
+) -> bool {
+    let w = &engine.world;
+    let view_dir = st.scene_cam.forward();
+    let Some(geom) = st
+        .scene_ui
+        .drag
+        .as_ref()
+        .and_then(|d| d.rect)
+        .or_else(|| RectGeom::of(w, active, view_dir))
+    else {
+        return false;
+    };
+    let (mouse, press_origin, primary_down, mods) = ui.input(|i| {
+        (
+            i.pointer.hover_pos(),
+            i.pointer.press_origin(),
+            i.pointer.primary_down(),
+            i.modifiers,
+        )
+    });
+    let busy = st.scene_ui.nav != Nav::None;
+
+    if st.scene_ui.drag.is_none()
+        && !busy
+        && resp.drag_started_by(egui::PointerButton::Primary)
+        && let Some(origin) = press_origin
+        && let Some(h) = geom.hit(proj, origin)
+    {
+        let now = oxide_core::time::realtime_since_startup();
+        let label = if h == Handle3::Rect(0, 0) {
+            "Move"
+        } else {
+            "Rect Resize"
+        };
+        st.record(w, label, None, now);
+        let w = &engine.world;
+        let mut objects: Vec<_> = st
+            .top_level_selection(w)
+            .into_iter()
+            .map(|id| {
+                let ls = w.transform(id).map_or(Vector3::ONE, |t| t.local_scale);
+                (id, w.position(id), w.rotation(id), ls)
+            })
+            .collect();
+        // The active object first: it's the one a resize applies to.
+        if let Some(i) = objects.iter().position(|o| o.0 == active) {
+            objects.swap(0, i);
+        }
+        let start_hit = ray_plane(&proj.ray(origin), geom.center, geom.n).unwrap_or(geom.center);
+        st.scene_ui.drag = Some(Drag {
+            handle: h,
+            tool: Tool::Rect,
+            start_mouse: origin,
+            center: geom.center,
+            axes: [geom.u, geom.v, geom.n],
+            size: 1.0,
+            start_s: 0.0,
+            start_hit,
+            tangent: Vec2::X,
+            radius_px: 0.0,
+            objects,
+            factor: 1.0,
+            rect: Some(geom),
+        });
+    }
+
+    let mut live = geom;
+    if let Some(d) = st.scene_ui.drag.as_ref() {
+        if !primary_down {
+            st.scene_ui.drag = None;
+        } else if let Some(m) = mouse
+            && let Some(hit) = ray_plane(&proj.ray(m), geom.center, geom.n)
+            && let Handle3::Rect(su, sv) = d.handle
+        {
+            let w = &mut engine.world;
+            let mut delta = hit - d.start_hit;
+            let (du, dv) = (delta.dot(geom.u), delta.dot(geom.v));
+            if su == 0 && sv == 0 {
+                if mods.command {
+                    let step = st.prefs.move_snap.max(1e-4);
+                    let snap = |x: f32| (x / step).round() * step;
+                    delta = geom.u * snap(du) + geom.v * snap(dv);
+                }
+                for (id, p0, _, _) in &d.objects {
+                    w.set_position(*id, *p0 + delta);
+                }
+                live.center = geom.center + delta;
+            } else if let Some(&(id, p0, _, s0)) = d.objects.first() {
+                let r = geom.resize(p0, s0, (su, sv), (du, dv), mods.alt, mods.shift);
+                w.set_position(id, r.position);
+                if let Some(t) = w.transform_mut(id) {
+                    t.local_scale = r.scale;
+                }
+                live = r.rect;
+            }
+        }
+    }
+
+    // Draw.
+    let dragging = st.scene_ui.drag.as_ref().map(|d| d.handle);
+    let hovered = dragging.or_else(|| {
+        if busy {
+            None
+        } else {
+            mouse
+                .filter(|m| proj.rect.contains(*m))
+                .and_then(|m| live.hit(proj, m))
+        }
+    });
+    let corners = [(1, 1), (-1, 1), (-1, -1), (1, -1)];
+    let pts = corners.map(|(su, sv)| proj.project(live.point(su as f32, sv as f32)));
+    let edge_col = Color32::from_gray(230);
+    for (e, i) in [(1, 2), (2, 3), (3, 0), (0, 1)].into_iter().enumerate() {
+        if let (Some(a), Some(b)) = (pts[i.0], pts[i.1]) {
+            let h = [
+                Handle3::Rect(-1, 0),
+                Handle3::Rect(0, -1),
+                Handle3::Rect(1, 0),
+                Handle3::Rect(0, 1),
+            ][e];
+            let col = if hovered == Some(h) { HOVER } else { edge_col };
+            painter.line_segment([a, b], Stroke::new(1.5, col));
+        }
+    }
+    for (k, (su, sv)) in corners.into_iter().enumerate() {
+        if let Some(p) = pts[k] {
+            let col = if hovered == Some(Handle3::Rect(su, sv)) {
+                HOVER
+            } else {
+                Color32::from_rgb(58, 122, 248)
+            };
+            painter.circle_filled(p, 4.5, col);
+            painter.circle_stroke(p, 4.5, Stroke::new(1.0, Color32::WHITE));
+        }
+    }
+    if let Some(c) = proj.project(live.center) {
+        painter.circle_stroke(c, 4.0, Stroke::new(1.0, edge_col));
+    }
+    hovered.is_some()
 }
 
 // ---- orientation gizmo --------------------------------------------------------------------
@@ -1337,8 +1833,13 @@ pub fn render(st: &mut EditorState, engine: &mut Engine) {
     let cam = st.scene_cam.camera_view();
     let mut rf = extract::extract(&engine.world, Some(vec![cam]));
     rf.debug_view = st.scene_ui.draw_mode;
+    apply_view_options(&st.scene_ui, &mut rf, st.scene_cam.forward());
+    let hidden = st.visibility.hidden_bits(&engine.world);
+    if !hidden.is_empty() {
+        rf.draws.retain(|d| !hidden.contains(&d.id));
+    }
     if st.scene_ui.grid {
-        add_grid(&mut rf, &st.scene_cam);
+        add_grid(&mut rf, &st.scene_cam, st.scene_ui.mode_2d);
     }
     if st.scene_ui.gizmos {
         for (a, b, c) in engine.world.collect_gizmos().lines {
@@ -1351,8 +1852,73 @@ pub fn render(st: &mut EditorState, engine: &mut Engine) {
         .render(&engine.gpu, assets, &rf, view, VIEW_FORMAT, w, h);
 }
 
-fn add_grid(rf: &mut oxide_render::RenderFrame, cam: &crate::SceneCamera) {
+/// Scene view lighting and effects toggles, applied to the extracted frame.
+pub fn apply_view_options(
+    o: &SceneViewState,
+    rf: &mut oxide_render::RenderFrame,
+    cam_forward: Vector3,
+) {
+    use oxide_render::{ClearMode, SunLight};
+    if !o.lighting {
+        // Unity: a directional light shining from the camera, no scene lights or baked light.
+        rf.lights.clear();
+        rf.lightmaps.clear();
+        rf.sun = Some(SunLight {
+            direction: cam_forward,
+            color: [1.0, 1.0, 1.0],
+            shadows: None,
+        });
+        for d in &mut rf.draws {
+            d.lightmap = None;
+            d.light_probe = None;
+        }
+    }
+    let fx = &o.effects;
+    if !fx.on(fx.skybox) {
+        for c in &mut rf.cameras {
+            if matches!(c.clear, ClearMode::Sky) {
+                c.clear = ClearMode::Color(Color::rgb(0.278, 0.278, 0.278).linear());
+            }
+        }
+    }
+    if !fx.on(fx.fog) {
+        rf.environment.fog = None;
+    }
+    if !fx.on(fx.particles) {
+        rf.particles.clear();
+    }
+    if !fx.on(fx.post_processing) {
+        rf.environment.post.enabled = false;
+    }
+}
+
+fn add_grid(rf: &mut oxide_render::RenderFrame, cam: &crate::SceneCamera, mode_2d: bool) {
     let pos = cam.position();
+    if mode_2d {
+        // XY plane at z = 0, sized to the orthographic view.
+        let size = cam.distance * (cam.fov * 0.5).to_radians().tan();
+        let step = 10f32.powf((size / 15.0).log10().floor().max(-1.0));
+        let n = 60;
+        let span = n as f32 * step;
+        let (cx, cy) = ((pos.x / step).round() * step, (pos.y / step).round() * step);
+        for i in -n..=n {
+            let x = cx + i as f32 * step;
+            let y = cy + i as f32 * step;
+            let major = |c: f32| ((c / step).round() as i64) % 10 == 0;
+            let col = |m: bool| Color::new(0.6, 0.6, 0.6, if m { 0.45 } else { 0.22 });
+            rf.line(
+                Vector3::new(x, cy - span, 0.0),
+                Vector3::new(x, cy + span, 0.0),
+                col(major(x)),
+            );
+            rf.line(
+                Vector3::new(cx - span, y, 0.0),
+                Vector3::new(cx + span, y, 0.0),
+                col(major(y)),
+            );
+        }
+        return;
+    }
     let height = pos.y.abs().max(cam.distance * 0.3).max(1.0);
     let step = 10f32.powf((height / 15.0).log10().floor().max(0.0));
     let n = 60;
@@ -1429,5 +1995,45 @@ mod tests {
         assert_eq!(hit.0, id);
         assert!((hit.1 - 4.5).abs() < 1e-3, "{}", hit.1);
         assert!(pick(&w, &Ray::new(Vector3::ZERO, Vector3::X)).is_none());
+        // Unpickable objects are skipped.
+        assert!(pick_where(&w, &Ray::new(Vector3::ZERO, Vector3::Z), |o| o != id).is_none());
+    }
+
+    #[test]
+    fn rect_faces_the_camera() {
+        let mut w = World::new();
+        oxide_engine::init_world(&mut w, std::env::temp_dir());
+        w.run_scripts = false;
+        let id = oxide_engine::objects::create_primitive(&mut w, oxide_assets::PrimitiveType::Cube);
+        w.set_position(id, Vector3::new(1.0, 2.0, 3.0));
+        w.transform_mut(id).unwrap().local_scale = Vector3::new(2.0, 1.0, 4.0);
+        // Looking along +Z: the rect is the X/Y face.
+        let r = RectGeom::of(&w, id, Vector3::Z).unwrap();
+        assert_eq!((r.iu, r.iv), (0, 1));
+        assert!((r.hu - 1.0).abs() < 1e-4 && (r.hv - 0.5).abs() < 1e-4);
+        assert!((r.center - Vector3::new(1.0, 2.0, 3.0)).length() < 1e-4);
+        // Looking down: the X/Z face (u = Z, v = X).
+        let r = RectGeom::of(&w, id, -Vector3::Y).unwrap();
+        assert_eq!((r.iu, r.iv), (2, 0));
+        assert!((r.hu - 2.0).abs() < 1e-4 && (r.hv - 1.0).abs() < 1e-4);
+
+        // Drag the +X edge of the X/Y rect 1 unit right: width 2 -> 3, left edge stays.
+        let r = RectGeom::of(&w, id, Vector3::Z).unwrap();
+        let p0 = Vector3::new(1.0, 2.0, 3.0);
+        let s0 = Vector3::new(2.0, 1.0, 4.0);
+        let near = |a: Vector3, b: Vector3| (a - b).length() < 1e-4;
+        let out = r.resize(p0, s0, (1, 0), (1.0, 0.0), false, false);
+        assert!(near(out.scale, Vector3::new(3.0, 1.0, 4.0)));
+        assert!(near(out.position, Vector3::new(1.5, 2.0, 3.0)));
+        assert!((out.rect.point(-1.0, 0.0).x - r.point(-1.0, 0.0).x).abs() < 1e-4);
+        // Alt: around the center, both sides move.
+        let out = r.resize(p0, s0, (1, 0), (1.0, 0.0), true, false);
+        assert!(near(out.scale, Vector3::new(4.0, 1.0, 4.0)) && near(out.position, p0));
+        // Shift on a corner keeps the aspect ratio.
+        let out = r.resize(p0, s0, (1, 1), (1.0, 0.0), false, true);
+        assert!(near(out.scale, Vector3::new(3.0, 1.5, 4.0)));
+        // A pivot off the bounds center: the fixed edge still stays put.
+        let off = r.resize(p0 - Vector3::X, s0, (1, 0), (1.0, 0.0), false, false);
+        assert!(near(off.position, Vector3::new(0.0, 2.0, 3.0)));
     }
 }

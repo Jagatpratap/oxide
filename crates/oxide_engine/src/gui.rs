@@ -99,7 +99,7 @@ impl GuiLayer {
             if let Some(view) =
                 renderer
                     .gpu_assets
-                    .texture_view(&gpu.device, &gpu.queue, assets, h.id())
+                    .ui_texture_view(&gpu.device, &gpu.queue, assets, h.id())
             {
                 let tid = self.renderer.register_native_texture(
                     &gpu.device,

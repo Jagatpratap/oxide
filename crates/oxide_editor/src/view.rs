@@ -25,36 +25,41 @@ impl ViewTarget {
             return id;
         }
         let device = &engine.gpu.device;
-        let view = device
-            .create_texture(&wgpu::TextureDescriptor {
-                label: Some("editor view"),
-                size: wgpu::Extent3d {
-                    width: w,
-                    height: h,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: VIEW_FORMAT,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::COPY_SRC,
-                view_formats: &[],
-            })
-            .create_view(&Default::default());
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("editor view"),
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: VIEW_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+            // egui samples textures as plain (gamma-encoded) bytes, so it gets a
+            // non-sRGB view; the renderer writes through the sRGB one.
+            view_formats: &[VIEW_FORMAT.remove_srgb_suffix()],
+        });
+        let view = texture.create_view(&Default::default());
+        let ui_view = texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(VIEW_FORMAT.remove_srgb_suffix()),
+            ..Default::default()
+        });
         let renderer = &mut engine.gui.renderer;
         let id = match self.id {
             Some(id) => {
                 renderer.update_egui_texture_from_wgpu_texture(
                     device,
-                    &view,
+                    &ui_view,
                     wgpu::FilterMode::Linear,
                     id,
                 );
                 id
             }
-            None => renderer.register_native_texture(device, &view, wgpu::FilterMode::Linear),
+            None => renderer.register_native_texture(device, &ui_view, wgpu::FilterMode::Linear),
         };
         self.view = Some(view);
         self.id = Some(id);

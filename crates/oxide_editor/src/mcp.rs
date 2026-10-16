@@ -41,6 +41,7 @@ fn state_json(ed: &Editor, e: &Engine) -> Json {
         "selection": st.selection.iter().map(|&id| json!({ "id": id.to_bits(), "path": w.path_of(id) })).collect::<Vec<_>>(),
         "tool": st.tool.name(),
         "handles": if st.local_handles { "local" } else { "global" },
+        "handle_position": if st.center_handles { "center" } else { "pivot" },
         "game_view_focused": st.game_focused,
         "windows": ed.open_tabs().iter().map(|t| t.title()).collect::<Vec<_>>(),
         "undo": undo, "redo": redo,
@@ -49,6 +50,14 @@ fn state_json(ed: &Editor, e: &Engine) -> Json {
             "yaw": cam.yaw, "pitch": cam.pitch, "distance": cam.distance,
             "orthographic": cam.orthographic, "fov": cam.fov,
             "draw_mode": st.scene_ui.draw_mode.name(),
+            "mode_2d": st.scene_ui.mode_2d,
+            "lighting": st.scene_ui.lighting,
+            "effects": {
+                "enabled": st.scene_ui.effects.enabled, "skybox": st.scene_ui.effects.skybox,
+                "fog": st.scene_ui.effects.fog, "particles": st.scene_ui.effects.particles,
+                "post_processing": st.scene_ui.effects.post_processing,
+            },
+            "scene_visibility": !st.visibility.show_all,
         },
         "status": st.status,
     })
@@ -248,10 +257,12 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
         ToolDef::new(
             "editor_set_tool",
             "Set transform tool",
-            "Selects the Scene view tool (hand, move, rotate, scale) and handle orientation (global/local).",
+            "Selects the Scene view tool (hand, move, rotate, scale, rect, transform), handle orientation \
+             (global/local) and handle position (pivot/center).",
             schema(
-                json!({ "tool": { "type": "string", "enum": ["hand", "move", "rotate", "scale"] },
-                       "handles": { "type": "string", "enum": ["global", "local"] } }),
+                json!({ "tool": { "type": "string", "enum": ["hand", "move", "rotate", "scale", "rect", "transform"] },
+                       "handles": { "type": "string", "enum": ["global", "local"] },
+                       "position": { "type": "string", "enum": ["pivot", "center"] } }),
                 &[],
             ),
         ),
@@ -265,6 +276,9 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
                 }
                 if let Some(h) = args.get("handles").and_then(Json::as_str) {
                     ed.st.local_handles = h == "local";
+                }
+                if let Some(p) = args.get("position").and_then(Json::as_str) {
+                    ed.st.center_handles = p == "center";
                 }
                 ToolResult::json(state_json(ed, e))
             })
@@ -473,13 +487,15 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
             "editor_scene_camera",
             "Move Scene view camera",
             "Positions the Scene view camera: `position` + `look_at`, or `pivot`/`yaw`/`pitch`/`distance`, or `frame` (an \
-         object to frame, like pressing F). Also `orthographic`, `fov` and `draw_mode` (Shaded, Wireframe, Shaded \
-         Wireframe, Albedo, Normals, Lighting Only, Shadow Cascades, Baked Lightmap).",
+         object to frame, like pressing F). Also `orthographic`, `fov`, `draw_mode` (Shaded, Wireframe, Shaded \
+         Wireframe, Albedo, Normals, Lighting Only, Shadow Cascades, Baked Lightmap), `mode_2d`, `lighting` (scene \
+         lights on/off) and `effects` ({enabled, skybox, fog, particles, post_processing}).",
             schema(
                 json!({ "position": { "type": "array" }, "look_at": { "type": "array" }, "pivot": { "type": "array" },
                        "yaw": { "type": "number" }, "pitch": { "type": "number" }, "distance": { "type": "number" },
                        "frame": {}, "orthographic": { "type": "boolean" }, "fov": { "type": "number" },
-                       "draw_mode": { "type": "string" } }),
+                       "draw_mode": { "type": "string" }, "mode_2d": { "type": "boolean" },
+                       "lighting": { "type": "boolean" }, "effects": { "type": "object" } }),
                 &[],
             ),
         ),
@@ -520,6 +536,26 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
                     };
                     ed.st.scene_ui.draw_mode = mode;
                 }
+                if let Some(on) = args.get("mode_2d").and_then(Json::as_bool) {
+                    crate::scene_view::set_2d(&mut ed.st, on);
+                }
+                if let Some(on) = args.get("lighting").and_then(Json::as_bool) {
+                    ed.st.scene_ui.lighting = on;
+                }
+                if let Some(fx) = args.get("effects").and_then(Json::as_object) {
+                    let e = &mut ed.st.scene_ui.effects;
+                    for (k, flag) in [
+                        ("enabled", &mut e.enabled),
+                        ("skybox", &mut e.skybox),
+                        ("fog", &mut e.fog),
+                        ("particles", &mut e.particles),
+                        ("post_processing", &mut e.post_processing),
+                    ] {
+                        if let Some(v) = fx.get(k).and_then(Json::as_bool) {
+                            *flag = v;
+                        }
+                    }
+                }
                 if args.contains_key("frame") {
                     let id = oxide_engine::tri!(obj_arg(args, &e.world, "frame"));
                     if let Some((c, r)) = crate::scene_view::bounds_of(&e.world, &[id]) {
@@ -527,6 +563,79 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
                     }
                 }
                 ToolResult::json(state_json(ed, e)["scene_camera"].clone())
+            })
+        },
+    );
+
+    tool(
+        s,
+        bus,
+        ToolDef::new(
+            "editor_scene_visibility",
+            "Scene visibility",
+            "The Hierarchy's eye and hand toggles: `hide`/`show` objects in the Scene view (children follow), \
+             `disable_picking`/`enable_picking`, `show_all` (clear everything), or `enabled: false` to show hidden \
+             objects without clearing them. Game view and builds are unaffected. Returns hidden/unpickable objects.",
+            schema(
+                json!({ "action": { "type": "string", "enum": ["status", "hide", "show", "disable_picking", "enable_picking", "show_all"] },
+                       "objects": { "type": "array" }, "enabled": { "type": "boolean" } }),
+                &[],
+            ),
+        ),
+        |args, e| {
+            with_editor(e, |ed, e| {
+                let w = &e.world;
+                let mut ids = Vec::new();
+                for v in args
+                    .get("objects")
+                    .and_then(Json::as_array)
+                    .cloned()
+                    .unwrap_or_default()
+                {
+                    let mut a = serde_json::Map::new();
+                    a.insert("o".into(), v);
+                    match obj_arg(&a, w, "o") {
+                        Ok(id) => ids.push(id),
+                        Err(r) => return r,
+                    }
+                }
+                let vis = &mut ed.st.visibility;
+                let action = args
+                    .get("action")
+                    .and_then(Json::as_str)
+                    .unwrap_or("status");
+                for &id in &ids {
+                    match action {
+                        "hide" if !vis.hidden_in_chain(w, id) => vis.toggle_hidden(w, id),
+                        "show" if vis.hidden_in_chain(w, id) => vis.toggle_hidden(w, id),
+                        "disable_picking" if !vis.is_unpickable(w, id) => {
+                            vis.toggle_pickable(w, id)
+                        }
+                        "enable_picking" if vis.is_unpickable(w, id) => vis.toggle_pickable(w, id),
+                        _ => {}
+                    }
+                }
+                match action {
+                    "show_all" => {
+                        vis.hidden.clear();
+                        vis.unpickable.clear();
+                    }
+                    "status" | "hide" | "show" | "disable_picking" | "enable_picking" => {}
+                    other => return ToolResult::error(format!("unknown action `{other}`")),
+                }
+                if let Some(on) = args.get("enabled").and_then(Json::as_bool) {
+                    vis.show_all = !on;
+                }
+                let list = |set: &std::collections::HashSet<oxide_scene::GameObjectId>| {
+                    set.iter()
+                        .map(|&id| json!({ "id": id.to_bits(), "path": w.path_of(id) }))
+                        .collect::<Vec<_>>()
+                };
+                ToolResult::json(json!({
+                    "enabled": !vis.show_all,
+                    "hidden": list(&vis.hidden),
+                    "unpickable": list(&vis.unpickable),
+                }))
             })
         },
     );

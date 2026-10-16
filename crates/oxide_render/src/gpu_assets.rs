@@ -42,6 +42,8 @@ pub struct GpuMesh {
 pub struct GpuTexture {
     pub version: u64,
     pub view: wgpu::TextureView,
+    /// The same texels without sRGB decoding, for egui (which expects gamma-encoded bytes).
+    pub ui_view: wgpu::TextureView,
     pub wrap: TextureWrapMode,
     pub filter: FilterMode,
     pub width: u32,
@@ -85,6 +87,14 @@ pub struct GpuAssets {
     white: wgpu::TextureView,
     black: wgpu::TextureView,
     normal: wgpu::TextureView,
+}
+
+/// A view of `texture` in its non-sRGB format (it must list that in `view_formats`).
+fn ui_view(texture: &wgpu::Texture) -> wgpu::TextureView {
+    texture.create_view(&wgpu::TextureViewDescriptor {
+        format: Some(texture.format().remove_srgb_suffix()),
+        ..Default::default()
+    })
 }
 
 fn solid(
@@ -271,29 +281,28 @@ impl GpuAssets {
             .get_by_id(id)
             .expect("versioned render texture exists");
         let (width, height) = (rt.width.max(1), rt.height.max(1));
-        let view = device
-            .create_texture(&wgpu::TextureDescriptor {
-                label: Some(&rt.name),
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: RENDER_TEXTURE_FORMAT,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::COPY_SRC,
-                view_formats: &[],
-            })
-            .create_view(&Default::default());
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(&rt.name),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: RENDER_TEXTURE_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[RENDER_TEXTURE_FORMAT.remove_srgb_suffix()],
+        });
         self.textures.insert(
             id,
             GpuTexture {
                 version,
-                view,
+                view: texture.create_view(&Default::default()),
+                ui_view: ui_view(&texture),
                 wrap: TextureWrapMode::Clamp,
                 filter: FilterMode::Bilinear,
                 width,
@@ -321,7 +330,21 @@ impl GpuAssets {
             .map(|t| (t.view.clone(), t.width, t.height))
     }
 
-    /// GPU view of a texture asset (uploading it if needed), e.g. for UI images.
+    /// View of a texture asset for egui (no sRGB decode), uploading it if needed.
+    pub fn ui_texture_view(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        assets: &AssetServer,
+        id: AssetId,
+    ) -> Option<&wgpu::TextureView> {
+        if !self.ensure_texture(device, queue, assets, id) {
+            return None;
+        }
+        self.textures.get(&id).map(|t| &t.ui_view)
+    }
+
+    /// GPU view of a texture asset (uploading it if needed).
     pub fn texture_view(
         &mut self,
         device: &wgpu::Device,
@@ -620,7 +643,7 @@ fn upload_texture(
             dimension: wgpu::TextureDimension::D2,
             format,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
+            view_formats: &[format.remove_srgb_suffix()],
         },
         wgpu::util::TextureDataOrder::LayerMajor,
         &data,
@@ -628,6 +651,7 @@ fn upload_texture(
     GpuTexture {
         version,
         view: tex.create_view(&Default::default()),
+        ui_view: ui_view(&tex),
         wrap: t.wrap_mode,
         filter: t.filter_mode,
         width: t.width,

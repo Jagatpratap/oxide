@@ -10,6 +10,49 @@ use std::collections::HashSet;
 
 const ROW_H: f32 = 18.0;
 const INDENT: f32 = 14.0;
+/// Left column with the visibility (eye) and pickability (hand) toggles.
+const GUTTER: f32 = 32.0;
+
+/// Eye icon; slashed when hidden.
+fn eye_icon(p: &egui::Painter, c: egui::Pos2, off: bool, col: Color32) {
+    let pts: Vec<_> = (0..=12)
+        .map(|i| {
+            let a = std::f32::consts::PI * i as f32 / 12.0;
+            c + vec2(-5.0 * a.cos(), -3.2 * a.sin())
+        })
+        .collect();
+    let low: Vec<_> = pts.iter().map(|q| pos2(q.x, 2.0 * c.y - q.y)).collect();
+    p.add(egui::Shape::line(pts, Stroke::new(1.1, col)));
+    p.add(egui::Shape::line(low, Stroke::new(1.1, col)));
+    p.circle_filled(c, 1.6, col);
+    if off {
+        p.line_segment(
+            [c + vec2(-5.0, 4.0), c + vec2(5.0, -4.0)],
+            Stroke::new(1.3, col),
+        );
+    }
+}
+
+/// Pointer icon; slashed when picking is off.
+fn pick_icon(p: &egui::Painter, c: egui::Pos2, off: bool, col: Color32) {
+    let o = c + vec2(-3.0, -5.0);
+    p.add(egui::Shape::convex_polygon(
+        vec![
+            o,
+            o + vec2(0.0, 9.0),
+            o + vec2(2.5, 6.8),
+            o + vec2(6.5, 6.5),
+        ],
+        Color32::TRANSPARENT,
+        Stroke::new(1.1, col),
+    ));
+    if off {
+        p.line_segment(
+            [c + vec2(-5.0, 4.0), c + vec2(5.0, -4.0)],
+            Stroke::new(1.3, col),
+        );
+    }
+}
 
 /// Drag payload: objects being dragged in the Hierarchy.
 #[derive(Clone, Debug)]
@@ -94,6 +137,7 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
     let mut drop: Option<(Vec<GameObjectId>, Option<GameObjectId>, DropAt)> = None;
     let mut clicked: Option<(GameObjectId, bool, bool)> = None;
     let mut toggle: Option<GameObjectId> = None;
+    let mut vis_toggle: Option<(GameObjectId, bool)> = None;
     let mut commit_rename: Option<(GameObjectId, String)> = None;
     let mut actions = Vec::new();
     let scroll_to = st.hierarchy.scroll_to.take();
@@ -144,7 +188,33 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
                 } else if resp.hovered() {
                     p.rect_filled(rect, 0.0, Color32::from_gray(69));
                 }
-                let x0 = rect.left() + 4.0 + row.depth as f32 * INDENT;
+                // Visibility and pickability toggles (shown on hover or when set).
+                let eye_c = pos2(rect.left() + 9.0, rect.center().y);
+                let hand_c = pos2(rect.left() + 24.0, rect.center().y);
+                let vis = &st.visibility;
+                let hidden_self = vis.hidden.contains(&id);
+                let hidden = vis.hidden_in_chain(world, id);
+                let unpick_self = vis.unpickable.contains(&id);
+                let unpick = vis.is_unpickable(world, id);
+                let dim = Color32::from_gray(150);
+                let strong = Color32::from_gray(225);
+                if hidden || resp.hovered() {
+                    eye_icon(
+                        p,
+                        eye_c,
+                        hidden,
+                        if hidden_self || !hidden { strong } else { dim },
+                    );
+                }
+                if unpick || resp.hovered() {
+                    pick_icon(
+                        p,
+                        hand_c,
+                        unpick,
+                        if unpick_self || !unpick { strong } else { dim },
+                    );
+                }
+                let x0 = rect.left() + GUTTER + 4.0 + row.depth as f32 * INDENT;
                 let arrow = egui::Rect::from_min_size(pos2(x0, rect.top()), vec2(12.0, ROW_H));
                 let has_children = !o.children().is_empty();
                 if has_children && query.is_empty() {
@@ -222,7 +292,10 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
                 }
 
                 // Interaction.
-                if resp.clicked() {
+                let click_x = resp.interact_pointer_pos().map(|p| p.x - rect.left());
+                if resp.clicked() && click_x.is_some_and(|x| x < GUTTER) {
+                    vis_toggle = Some((id, click_x.is_some_and(|x| x < GUTTER * 0.5)));
+                } else if resp.clicked() {
                     let on_arrow = resp
                         .interact_pointer_pos()
                         .is_some_and(|p| arrow.contains(p));
@@ -322,6 +395,14 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
         });
 
     let now = oxide_core::time::realtime_since_startup();
+    if let Some((id, eye)) = vis_toggle {
+        let w = &engine.world;
+        if eye {
+            st.visibility.toggle_hidden(w, id);
+        } else {
+            st.visibility.toggle_pickable(w, id);
+        }
+    }
     if let Some(id) = toggle
         && !st.hierarchy.expanded.remove(&id)
     {

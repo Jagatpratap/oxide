@@ -178,7 +178,7 @@ with `.meta` files in P3).
   ([Customize workspace](https://docs.unity3d.com/Manual/CustomizingYourWorkspace.html))
 - ☑ **Hierarchy** window: tree, drag-reparent, rename, multi-select, search
   ([Hierarchy](https://docs.unity3d.com/Manual/hierarchy-window.html))
-- ◐ **Scene view**: fly camera, orbit/pan/zoom, grid, gizmos, move/rotate/scale/rect handles, snapping, picking, 2D/3D toggle, draw modes, overlays
+- ◐ **Scene view**: fly camera, orbit/pan/zoom, grid, gizmos, move/rotate/scale/rect/transform handles, pivot/center, snapping, picking, scene visibility, 2D/3D toggle, draw modes, lighting/effects toggles, overlays
   ([Scene view](https://docs.unity3d.com/Manual/UsingTheSceneView.html),
   [Positioning](https://docs.unity3d.com/Manual/PositioningGameObjects.html),
   [Picking](https://docs.unity3d.com/Manual/ScenePicking.html),
@@ -199,7 +199,7 @@ with `.meta` files in P3).
   [Shortcuts](https://docs.unity3d.com/Manual/ShortcutsManager.html),
   [Search](https://docs.unity3d.com/Manual/editor-searching.html))
 - ☑ Play mode: snapshot scene → run → restore on stop
-- ☐ Preferences + Project Settings windows (Tags & Layers, Time, Physics, Quality, Graphics, Input, Player)
+- ☑ Preferences + Project Settings windows (Tags & Layers, Time, Physics, Quality, Graphics, Input, Player)
   ([Preferences](https://docs.unity3d.com/Manual/Preferences.html),
   [Project Settings](https://docs.unity3d.com/Manual/comp-ManagerGroup.html))
 - ✓ Project launcher (Hub equivalent): `oxide new <dir>` / `oxide open <dir>`
@@ -214,8 +214,11 @@ Undo/Redo; Play/Pause/Step with scene restore; File/Edit/GameObject/Component/Wi
 Scene view draw modes (Shaded, Wireframe, Shaded Wireframe, Albedo, Normals, Lighting Only,
 Shadow Cascades, Baked Lightmap); multi-object Inspector with lock and Debug mode; Undo History
 and selection history; Project Settings and Preferences windows; Console call sites and stack
-traces; Game view control bar. MCP: `editor_*` tools drive all of it. Not yet: rect tool,
-2D mode, overlays toolbar, Scene view lighting/audio/effects toggles.
+traces; Game view control bar. Rect (T) and Transform (Y) tools, Pivot/Center (Z) and
+Global/Local (X) handle modes; 2D mode; Scene lighting and Effects (skybox, fog, particles,
+post-processing) toggles; Hierarchy eye/hand toggles for scene visibility and pickability.
+MCP: `editor_*` tools drive all of it. Not yet: movable overlay panels, Scene view audio
+toggle, Rect tool for multiple objects at once (it resizes the active object).
 
 ### P3 — Asset pipeline
 - ☐ AssetDatabase with GUIDs, `.meta` files, Library cache, dependency tracking

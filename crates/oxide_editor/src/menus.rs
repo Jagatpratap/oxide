@@ -229,6 +229,12 @@ pub fn menu_items(world: &World) -> Vec<MenuItem> {
         item("Edit/Tools/Move", "W", Action::SetTool(Tool::Move)),
         item("Edit/Tools/Rotate", "E", Action::SetTool(Tool::Rotate)),
         item("Edit/Tools/Scale", "R", Action::SetTool(Tool::Scale)),
+        item("Edit/Tools/Rect", "T", Action::SetTool(Tool::Rect)),
+        item(
+            "Edit/Tools/Transform",
+            "Y",
+            Action::SetTool(Tool::Transform),
+        ),
         sep("Edit"),
         item(
             "Edit/Project Settings...",
@@ -406,6 +412,8 @@ pub fn toolbar(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
             (Tool::Move, "Move", "W"),
             (Tool::Rotate, "Rotate", "E"),
             (Tool::Scale, "Scale", "R"),
+            (Tool::Rect, "Rect", "T"),
+            (Tool::Transform, "Transform", "Y"),
         ] {
             if ui
                 .selectable_label(st.tool == tool, label)
@@ -416,6 +424,16 @@ pub fn toolbar(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
             }
         }
         ui.separator();
+        let pivot = if st.center_handles { "Center" } else { "Pivot" };
+        if ui
+            .button(pivot)
+            .on_hover_text(
+                "Handle position: the active object's pivot or the selection's center (Z)",
+            )
+            .clicked()
+        {
+            st.center_handles = !st.center_handles;
+        }
         let space = if st.local_handles { "Local" } else { "Global" };
         if ui
             .button(space)
@@ -639,10 +657,19 @@ pub fn shortcuts(st: &mut EditorState, engine: &mut Engine, ctx: &egui::Context)
             (Key::W, Tool::Move),
             (Key::E, Tool::Rotate),
             (Key::R, Tool::Scale),
+            (Key::T, Tool::Rect),
+            (Key::Y, Tool::Transform),
         ] {
             if plain(k) {
                 st.tool = t;
             }
+        }
+        // Unity: Z toggles Pivot/Center, X toggles Global/Local.
+        if plain(Key::Z) {
+            st.center_handles = !st.center_handles;
+        }
+        if plain(Key::X) {
+            st.local_handles = !st.local_handles;
         }
     }
 }

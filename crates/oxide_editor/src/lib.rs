@@ -25,6 +25,7 @@ pub mod settings_window;
 mod theme;
 mod undo;
 mod view;
+mod visibility;
 
 pub use view::SceneCamera;
 
@@ -86,6 +87,10 @@ pub enum Tool {
     Move,
     Rotate,
     Scale,
+    /// Resize on the plane facing the camera (Unity's Rect tool, T).
+    Rect,
+    /// Move, rotate and scale handles together (Unity's Transform tool, Y).
+    Transform,
 }
 
 impl Tool {
@@ -95,11 +100,22 @@ impl Tool {
             Tool::Move => "move",
             Tool::Rotate => "rotate",
             Tool::Scale => "scale",
+            Tool::Rect => "rect",
+            Tool::Transform => "transform",
         }
     }
 
+    pub const ALL: [Tool; 6] = [
+        Tool::Hand,
+        Tool::Move,
+        Tool::Rotate,
+        Tool::Scale,
+        Tool::Rect,
+        Tool::Transform,
+    ];
+
     pub fn parse(s: &str) -> Option<Tool> {
-        [Tool::Hand, Tool::Move, Tool::Rotate, Tool::Scale]
+        Tool::ALL
             .into_iter()
             .find(|t| t.name().eq_ignore_ascii_case(s))
     }
@@ -221,6 +237,11 @@ pub struct EditorState {
     pub tool: Tool,
     /// Handles follow the object's rotation (Unity "Local") instead of world axes.
     pub local_handles: bool,
+    /// Handles sit at the selection's bounds center (Unity "Center") instead of the active
+    /// object's pivot, and rotate/scale move objects around it.
+    pub center_handles: bool,
+    /// Scene view hide/pick toggles.
+    pub visibility: visibility::SceneVisibility,
     pub play: PlayState,
     play_snapshot: Option<undo::Snapshot>,
     /// Undo depth when Play started; entries recorded during Play are dropped on Stop.
@@ -267,6 +288,8 @@ impl EditorState {
             selection: Vec::new(),
             tool: Tool::Move,
             local_handles: false,
+            center_handles: false,
+            visibility: Default::default(),
             play: PlayState::Edit,
             play_snapshot: None,
             play_undo_depth: 0,
@@ -362,6 +385,8 @@ impl EditorState {
             .iter()
             .chain(self.saved_selections.iter())
             .flatten()
+            .chain(&self.visibility.hidden)
+            .chain(&self.visibility.unpickable)
             .filter(|&&id| w.is_alive(id))
             .map(|&id| (id, object_path(w, id)))
             .collect()
@@ -382,6 +407,14 @@ impl EditorState {
         };
         self.sel_history.iter_mut().for_each(map);
         self.saved_selections.iter_mut().for_each(map);
+        let map_set = |set: &mut std::collections::HashSet<GameObjectId>| {
+            *set = set
+                .iter()
+                .filter_map(|id| before.get(id).and_then(|p| now.get(p)).copied())
+                .collect();
+        };
+        map_set(&mut self.visibility.hidden);
+        map_set(&mut self.visibility.unpickable);
     }
 
     /// Adds the selection to the Back / Forward history when it changed.
