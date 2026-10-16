@@ -284,6 +284,41 @@ pub struct VignetteSettings {
     pub rounded: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DofMode {
+    #[default]
+    Off,
+    Gaussian,
+    Bokeh,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DofSettings {
+    pub mode: DofMode,
+    pub gaussian_start: f32,
+    pub gaussian_end: f32,
+    pub gaussian_max_radius: f32,
+    pub focus_distance: f32,
+    /// Millimetres.
+    pub focal_length: f32,
+    /// f-number.
+    pub aperture: f32,
+}
+
+impl Default for DofSettings {
+    fn default() -> Self {
+        Self {
+            mode: DofMode::Off,
+            gaussian_start: 10.0,
+            gaussian_end: 30.0,
+            gaussian_max_radius: 1.0,
+            focus_distance: 10.0,
+            focal_length: 50.0,
+            aperture: 5.6,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LensDistortionSettings {
     pub intensity: f32,
@@ -331,6 +366,9 @@ pub struct PostSettings {
     /// `(intensity, response)`.
     pub film_grain: [f32; 2],
     pub lens_distortion: LensDistortionSettings,
+    pub depth_of_field: DofSettings,
+    /// `(intensity, clamp)`: blur length scale and longest blur as a fraction of the screen.
+    pub motion_blur: [f32; 2],
 }
 
 impl Default for PostSettings {
@@ -378,6 +416,8 @@ impl Default for PostSettings {
                 center: [0.5, 0.5],
                 scale: 1.0,
             },
+            depth_of_field: DofSettings::default(),
+            motion_blur: [0.0, 0.05],
         }
     }
 }

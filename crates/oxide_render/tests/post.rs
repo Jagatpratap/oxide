@@ -1,7 +1,8 @@
 //! GPU tests for the post-processing stack. Skipped when no GPU is present.
 
+use oxide_assets::Handle;
 use oxide_assets::{AssetId, AssetServer, Material, PrimitiveType};
-use oxide_math::{Color, Matrix4x4, Matrix4x4Ext, Quaternion, Vector3};
+use oxide_math::{Color, Matrix4x4, Matrix4x4Ext, Quaternion, QuaternionExt, Vector3};
 use oxide_render::*;
 
 const SIZE: u32 = 64;
@@ -159,4 +160,107 @@ fn grading_tonemapping_and_vignette() {
         ..PostSettings::default()
     });
     assert!(center(&all).iter().any(|&c| c > 20));
+}
+
+/// Sum of absolute differences between horizontal neighbours (red channel): detail.
+fn detail(img: &CapturedImage) -> u64 {
+    let mut sum = 0u64;
+    for y in 8..SIZE - 8 {
+        for x in 8..SIZE - 9 {
+            sum += img.pixel(x, y)[0].abs_diff(img.pixel(x + 1, y)[0]) as u64;
+        }
+    }
+    sum
+}
+
+/// A big unlit checkerboard `distance` metres in front of the camera.
+fn checker_frame(assets: &mut AssetServer, distance: f32, post: PostSettings) -> RenderFrame {
+    let mut m = Material::unlit("Checker", Color::WHITE);
+    m.base_map = Some(Handle::from_path("builtin:grid"));
+    m.tiling = oxide_math::Vector2::new(8.0, 8.0);
+    let mat = assets.materials.insert("test:checker", m).id();
+    let mut f = frame(assets, post);
+    f.draws[0].material = mat;
+    f.draws[0].model = Matrix4x4::trs(
+        Vector3::new(0.0, 0.0, distance),
+        Quaternion::IDENTITY,
+        Vector3::new(distance * 2.0, distance * 2.0, 0.1),
+    );
+    f
+}
+
+#[test]
+fn depth_of_field_and_motion_blur() {
+    let Some(gpu) = Gpu::headless() else {
+        eprintln!("no GPU; skipped");
+        return;
+    };
+    let mut assets = AssetServer::new(std::env::temp_dir());
+    let mut r = SceneRenderer::new(&gpu);
+    let base = PostSettings::neutral();
+
+    let sharp = detail(&{
+        let f = checker_frame(&mut assets, 20.0, base.clone());
+        render(&gpu, &mut r, &assets, &f)
+    });
+    // Gaussian DoF: everything past 10 m is fully blurred.
+    let gaussian = PostSettings {
+        depth_of_field: DofSettings {
+            mode: DofMode::Gaussian,
+            gaussian_start: 5.0,
+            gaussian_end: 10.0,
+            ..Default::default()
+        },
+        ..base.clone()
+    };
+    let blurred = detail(&{
+        let f = checker_frame(&mut assets, 20.0, gaussian.clone());
+        render(&gpu, &mut r, &assets, &f)
+    });
+    assert!(
+        blurred * 2 < sharp,
+        "far plane should blur: {blurred} vs sharp {sharp}"
+    );
+    // Bokeh focused on the plane keeps it sharp.
+    let focused = detail(&{
+        let f = checker_frame(
+            &mut assets,
+            20.0,
+            PostSettings {
+                depth_of_field: DofSettings {
+                    mode: DofMode::Bokeh,
+                    focus_distance: 20.0,
+                    ..Default::default()
+                },
+                ..base.clone()
+            },
+        );
+        render(&gpu, &mut r, &assets, &f)
+    });
+    assert!(
+        focused * 10 > sharp * 9,
+        "in focus stays sharp: {focused} vs {sharp}"
+    );
+
+    // Motion blur: the camera turns between frames.
+    let blur = PostSettings {
+        motion_blur: [1.0, 0.2],
+        ..base.clone()
+    };
+    let mut f = checker_frame(&mut assets, 20.0, blur);
+    f.frame_index = 100;
+    render(&gpu, &mut r, &assets, &f);
+    f.frame_index = 101;
+    let still = detail(&render(&gpu, &mut r, &assets, &f));
+    assert!(
+        still * 10 > sharp * 9,
+        "no motion, no blur: {still} vs {sharp}"
+    );
+    f.frame_index = 102;
+    f.cameras[0].rotation = Quaternion::euler(0.0, 3.0, 0.0);
+    let moving = detail(&render(&gpu, &mut r, &assets, &f));
+    assert!(
+        moving * 2 < sharp,
+        "turning camera blurs: {moving} vs {sharp}"
+    );
 }

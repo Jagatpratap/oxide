@@ -140,6 +140,8 @@ struct Targets {
     ldr: Option<wgpu::TextureView>,
     /// Motion vectors, made on first TAA use.
     motion: Option<wgpu::TextureView>,
+    /// Depth of field / motion blur textures, made on first use.
+    fx: Option<crate::postfx::FxTargets>,
     bloom: Vec<(wgpu::TextureView, u32, u32)>,
     msaa: Option<wgpu::TextureView>,
     resolve_tex: wgpu::Texture,
@@ -193,6 +195,9 @@ pub struct SceneRenderer {
     prev_joint_buffer: wgpu::Buffer,
     motion: MotionHistory,
     taa_histories: HashMap<(u64, u32, u32), TaaHistory>,
+    postfx: crate::postfx::PostFx,
+    /// Per view: (frame index, view-projection this frame, last frame's), for motion blur.
+    view_prev: HashMap<(u64, u32, u32), (u64, Matrix4x4, Matrix4x4)>,
     frame_buffers: Vec<wgpu::Buffer>,
     frame_groups: Vec<wgpu::BindGroup>,
     light_buffer: wgpu::Buffer,
@@ -487,6 +492,8 @@ impl SceneRenderer {
             prev_joint_buffer: buf("previous joints", 64 * 256, wgpu::BufferUsages::STORAGE),
             motion: MotionHistory::default(),
             taa_histories: HashMap::new(),
+            postfx: crate::postfx::PostFx::new(device),
+            view_prev: HashMap::new(),
             frame_buffers: Vec::new(),
             frame_groups: Vec::new(),
             light_buffer: buf(
@@ -813,12 +820,8 @@ impl SceneRenderer {
             view_formats: &[],
         });
         let resolve = resolve_tex.create_view(&Default::default());
-        // Single-sample depth is read by the motion vector and TAA passes.
-        let depth_usage = if samples == 1 {
-            ra | wgpu::TextureUsages::TEXTURE_BINDING
-        } else {
-            ra
-        };
+        // Depth is read by TAA, depth of field and motion blur.
+        let depth_usage = ra | wgpu::TextureUsages::TEXTURE_BINDING;
         let depth = tex("depth", DEPTH_FORMAT, samples, depth_usage);
         let bloom = PostProcessor::bloom_chain(device, w, h);
         self.targets.insert(
@@ -827,6 +830,7 @@ impl SceneRenderer {
                 last_used: now,
                 ldr: None,
                 motion: None,
+                fx: None,
                 bloom,
                 msaa,
                 resolve_tex,
@@ -971,14 +975,66 @@ impl SceneRenderer {
                     .create_view(&Default::default())
             });
         }
+        // Depth of field and motion blur, from the first camera's view.
+        let mut fx_out = None;
+        if out.fx
+            && let Some(cam) = frame.cameras.first()
+        {
+            let aspect = (w as f32 * cam.viewport[2]) / (h as f32 * cam.viewport[3]).max(1.0);
+            let vp = cam.view_projection(aspect);
+            let view_key = (cam.antialiasing.history_id, w, h);
+            let entry = self
+                .view_prev
+                .entry(view_key)
+                .or_insert((frame.frame_index, vp, vp));
+            if entry.0 != frame.frame_index {
+                *entry = (frame.frame_index, vp, entry.1);
+            }
+            let prev_vp = entry.2;
+            while self.view_prev.len() > 8 {
+                let k = *self.view_prev.keys().next().expect("non-empty");
+                self.view_prev.remove(&k);
+            }
+            let t = self.targets.get_mut(&key).expect("targets");
+            t.fx.get_or_insert_with(|| crate::postfx::PostFx::targets(&gpu.device, w, h));
+            let t = &self.targets[&key];
+            let fxt = t.fx.as_ref().expect("made above");
+            self.postfx
+                .resolve_depth(&gpu.device, &mut encoder, &t.depth, out.samples, fxt);
+            let src = match out.taa {
+                Some(k) => {
+                    let hist = &self.taa_histories[&k];
+                    &hist.textures[hist.current]
+                }
+                None => &t.resolve,
+            };
+            fx_out = self.postfx.run(
+                &gpu.device,
+                &gpu.queue,
+                &mut encoder,
+                src,
+                fxt,
+                &crate::postfx::FxInputs {
+                    post: &frame.environment.post,
+                    inv_vp: vp.inverse().to_cols_array(),
+                    prev_vp: prev_vp.to_cols_array(),
+                    near: cam.near,
+                    far: cam.far,
+                    orthographic: matches!(cam.projection, ProjectionKind::Orthographic { .. }),
+                    height: h,
+                    motion: out.taa.and(t.motion.as_ref()),
+                },
+            );
+        }
         let env = &frame.environment;
         let targets = &self.targets[&key];
-        let hdr = match out.taa {
-            Some(k) => {
+        let hdr = match (fx_out, out.taa) {
+            (Some(i), _) => &targets.fx.as_ref().expect("fx targets").out[i],
+            (None, Some(k)) => {
                 let hist = &self.taa_histories[&k];
                 &hist.textures[hist.current]
             }
-            None => &targets.resolve,
+            (None, None) => &targets.resolve,
         };
         let (post_target, post_format) = match &targets.ldr {
             Some(ldr) if out.fxaa => (ldr, crate::aa::LDR_FORMAT),
@@ -1166,6 +1222,7 @@ impl SceneRenderer {
             mode = AntiAliasing::Fxaa;
         }
         let taa = mode == AntiAliasing::Taa;
+        let fx = capture.is_none() && crate::postfx::PostFx::wanted(&frame.environment.post);
         let samples = if taa || !aa.allow_msaa {
             1
         } else {
@@ -1811,8 +1868,8 @@ impl SceneRenderer {
                     view: &targets.depth,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(0.0),
-                        // TAA reads depth afterwards.
-                        store: if taa {
+                        // TAA and depth-based post effects read depth afterwards.
+                        store: if taa || fx {
                             wgpu::StoreOp::Store
                         } else {
                             wgpu::StoreOp::Discard
@@ -1953,6 +2010,7 @@ impl SceneRenderer {
                 samples,
                 taa: taa_key,
                 fxaa: mode == AntiAliasing::Fxaa,
+                fx,
             },
         )
     }
@@ -1964,6 +2022,8 @@ struct SceneOutput {
     /// TAA history holding the anti-aliased HDR image (else it is the resolve target).
     taa: Option<(u64, u32, u32)>,
     fxaa: bool,
+    /// Depth of field or motion blur runs.
+    fx: bool,
 }
 
 /// An object in the motion-vector pass.

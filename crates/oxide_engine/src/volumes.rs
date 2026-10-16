@@ -6,13 +6,14 @@
 use oxide_math::{Color, Vector2, Vector3, Vector4};
 use oxide_physics::{BoxCollider, CapsuleCollider, SphereCollider};
 use oxide_render::{
-    BloomSettings, LensDistortionSettings, PostSettings, TonemapMode, VignetteSettings,
+    BloomSettings, DofMode, DofSettings, LensDistortionSettings, PostSettings, TonemapMode,
+    VignetteSettings,
 };
 use oxide_scene::{
-    Bloom, ChannelMixer, ChromaticAberration, ColorAdjustments, Component, DepthOfField, FilmGrain,
-    GameObjectId, LensDistortion, LiftGammaGain, MotionBlur, RenderSettings,
-    ShadowsMidtonesHighlights, SplitToning, Tonemapping, TonemappingMode, Vignette, Volume,
-    WhiteBalance, World,
+    Bloom, ChannelMixer, ChromaticAberration, ColorAdjustments, Component, DepthOfField,
+    DepthOfFieldMode, FilmGrain, GameObjectId, LensDistortion, LiftGammaGain, MotionBlur,
+    RenderSettings, ShadowsMidtonesHighlights, SplitToning, Tonemapping, TonemappingMode, Vignette,
+    Volume, WhiteBalance, World,
 };
 use std::collections::HashMap;
 
@@ -170,6 +171,26 @@ impl VolumeStack {
                 center: self.distortion_center.to_array(),
                 scale: self.distortion_scale,
             },
+            depth_of_field: {
+                let d = &self.depth_of_field;
+                DofSettings {
+                    mode: match d.mode.value {
+                        DepthOfFieldMode::Off => DofMode::Off,
+                        DepthOfFieldMode::Gaussian => DofMode::Gaussian,
+                        DepthOfFieldMode::Bokeh => DofMode::Bokeh,
+                    },
+                    gaussian_start: d.gaussian_start.value,
+                    gaussian_end: d.gaussian_end.value,
+                    gaussian_max_radius: d.gaussian_max_radius.value,
+                    focus_distance: d.focus_distance.value,
+                    focal_length: d.focal_length.value,
+                    aperture: d.aperture.value,
+                }
+            },
+            motion_blur: [
+                self.motion_blur.intensity.value,
+                self.motion_blur.clamp.value,
+            ],
         }
     }
 }
