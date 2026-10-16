@@ -1029,6 +1029,91 @@ impl<'a> Sampler<'a> {
     }
 }
 
+/// One clip sampled by [`play_clips`] at `time` (seconds into the clip) with `weight`.
+pub struct ClipSample<'a> {
+    pub clip: &'a AnimationClip,
+    pub time: f32,
+    pub weight: f32,
+}
+
+/// The pose objects had before something animated them (Timeline blends toward it when no
+/// Animator Controller writes a fresh pose each frame).
+#[derive(Clone, Debug, Default)]
+pub struct RestPose {
+    pub transforms: HashMap<GameObjectId, (Vector3, Quaternion, Vector3)>,
+    pub props: HashMap<(GameObjectId, String, String), f32>,
+}
+
+/// Samples `samples` (weights normalised) onto the hierarchy under `root`, blended over its
+/// current pose (or over `rest`, recorded the first time each value is written) by `blend`
+/// (0..1). Used by Timeline animation tracks: their output
+/// overrides the Animator's (which ran earlier in the frame) and fades into it while a clip
+/// eases in or out. `offset` (position, rotation) moves the root's animated position and
+/// rotation (Timeline track offsets).
+#[allow(clippy::too_many_arguments)]
+pub fn play_clips(
+    world: &mut World,
+    assets: &AssetServer,
+    root: GameObjectId,
+    bindings: &mut HashMap<String, Option<GameObjectId>>,
+    samples: &[ClipSample],
+    blend: f32,
+    offset: Option<(Vector3, Quaternion)>,
+    mask: Option<&AvatarMask>,
+    mut rest: Option<&mut RestPose>,
+) {
+    let blend = blend.clamp(0.0, 1.0);
+    if blend <= 0.0 || samples.is_empty() {
+        return;
+    }
+    let (pose, props, objs) = {
+        let mut s = Sampler::new(world, assets, root, bindings);
+        s.collect_events = false;
+        s.mask = mask;
+        for c in samples {
+            s.clip(c.clip, c.time, c.time, false, c.weight.max(0.0), false);
+        }
+        let objs: HashMap<PropKey, String> = s.objs.into_iter().map(|(k, (v, _))| (k, v)).collect();
+        (finalize(s.pose), finalize_props(s.props), objs)
+    };
+    for (id, (mut p, mut r, s)) in pose {
+        if id == root
+            && let Some((op, or)) = offset
+        {
+            p = p.map(|p| or * p + op);
+            r = r.map(|r| or * r);
+        }
+        let Some(t) = world.transform_mut(id) else {
+            continue;
+        };
+        let cur = (t.local_position, t.local_rotation, t.local_scale);
+        let base = match rest.as_deref_mut() {
+            Some(r) => *r.transforms.entry(id).or_insert(cur),
+            None => cur,
+        };
+        if let Some(p) = p {
+            t.local_position = base.0.lerp(p, blend);
+        }
+        if let Some(r) = r {
+            t.local_rotation = base.1.slerp(r.normalize(), blend).normalize();
+        }
+        if let Some(s) = s {
+            t.local_scale = base.2.lerp(s, blend);
+        }
+    }
+    for ((id, c, p), x) in props {
+        let cur = read_property(world, id, &c, &p).unwrap_or(x);
+        let base = match rest.as_deref_mut() {
+            Some(r) => *r.props.entry((id, c.clone(), p.clone())).or_insert(cur),
+            None => cur,
+        };
+        write_property(world, id, &c, &p, base + (x - base) * blend);
+    }
+    if blend >= 0.5 {
+        apply_objs(world, objs);
+    }
+}
+
 fn blend_weights_1d(thresholds: impl Iterator<Item = f32>, v: f32) -> Vec<(usize, f32)> {
     let t: Vec<f32> = thresholds.collect();
     if t.is_empty() {

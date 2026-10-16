@@ -2653,6 +2653,7 @@ dependencies = [
  "oxide_standard",
  "oxide_terrain",
  "oxide_text",
+ "oxide_timeline",
  "oxide_ui",
  "png",
  "pollster",
@@ -2833,6 +2834,20 @@ dependencies = [
  "oxide_render",
  "oxide_scene",
  "pollster",
+]
+
+[[package]]
+name = "oxide_timeline"
+version = "0.1.0"
+dependencies = [
+ "oxide_animation",
+ "oxide_assets",
+ "oxide_audio",
+ "oxide_core",
+ "oxide_math",
+ "oxide_particles",
+ "oxide_scene",
+ "serde_json",
 ]
 
 [[package]]

@@ -233,6 +233,10 @@ pub fn menu_items(world: &World, keymap: &Keymap) -> Vec<MenuItem> {
         ));
     }
     v.push(item(
+        "Window/Sequencing/Timeline",
+        Action::OpenTab(Tab::Timeline),
+    ));
+    v.push(item(
         "Window/AI/Navigation",
         Action::OpenTab(Tab::Navigation),
     ));

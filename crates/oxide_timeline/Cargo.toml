@@ -1,0 +1,19 @@
+[package]
+name = "oxide_timeline"
+description = "Oxide Timeline: Timeline assets, PlayableDirector, animation/activation/audio/signal/control/playable tracks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+oxide_math.workspace = true
+oxide_core.workspace = true
+oxide_assets.workspace = true
+oxide_scene.workspace = true
+oxide_animation.workspace = true
+oxide_audio.workspace = true
+oxide_particles.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

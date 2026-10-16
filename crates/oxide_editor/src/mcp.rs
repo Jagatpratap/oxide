@@ -299,6 +299,7 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
             crate::Tab::SpriteEditor,
             crate::Tab::TilePalette,
             crate::Tab::Navigation,
+            crate::Tab::Timeline,
         ])
         .map(|t| t.title())
         .collect();
@@ -331,6 +332,7 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
                     crate::Tab::SpriteEditor,
                     crate::Tab::TilePalette,
                     crate::Tab::Navigation,
+                    crate::Tab::Timeline,
                 ]);
                 let Some(tab) = all
                     .into_iter()
@@ -517,6 +519,44 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
                     return ToolResult::error(err);
                 }
                 ToolResult::json(ed.st.animation.state_json())
+            })
+        },
+    );
+
+    tool(
+        s,
+        bus,
+        ToolDef::new(
+            "editor_timeline",
+            "Timeline window",
+            "The Timeline window (Unity Timeline): returns the edited Director, Timeline asset, playhead, preview \
+             and record state, and every track with its clips and markers. `create` (an object) adds a \
+             PlayableDirector and a new .playable with an Animation track bound to it; `open` a .playable; \
+             `director` picks the Director to edit. Edits: `add_track` {type: Animation|Activation|Audio|Signal|\
+             Control|Playable|Group, name?, group?} (with `bind` = object to bind it), `add_clip` {track, source \
+             (clip/audio/prefab path, behaviour type, or object name), start, duration?, ease_in?, ease_out?, \
+             clip_in?, speed?} (`source_object` for Control clips), `add_marker` {track?, time, signal \
+             (.signal path, created if missing), retroactive?, emit_once?}, `set_clip` {track, clip, ...fields}, \
+             `delete` {track, clip? | marker?}, `bind` (object) with `track`. Preview: `time` (seconds), \
+             `preview`, `play`, `record` (animation track index, or false).",
+            schema(
+                json!({
+                    "create": {}, "open": { "type": "string" }, "director": {},
+                    "add_track": { "type": "object" }, "add_clip": { "type": "object" },
+                    "add_marker": { "type": "object" }, "set_clip": { "type": "object" },
+                    "delete": { "type": "object" }, "bind": {}, "track": {}, "source_object": {},
+                    "time": { "type": "number" }, "preview": { "type": "boolean" },
+                    "play": { "type": "boolean" }, "record": {}
+                }),
+                &[],
+            ),
+        ),
+        |args, e| {
+            with_editor(e, |ed, e| {
+                match crate::timeline_window::mcp(&mut ed.st, e, args) {
+                    Ok(j) => ToolResult::json(j),
+                    Err(err) => ToolResult::error(err),
+                }
             })
         },
     );

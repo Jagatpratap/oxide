@@ -1370,6 +1370,10 @@ pub fn open(
             st.animation.open_clip(path);
             st.actions.push(Action::OpenTab(crate::Tab::Animation));
         }
+        "TimelineAsset" => {
+            st.timeline.open_asset(&engine.world, path);
+            st.actions.push(Action::OpenTab(crate::Tab::Timeline));
+        }
         "AudioMixer" => {
             st.audio_mixer.open(path);
             st.actions.push(Action::OpenTab(crate::Tab::AudioMixer));

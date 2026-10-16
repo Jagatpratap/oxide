@@ -161,6 +161,15 @@ pub struct Audio {
     /// Snapshot and exposed-parameter state per mixer (kept even without a device).
     pub mixer_states: HashMap<String, mixer::MixerState>,
     mixer_generation: u64,
+    /// Voices driven by an outside clock (Timeline audio clips), by caller key.
+    timed: HashMap<u64, TimedVoice>,
+}
+
+struct TimedVoice {
+    _output: Output,
+    sound: StaticSoundHandle,
+    clip: AssetId,
+    paused: bool,
 }
 
 fn db(v: f32) -> f32 {
@@ -189,7 +198,96 @@ impl Audio {
             mixers: HashMap::new(),
             mixer_states: HashMap::new(),
             mixer_generation: 0,
+            timed: HashMap::new(),
         }
+    }
+
+    /// Keeps the voice `key` playing `clip` at `position` seconds into it (Timeline audio
+    /// clips): starts it there, seeks when it drifts, pauses it when `playing` is false.
+    /// `at` makes it a 3D sound at that point. Voices not kept by
+    /// [`Audio::retain_timed_voices`] stop.
+    #[allow(clippy::too_many_arguments)]
+    pub fn sync_timed_voice(
+        &mut self,
+        assets: &AssetServer,
+        key: u64,
+        clip: &Handle<AudioClip>,
+        position: f64,
+        volume: f32,
+        speed: f32,
+        looping: bool,
+        playing: bool,
+        at: Option<Vector3>,
+    ) {
+        if self.timed.get(&key).is_some_and(|v| v.clip != clip.id())
+            && let Some(mut v) = self.timed.remove(&key)
+        {
+            v.sound.stop(Tween::default());
+        }
+        let vol = db(volume * self.master_volume);
+        if let Some(v) = self.timed.get_mut(&key) {
+            if playing && v.paused {
+                v.sound.seek_to(position);
+                v.sound.resume(Tween::default());
+                v.paused = false;
+            } else if !playing && !v.paused {
+                v.sound.pause(Tween::default());
+                v.paused = true;
+            }
+            if playing && !looping && (v.sound.position() - position).abs() > 0.15 {
+                v.sound.seek_to(position);
+            }
+            v.sound.set_volume(vol, Tween::default());
+            v.sound
+                .set_playback_rate(f64::from(speed.max(0.01)), Tween::default());
+            return;
+        }
+        if !playing {
+            return;
+        }
+        let Some(data) = self.clip_data(assets, clip) else {
+            return;
+        };
+        let pos = at.unwrap_or(Vector3::ZERO);
+        let Some(mut out) = self.make_output(at.is_some(), pos, 1.0, 500.0, false) else {
+            return;
+        };
+        let data = if looping { data.loop_region(..) } else { data };
+        let data = data
+            .start_position(position.max(0.0))
+            .volume(vol)
+            .playback_rate(f64::from(speed.max(0.01)));
+        let handle = match &mut out {
+            Output::Spatial(t) => t.play(data).ok(),
+            Output::Flat(t) => t.play(data).ok(),
+        };
+        if let Some(sound) = handle {
+            self.timed.insert(
+                key,
+                TimedVoice {
+                    _output: out,
+                    sound,
+                    clip: clip.id(),
+                    paused: false,
+                },
+            );
+        }
+    }
+
+    /// Stops every timed voice whose key `keep` rejects.
+    pub fn retain_timed_voices(&mut self, keep: impl Fn(u64) -> bool) {
+        self.timed.retain(|k, v| {
+            let k = keep(*k);
+            if !k {
+                v.sound.stop(Tween::default());
+            }
+            k
+        });
+    }
+
+    /// Keys of the timed voices currently alive.
+    pub fn timed_voice_keys(&self) -> Vec<u64> {
+        self.timed.keys().copied().collect()
     }
 
     /// Unity `AudioMixer.SetFloat`: sets an exposed parameter (`"MusicVol"`, dB for

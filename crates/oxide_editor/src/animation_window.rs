@@ -38,7 +38,7 @@ enum Row {
 }
 
 #[derive(Clone, Copy, Default)]
-struct Local {
+pub(crate) struct Local {
     p: Vector3,
     r: Quaternion,
     s: Vector3,
@@ -46,10 +46,10 @@ struct Local {
 
 /// Values the preview last wrote, to spot edits made while recording.
 #[derive(Default)]
-struct Snapshot {
-    transforms: HashMap<GameObjectId, Local>,
+pub(crate) struct Snapshot {
+    pub(crate) transforms: HashMap<GameObjectId, Local>,
     /// (object, component, property) → value.
-    props: HashMap<(GameObjectId, String, String), f32>,
+    pub(crate) props: HashMap<(GameObjectId, String, String), f32>,
     /// Asset and text fields (sprites, resolver labels).
     objs: HashMap<(GameObjectId, String, String), String>,
 }
@@ -434,7 +434,7 @@ fn set_curve_key(curve: &mut AnimationCurve, t: f32, v: f32) {
 // ---- preview and recording --------------------------------------------------------------
 
 /// Every animatable value under `root`: transforms and numeric component fields.
-fn snapshot(world: &World, root: GameObjectId) -> Snapshot {
+pub(crate) fn snapshot(world: &World, root: GameObjectId) -> Snapshot {
     let mut s = Snapshot::default();
     let mut ids = vec![root];
     ids.extend(world.descendants(root));
@@ -480,7 +480,7 @@ fn snapshot(world: &World, root: GameObjectId) -> Snapshot {
     s
 }
 
-fn restore(world: &mut World, s: &Snapshot) {
+pub(crate) fn restore(world: &mut World, s: &Snapshot) {
     for (id, l) in &s.transforms {
         if let Some(t) = world.transform_mut(*id) {
             t.local_position = l.p;
@@ -531,7 +531,7 @@ fn sample(world: &mut World, root: GameObjectId, clip: &AnimationClip, t: f32) {
 
 /// Record mode: anything under `root` that changed since the preview last wrote it gets a
 /// key at `t`. Returns whether the clip changed.
-fn record(
+pub(crate) fn record(
     world: &World,
     root: GameObjectId,
     clip: &mut AnimationClip,

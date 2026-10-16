@@ -21,6 +21,7 @@ pub mod mcp_prefabs;
 pub mod mcp_rendering;
 pub mod mcp_streaming;
 pub mod mcp_terrain;
+mod mcp_timeline;
 pub mod mcp_tools;
 pub mod navigation;
 pub mod objects;
@@ -48,6 +49,7 @@ pub use oxide_scene as scene;
 pub use oxide_standard as standard;
 pub use oxide_terrain as terrain;
 pub use oxide_text as text;
+pub use oxide_timeline as timeline;
 pub use oxide_ui as ui;
 
 /// Physics (Rapier) with Unity's components and `Physics` API.
@@ -129,6 +131,19 @@ impl Plugin for ParticlesPlugin {
     }
 }
 
+/// Timeline: PlayableDirector and its tracks (after animation, audio and particles).
+pub struct TimelinePlugin;
+
+impl Plugin for TimelinePlugin {
+    fn build(
+        &self,
+        world: &mut oxide_scene::World,
+        systems: &mut Vec<Box<dyn oxide_scene::System>>,
+    ) {
+        systems.push(oxide_timeline::install(world));
+    }
+}
+
 /// AI Navigation: NavMeshSurface baking, NavMeshAgent, NavMeshObstacle, NavMeshLink.
 pub struct NavigationPlugin;
 
@@ -173,6 +188,7 @@ pub fn default_plugins() -> Vec<Box<dyn Plugin>> {
         Box::new(UiPlugin),
         Box::new(TerrainPlugin),
         Box::new(ParticlesPlugin),
+        Box::new(TimelinePlugin),
         Box::new(NavigationPlugin),
         Box::new(NetworkPlugin),
         Box::new(StandardAssetsPlugin),
@@ -217,6 +233,11 @@ pub mod prelude {
     pub use oxide_text::{
         FontAsset, FontStyles, HorizontalAlignment, TextMaterial, TextMeshPro, TextOverflowModes,
         VerticalAlignment,
+    };
+    pub use oxide_timeline::{
+        ClipExtrapolation, DirectorUpdateMode, DirectorWrapMode, FrameInfo, PlayState,
+        PlayableBehaviour, PlayableBehaviours, PlayableDirector, SignalAsset, SignalReceiver,
+        TimelineAsset, TimelineClip, TrackAsset, TrackType,
     };
     pub use oxide_ui::{
         Anchor, Canvas, Gui, GuiExt, TextAlign, TextMeshProUGUI, UIButton, UIImage, UISlider,

@@ -37,14 +37,16 @@ pub fn loaded_build_id() -> &'static str {
 /// Declares a Scripts library's components: `Type => "Menu/Path"` for Add Component, then
 /// optionally `; editors: Type, ...` for components with a custom Inspector,
 /// `; assets: Type => ("ext", "Create/Menu")` for data asset types (ScriptableObjects), and
-/// `; behaviours: Type, ...` for StateMachineBehaviours (Add Behaviour on Animator states).
+/// `; behaviours: Type, ...` for StateMachineBehaviours (Add Behaviour on Animator states),
+/// and `; playables: Type, ...` for Timeline `PlayableBehaviour`s (Playable track clips).
 /// Expands to the entry points the editor calls after loading the library.
 #[macro_export]
 macro_rules! scripts {
     ($($ty:ty => $menu:expr),* $(,)?
      $(; editors: $($ed:ty),* $(,)?)?
      $(; assets: $($at:ty => ($ext:expr, $amenu:expr)),* $(,)?)?
-     $(; behaviours: $($bt:ty),* $(,)?)?) => {
+     $(; behaviours: $($bt:ty),* $(,)?)?
+     $(; playables: $($pt:ty),* $(,)?)?) => {
         /// Engine build these scripts were compiled against.
         #[unsafe(no_mangle)]
         pub fn oxide_scripts_build_id() -> &'static str {
@@ -77,6 +79,13 @@ macro_rules! scripts {
         pub fn oxide_register_behaviours(b: &mut $crate::animation::StateMachineBehaviours) {
             let _ = &b;
             $($( b.register::<$bt>(); )*)?
+        }
+
+        /// Registers the Timeline PlayableBehaviour types (`playables:`).
+        #[unsafe(no_mangle)]
+        pub fn oxide_register_playables(p: &mut $crate::timeline::PlayableBehaviours) {
+            let _ = &p;
+            $($( p.register::<$pt>(); )*)?
         }
     };
 }

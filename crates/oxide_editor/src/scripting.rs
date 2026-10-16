@@ -57,6 +57,8 @@ pub struct ScriptHost {
     pub script_asset_types: Vec<String>,
     /// StateMachineBehaviour types the loaded library registered.
     pub script_behaviour_types: Vec<String>,
+    /// Timeline PlayableBehaviour types the loaded library registered.
+    pub script_playable_types: Vec<String>,
     libraries: Vec<libloading::Library>,
     generation: u32,
     pub last_build_seconds: f32,
@@ -171,6 +173,7 @@ impl ScriptHost {
             script_types: Vec::new(),
             script_asset_types: Vec::new(),
             script_behaviour_types: Vec::new(),
+            script_playable_types: Vec::new(),
             libraries: Vec::new(),
             generation: 0,
             last_build_seconds: 0.0,
@@ -299,6 +302,9 @@ impl ScriptHost {
         let register_behaviours: Option<
             libloading::Symbol<fn(&mut oxide_engine::animation::StateMachineBehaviours)>,
         > = unsafe { lib.get(b"oxide_register_behaviours") }.ok();
+        let register_playables: Option<
+            libloading::Symbol<fn(&mut oxide_engine::timeline::PlayableBehaviours)>,
+        > = unsafe { lib.get(b"oxide_register_playables") }.ok();
 
         let w = &mut engine.world;
         let old = std::mem::take(&mut self.script_types);
@@ -330,6 +336,24 @@ impl ScriptHost {
                 let before = b.names();
                 f(b);
                 self.script_behaviour_types = b
+                    .names()
+                    .into_iter()
+                    .filter(|n| !before.contains(n))
+                    .collect();
+            }
+        }
+        // Timeline PlayableBehaviours, the same way.
+        {
+            use oxide_engine::timeline::PlayableBehaviours;
+            if !w.resources.contains::<PlayableBehaviours>() {
+                w.resources.insert(PlayableBehaviours::default());
+            }
+            let b = w.resource_mut::<PlayableBehaviours>();
+            b.remove(&std::mem::take(&mut self.script_playable_types));
+            if let Some(f) = &register_playables {
+                let before = b.names();
+                f(b);
+                self.script_playable_types = b
                     .names()
                     .into_iter()
                     .filter(|n| !before.contains(n))

@@ -177,6 +177,11 @@ impl AssetServer {
         Handle::from_path(p.mesh_path())
     }
 
+    /// Whether a file exists at this project path (`Assets/...`).
+    pub fn exists(&self, path: &str) -> bool {
+        self.full_path(path).exists()
+    }
+
     pub fn full_path(&self, path: &str) -> PathBuf {
         let p = Path::new(path);
         if p.is_absolute() {

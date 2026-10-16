@@ -38,6 +38,7 @@ mod sprite_editor;
 mod terrain_tools;
 mod theme;
 mod tile_palette;
+mod timeline_window;
 mod undo;
 mod view;
 mod visibility;
@@ -74,6 +75,7 @@ pub enum Tab {
     SpriteEditor,
     TilePalette,
     Navigation,
+    Timeline,
 }
 
 impl Tab {
@@ -107,6 +109,7 @@ impl Tab {
             Tab::SpriteEditor => "Sprite Editor",
             Tab::TilePalette => "Tile Palette",
             Tab::Navigation => "Navigation",
+            Tab::Timeline => "Timeline",
         }
     }
 }
@@ -336,6 +339,7 @@ pub struct EditorState {
     input_actions: input_actions_window::InputActionsWindow,
     animator: animator_window::AnimatorWindow,
     animation: animation_window::AnimationWindow,
+    pub(crate) timeline: timeline_window::TimelineWindow,
     mask: anim_inspectors::MaskState,
     audio_mixer: audio_mixer_window::AudioMixerWindow,
     sprite_editor: sprite_editor::SpriteEditorWindow,
@@ -398,6 +402,7 @@ impl EditorState {
             input_actions: Default::default(),
             animator: Default::default(),
             animation: Default::default(),
+            timeline: Default::default(),
             mask: Default::default(),
             audio_mixer: Default::default(),
             sprite_editor: Default::default(),
@@ -604,6 +609,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::SpriteEditor => sprite_editor::window_ui(self.st, self.engine, ui),
             Tab::TilePalette => tile_palette::window_ui(self.st, self.engine, ui),
             Tab::Navigation => navigation_window::window_ui(self.st, self.engine, ui),
+            Tab::Timeline => timeline_window::window_ui(self.st, self.engine, ui),
         }
     }
 
@@ -706,7 +712,10 @@ impl Editor {
             .map(|(p, _)| p);
         // A working window left in a side panel by an older layout moves beside the Scene.
         if let Some(path) = found
-            && matches!(tab, Tab::Animator | Tab::Animation | Tab::AudioMixer)
+            && matches!(
+                tab,
+                Tab::Animator | Tab::Animation | Tab::AudioMixer | Tab::Timeline
+            )
             && self.dock.iter_all_tabs().any(|(p, t)| {
                 p.node_path() == path.node_path()
                     && matches!(
@@ -746,11 +755,13 @@ impl Editor {
         } else {
             // Big working windows dock beside the Scene view, as in Unity's default layout,
             // not into whichever small panel had focus.
-            if matches!(tab, Tab::Animator | Tab::Animation | Tab::AudioMixer)
-                && let Some(p) = self
-                    .dock
-                    .find_tab(&Tab::Scene)
-                    .or_else(|| self.dock.find_tab(&Tab::Game))
+            if matches!(
+                tab,
+                Tab::Animator | Tab::Animation | Tab::AudioMixer | Tab::Timeline
+            ) && let Some(p) = self
+                .dock
+                .find_tab(&Tab::Scene)
+                .or_else(|| self.dock.find_tab(&Tab::Game))
             {
                 self.dock.set_focused_node_and_surface(p.node_path());
             }
@@ -1277,6 +1288,16 @@ impl Editor {
         {
             b.clear();
         }
+        if let Some(b) = w
+            .resources
+            .get_mut::<oxide_engine::timeline::PlayableBehaviours>()
+        {
+            b.clear();
+        }
+        // Timeline sounds stop with Play mode.
+        if let Some(a) = w.resources.get_mut::<oxide_engine::audio::Audio>() {
+            a.retain_timed_voices(|_| false);
+        }
         if let Some(snap) = st.play_snapshot.take() {
             st.selection = snap.restore(w);
         }
@@ -1716,6 +1737,8 @@ impl Shell for Editor {
             .iter_all_tabs()
             .any(|(_, t)| *t == Tab::TilePalette);
         animation_window::end_preview_if(&mut self.st, engine, animation_open);
+        let timeline_open = self.dock.iter_all_tabs().any(|(_, t)| *t == Tab::Timeline);
+        timeline_window::tick(&mut self.st, engine, timeline_open);
         shortcuts::dispatch(&mut self.st, engine, &ctx);
         self.st.previews.update(engine, &ctx);
         // The Project window claims keyboard commands when it is clicked (it sets this).

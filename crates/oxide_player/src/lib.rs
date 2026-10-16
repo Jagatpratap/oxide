@@ -19,7 +19,8 @@ macro_rules! scripts {
     ($($ty:ty => $menu:expr),* $(,)?
      $(; editors: $($ed:ty),* $(,)?)?
      $(; assets: $($at:ty => ($ext:expr, $amenu:expr)),* $(,)?)?
-     $(; behaviours: $($bt:ty),* $(,)?)?) => {
+     $(; behaviours: $($bt:ty),* $(,)?)?
+     $(; playables: $($pt:ty),* $(,)?)?) => {
         pub fn oxide_scripts_build_id() -> &'static str {
             $crate::BUILD_ID
         }
@@ -36,6 +37,12 @@ macro_rules! scripts {
         pub fn oxide_register_behaviours(b: &mut $crate::animation::StateMachineBehaviours) {
             let _ = &b;
             $($( b.register::<$bt>(); )*)?
+        }
+
+        /// Registers the Timeline PlayableBehaviour types (`playables:`).
+        pub fn oxide_register_playables(p: &mut $crate::timeline::PlayableBehaviours) {
+            let _ = &p;
+            $($( p.register::<$pt>(); )*)?
         }
     };
 }
@@ -107,7 +114,20 @@ pub fn run_scripts_with_behaviours(
     run_scripts(register, register_assets)
 }
 
+/// [`run_scripts_with_behaviours`] plus the Scripts' Timeline PlayableBehaviours.
+pub fn run_scripts_full(
+    register: fn(&mut scene::ComponentRegistry),
+    register_assets: fn(&mut assets::AssetServer),
+    register_behaviours: fn(&mut animation::StateMachineBehaviours),
+    register_playables: fn(&mut timeline::PlayableBehaviours),
+) -> std::process::ExitCode {
+    PLAYABLES.with(|b| b.set(Some(register_playables)));
+    run_scripts_with_behaviours(register, register_assets, register_behaviours)
+}
+
 thread_local! {
+    static PLAYABLES: std::cell::Cell<Option<fn(&mut timeline::PlayableBehaviours)>> =
+        const { std::cell::Cell::new(None) };
     static BEHAVIOURS: std::cell::Cell<Option<fn(&mut animation::StateMachineBehaviours)>> =
         const { std::cell::Cell::new(None) };
 }
@@ -147,6 +167,13 @@ pub fn run_scripts(
                 .insert(animation::StateMachineBehaviours::default());
         }
         f(w.resource_mut::<animation::StateMachineBehaviours>());
+    }
+    if let Some(f) = PLAYABLES.with(std::cell::Cell::get) {
+        let w = app.world_mut();
+        if !w.resources.contains::<timeline::PlayableBehaviours>() {
+            w.resources.insert(timeline::PlayableBehaviours::default());
+        }
+        f(w.resource_mut::<timeline::PlayableBehaviours>());
     }
     app.world_mut().resource_mut::<AppControl>().build_scenes = info.scenes.clone();
     let first = info.scenes.first().cloned();

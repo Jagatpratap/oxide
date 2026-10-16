@@ -276,10 +276,11 @@ scripts = {{ path = "../scripts" }}
 #![windows_subsystem = "windows"]
 
 fn main() -> std::process::ExitCode {
-    oxide::run_scripts_with_behaviours(
+    oxide::run_scripts_full(
         scripts::oxide_register_scripts,
         scripts::oxide_register_assets,
         scripts::oxide_register_behaviours,
+        scripts::oxide_register_playables,
     )
 }
 "#,

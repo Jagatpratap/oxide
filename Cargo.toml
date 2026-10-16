@@ -24,6 +24,7 @@ oxide_animation = { path = "crates/oxide_animation" }
 oxide_ui = { path = "crates/oxide_ui" }
 oxide_terrain = { path = "crates/oxide_terrain" }
 oxide_text = { path = "crates/oxide_text" }
+oxide_timeline = { path = "crates/oxide_timeline" }
 oxide_lightmapper = { path = "crates/oxide_lightmapper" }
 oxide_particles = { path = "crates/oxide_particles" }
 oxide_navigation = { path = "crates/oxide_navigation" }
