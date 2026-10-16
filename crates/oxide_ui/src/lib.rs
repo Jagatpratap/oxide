@@ -259,6 +259,9 @@ pub struct Gui {
     /// Screen area the game UI lays out in, in egui points. `None` = the whole window; the
     /// editor sets it to the Game view.
     pub viewport: Option<egui::Rect>,
+    /// Synthetic input (MCP UI testing): one batch of events is added to each frame's
+    /// input, in order.
+    pub injected_input: std::collections::VecDeque<Vec<egui::Event>>,
 }
 
 impl Gui {
@@ -271,6 +274,7 @@ impl Gui {
             wants_pointer: false,
             wants_keyboard: false,
             viewport: None,
+            injected_input: Default::default(),
         }
     }
 

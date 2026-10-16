@@ -50,8 +50,11 @@ impl GuiLayer {
     }
 
     pub fn begin(&mut self, window: &Window, world: &mut World) {
-        let raw = self.state.take_egui_input(window);
+        let mut raw = self.state.take_egui_input(window);
         let gui = world.resource_mut::<Gui>();
+        if let Some(events) = gui.injected_input.pop_front() {
+            raw.events.extend(events);
+        }
         gui.ctx().begin_pass(raw);
         gui.in_frame = true;
     }

@@ -27,6 +27,8 @@ pub struct InspectorState {
     pub debug: bool,
     /// Locked Inspector: keeps showing these objects whatever is selected.
     pub locked: Option<Vec<GameObjectId>>,
+    /// A component type to expand and scroll into view on the next frame (MCP).
+    pub scroll_to: Option<String>,
 }
 
 impl InspectorState {
@@ -833,11 +835,18 @@ fn components(
             })
             .collect();
         ui.separator();
-        let state = egui::collapsing_header::CollapsingState::load_with_default_open(
+        let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
             ui.ctx(),
             egui::Id::new(("component", id.to_bits(), cid.0)),
             true,
         );
+        if st.inspector.scroll_to.as_deref().is_some_and(|t| {
+            t.eq_ignore_ascii_case(type_name) || t.eq_ignore_ascii_case(&nicify(type_name))
+        }) {
+            st.inspector.scroll_to = None;
+            state.set_open(true);
+            ui.scroll_to_cursor(Some(egui::Align::TOP));
+        }
         let missing = w
             .component::<oxide_scene::MissingScript>(id, cid)
             .map(|m| m.script.clone());
@@ -1217,6 +1226,9 @@ fn value_ui(
                 }
             });
             changed
+        }
+        Value::Object(_) if crate::curve_editor::handles(type_name) => {
+            crate::curve_editor::value_field(ui, type_name, v, salt)
         }
         // A Volume parameter: Unity's override checkbox, then the value (greyed out while
         // not overridden). The field's own info (range, enum options) applies to the value.

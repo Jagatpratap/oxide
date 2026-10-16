@@ -103,22 +103,13 @@ pub fn derive_reflect(input: TokenStream) -> TokenStream {
     result.unwrap_or_else(|e| e.to_compile_error()).into()
 }
 
-/// Whether a struct can be built from its `Default` when nested values arrive whole (lists
-/// of structs): it derives `Default`, or says `#[reflect(default)]` (for a manual impl).
-fn has_default(input: &DeriveInput) -> syn::Result<bool> {
-    let mut yes = false;
+/// Checks the struct's `#[reflect(...)]` attributes (`default` is accepted for older code;
+/// `Default` is now found automatically).
+fn check_struct_attrs(input: &DeriveInput) -> syn::Result<()> {
     for attr in &input.attrs {
-        if attr.path().is_ident("derive") {
-            attr.parse_nested_meta(|m| {
-                if m.path.is_ident("Default") {
-                    yes = true;
-                }
-                Ok(())
-            })?;
-        } else if attr.path().is_ident("reflect") {
+        if attr.path().is_ident("reflect") {
             attr.parse_nested_meta(|m| {
                 if m.path.is_ident("default") {
-                    yes = true;
                     Ok(())
                 } else {
                     Err(m.error("expected `default` on a struct"))
@@ -126,21 +117,18 @@ fn has_default(input: &DeriveInput) -> syn::Result<bool> {
             })?;
         }
     }
-    Ok(yes)
+    Ok(())
 }
 
 fn derive_struct(input: &DeriveInput, fields: &Fields) -> syn::Result<TokenStream2> {
     let core = core_path();
-    let from_default = if has_default(input)? {
-        quote! {
-            let mut s = <Self as ::core::default::Default>::default();
-            #core::reflect::FieldValue::set_from(&mut s, v).then_some(s)
-        }
-    } else {
-        quote! {
-            let _ = v;
-            None
-        }
+    check_struct_attrs(input)?;
+    // Built from `Default` when the type has one (nested structs arriving whole, in lists).
+    let from_default = quote! {
+        #[allow(unused_imports)]
+        use #core::reflect::__private::{NoDefault as _, ViaDefault as _};
+        let mut s: Self = (&#core::reflect::__private::Maker::<Self>(::core::marker::PhantomData)).make()?;
+        #core::reflect::FieldValue::set_from(&mut s, v).then_some(s)
     };
     let ty = &input.ident;
     let ty_name = ty.to_string();

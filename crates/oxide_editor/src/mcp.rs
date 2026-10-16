@@ -417,9 +417,10 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
             "editor_inspector",
             "Inspector lock and Debug mode",
             "Locks the Inspector to the current selection (`lock`: true) or unlocks it, toggles Debug mode, and \
-             returns which objects the Inspector shows. With several objects selected the Inspector edits them all.",
+             returns which objects the Inspector shows. With several objects selected the Inspector edits them all. \
+             `scroll_to` (a component type, e.g. \"CarController\") expands that component and scrolls it into view.",
             schema(
-                json!({ "lock": { "type": "boolean" }, "debug": { "type": "boolean" } }),
+                json!({ "lock": { "type": "boolean" }, "debug": { "type": "boolean" }, "scroll_to": { "type": "string" } }),
                 &[],
             ),
         ),
@@ -431,6 +432,9 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
                 }
                 if let Some(d) = args.get("debug").and_then(Json::as_bool) {
                     ins.debug = d;
+                }
+                if let Some(t) = args.get("scroll_to").and_then(Json::as_str) {
+                    ins.scroll_to = Some(t.to_owned());
                 }
                 let shown = ins
                     .locked
@@ -444,6 +448,146 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
                     json!({ "locked": ins.locked.is_some(), "debug": ins.debug, "inspecting": names }),
                 )
             })
+        },
+    );
+
+    tool(
+        s,
+        bus,
+        ToolDef::new(
+            "editor_ui_input",
+            "Click, drag, scroll or type in the editor UI",
+            "Sends synthetic mouse and keyboard input to the editor's UI, for testing windows that need \
+             the pointer (curve editors, gizmo drags, menus). Coordinates are UI points, the same as pixels \
+             in an `editor_capture` image. `action`: click | double_click | right_click | move | drag (from \
+             x,y to `to` [x, y] over `steps` frames) | scroll (`delta` points, positive scrolls content down) \
+             | key (`key` name such as \"Delete\", \"F\", \"Enter\") | text. `modifiers` may hold shift, \
+             command, alt. Input plays back over the next frames; capture a few frames later to see it.",
+            schema(
+                json!({
+                    "action": { "type": "string", "enum": ["click", "double_click", "right_click", "move", "drag", "scroll", "key", "text"] },
+                    "x": { "type": "number" }, "y": { "type": "number" },
+                    "to": { "type": "array" },
+                    "steps": { "type": "integer", "minimum": 1, "maximum": 240 },
+                    "delta": { "type": "number" },
+                    "key": { "type": "string" },
+                    "text": { "type": "string" },
+                    "modifiers": { "type": "array" }
+                }),
+                &["action"],
+            ),
+        ),
+        |args, e| {
+            use egui::{Event, Modifiers, PointerButton, pos2};
+            let num = |k: &str| args.get(k).and_then(Json::as_f64).map(|v| v as f32);
+            let p = pos2(num("x").unwrap_or(0.0), num("y").unwrap_or(0.0));
+            let mut modifiers = Modifiers::NONE;
+            for m in args
+                .get("modifiers")
+                .and_then(Json::as_array)
+                .into_iter()
+                .flatten()
+            {
+                match m.as_str().unwrap_or("") {
+                    "shift" => modifiers.shift = true,
+                    "alt" => modifiers.alt = true,
+                    "command" | "cmd" | "ctrl" => {
+                        modifiers.command = true;
+                        if cfg!(target_os = "macos") {
+                            modifiers.mac_cmd = true;
+                        } else {
+                            modifiers.ctrl = true;
+                        }
+                    }
+                    other => return ToolResult::error(format!("unknown modifier `{other}`")),
+                }
+            }
+            let button = |pos, button, pressed| Event::PointerButton {
+                pos,
+                button,
+                pressed,
+                modifiers,
+            };
+            let click = |b: PointerButton| {
+                vec![
+                    vec![Event::PointerMoved(p)],
+                    vec![button(p, b, true)],
+                    vec![button(p, b, false)],
+                ]
+            };
+            let batches: Vec<Vec<Event>> =
+                match args.get("action").and_then(Json::as_str).unwrap_or("") {
+                    "click" => click(PointerButton::Primary),
+                    "right_click" => click(PointerButton::Secondary),
+                    "double_click" => {
+                        let mut v = click(PointerButton::Primary);
+                        v.extend(click(PointerButton::Primary).into_iter().skip(1));
+                        v
+                    }
+                    "move" => vec![vec![Event::PointerMoved(p)]],
+                    "drag" => {
+                        let Some(to) = args
+                            .get("to")
+                            .and_then(Json::as_array)
+                            .filter(|a| a.len() == 2)
+                            .and_then(|a| Some(pos2(a[0].as_f64()? as f32, a[1].as_f64()? as f32)))
+                        else {
+                            return ToolResult::error("drag needs `to`: [x, y]");
+                        };
+                        let steps = args
+                            .get("steps")
+                            .and_then(Json::as_u64)
+                            .unwrap_or(10)
+                            .max(1) as usize;
+                        let mut v = vec![
+                            vec![Event::PointerMoved(p)],
+                            vec![button(p, PointerButton::Primary, true)],
+                        ];
+                        for i in 1..=steps {
+                            v.push(vec![Event::PointerMoved(
+                                p.lerp(to, i as f32 / steps as f32),
+                            )]);
+                        }
+                        v.push(vec![button(to, PointerButton::Primary, false)]);
+                        v
+                    }
+                    "scroll" => vec![
+                        vec![Event::PointerMoved(p)],
+                        vec![Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Point,
+                            delta: egui::vec2(0.0, num("delta").unwrap_or(0.0)),
+                            phase: egui::TouchPhase::Move,
+                            modifiers,
+                        }],
+                    ],
+                    "key" => {
+                        let name = args.get("key").and_then(Json::as_str).unwrap_or("");
+                        let Some(key) = egui::Key::from_name(name) else {
+                            return ToolResult::error(format!("unknown key `{name}`"));
+                        };
+                        let k = |pressed| Event::Key {
+                            key,
+                            physical_key: None,
+                            pressed,
+                            repeat: false,
+                            modifiers,
+                        };
+                        vec![vec![k(true)], vec![k(false)]]
+                    }
+                    "text" => vec![vec![Event::Text(
+                        args.get("text")
+                            .and_then(Json::as_str)
+                            .unwrap_or("")
+                            .to_owned(),
+                    )]],
+                    other => return ToolResult::error(format!("unknown action `{other}`")),
+                };
+            let frames = batches.len();
+            e.world
+                .resource_mut::<oxide_ui::Gui>()
+                .injected_input
+                .extend(batches);
+            ToolResult::json(json!({ "queued_frames": frames }))
         },
     );
 

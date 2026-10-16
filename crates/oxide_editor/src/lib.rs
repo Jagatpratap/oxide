@@ -11,6 +11,7 @@
 mod asset_inspector;
 mod asset_ops;
 mod console;
+mod curve_editor;
 pub(crate) mod game_view;
 mod hierarchy;
 mod inspector;

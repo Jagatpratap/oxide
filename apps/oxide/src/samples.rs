@@ -406,15 +406,22 @@ pub struct CarHud {
 impl Component for CarHud {
     fn update(&mut self, ctx: &mut Ctx) {
         let Some(car) = self.car else { return };
-        let speed = ctx
+        let (speed, gear, rpm) = ctx
             .world
             .get_component::<CarController>(car)
-            .map_or(0.0, |c| c.speed_kmh());
+            .map_or((0.0, 1, 0.0), |c| {
+                (c.speed_kmh(), c.current_gear(), c.engine_rpm())
+            });
         if let Some(t) = self
             .speed_text
             .and_then(|id| ctx.world.get_component_mut::<UIText>(id))
         {
-            t.text = format!("{:>3.0} km/h", speed.abs());
+            let gear = if gear < 0 {
+                "R".to_owned()
+            } else {
+                gear.to_string()
+            };
+            t.text = format!("{:>3.0} km/h  {gear}  {:>4.0} rpm", speed.abs(), rpm);
         }
         let pitch = ctx
             .world

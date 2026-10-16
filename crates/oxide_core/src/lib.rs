@@ -4,10 +4,15 @@
 //! - [`debug`]: Unity's `Debug.Log` family feeding an in-memory Console buffer.
 //! - [`reflect`]: runtime type info used by the Inspector, serialization and MCP tools.
 
+pub mod curves;
 pub mod debug;
 pub mod reflect;
 pub mod time;
 
+pub use curves::{
+    AnimationCurve, CurveWrapMode, Gradient, GradientAlphaKey, GradientColorKey, GradientMode,
+    Keyframe, MinMaxCurve, MinMaxCurveMode, MinMaxGradient, MinMaxGradientMode, TangentMode,
+};
 pub use debug::{LogEntry, LogType};
 pub use oxide_derive::Reflect;
 pub use time::Time;

@@ -1,4 +1,4 @@
-//! `CarAudio`: engine loop pitched by simulated gears and speed, louder with throttle, and a
+//! `CarAudio`: engine loop pitched by the car's engine RPM, louder with throttle, and a
 //! tire-skid loop that fades in with wheel slip.
 
 use crate::car::CarController;
@@ -13,10 +13,9 @@ pub struct CarAudio {
     pub skid_clip: String,
     pub min_pitch: f32,
     pub max_pitch: f32,
-    pub gears: u32,
     #[reflect(range(0, 1))]
     pub idle_volume: f32,
-    /// Sideways slip (m/s) at which the skid sound is at full volume.
+    /// How far past peak grip (1 = twice the peak slip) the skid sound reaches full volume.
     pub full_skid_slip: f32,
     #[reflect(skip)]
     #[doc(hidden)]
@@ -30,9 +29,8 @@ impl Default for CarAudio {
             skid_clip: "builtin:skid".into(),
             min_pitch: 0.7,
             max_pitch: 2.6,
-            gears: 5,
             idle_volume: 0.35,
-            full_skid_slip: 6.0,
+            full_skid_slip: 2.0,
             skid: None,
         }
     }
@@ -58,18 +56,19 @@ impl Component for CarAudio {
     }
 
     fn update(&mut self, ctx: &mut Ctx) {
-        let (speed, throttle, top) = ctx
-            .get_component::<CarController>()
-            .map_or((0.0, 0.0, 200.0), |c| {
-                (c.speed_kmh().abs(), c.throttle_input.abs(), c.top_speed_kmh)
-            });
-        // Simulated gearbox: rpm climbs within each gear's speed band.
+        let (speed, throttle, top, rpm01) =
+            ctx.get_component::<CarController>()
+                .map_or((0.0, 0.0, 200.0, 0.0), |c| {
+                    let span = (c.max_rpm - c.idle_rpm).max(1.0);
+                    (
+                        c.speed_kmh().abs(),
+                        c.throttle_input.abs(),
+                        c.top_speed_kmh,
+                        ((c.engine_rpm() - c.idle_rpm) / span).clamp(0.0, 1.0),
+                    )
+                });
         let norm = (speed / top.max(1.0)).clamp(0.0, 1.0);
-        let g = self.gears.max(1) as f32;
-        let gear = (norm * g).floor().min(g - 1.0);
-        let in_gear = norm * g - gear;
-        let rpm = (0.25 + 0.75 * in_gear) * (0.7 + 0.3 * (gear + 1.0) / g);
-        let pitch = self.min_pitch + (self.max_pitch - self.min_pitch) * rpm.max(norm * 0.5);
+        let pitch = self.min_pitch + (self.max_pitch - self.min_pitch) * rpm01;
         if let Some(src) = ctx.get_component_mut::<AudioSource>() {
             src.pitch = pitch;
             src.volume = self.idle_volume
@@ -81,15 +80,18 @@ impl Component for CarAudio {
             .descendants(me)
             .into_iter()
             .filter_map(|d| {
-                ctx.world
-                    .get_component::<WheelCollider>(d)
-                    .map(|w| w.slip().1)
+                ctx.world.get_component::<WheelCollider>(d).map(|w| {
+                    // 1 = at peak grip; above that the tyre is sliding.
+                    let (fs, ss) = w.slip();
+                    (fs.abs() / w.forward_friction.extremum_slip.max(1e-3))
+                        .max(ss.abs() / w.sideways_friction.extremum_slip.max(1e-3))
+                })
             })
             .fold(0.0f32, f32::max);
         if let Some(skid) = self.skid
             && let Some(src) = ctx.world.get_component_mut::<AudioSource>(skid)
         {
-            let v = ((slip - 1.5) / self.full_skid_slip).clamp(0.0, 1.0);
+            let v = ((slip - 1.0) / self.full_skid_slip).clamp(0.0, 1.0);
             src.volume = v * 0.8;
             src.pitch = 0.9 + v * 0.2;
         }

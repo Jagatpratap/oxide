@@ -5,7 +5,7 @@
 //! Reference: <https://docs.unity3d.com/Manual/ParticleSystems.html>
 
 use oxide_assets::{AssetId, AssetServer, Handle, Texture2D};
-use oxide_core::{Reflect, Time};
+use oxide_core::{AnimationCurve, Gradient, Reflect, Time};
 use oxide_math::{Color, Quaternion, Vector2, Vector3};
 use oxide_render::{ParticleBatch, ParticleBlend, ParticleInstance};
 use oxide_scene::{Component, Ctx, GameObjectId, System, World};
@@ -81,10 +81,10 @@ pub struct ParticleSystem {
     pub shape_angle: f32,
     pub shape_radius: f32,
     pub shape_box: Vector3,
-    /// Color multiplier at the end of life (with alpha for fading out).
-    pub end_color: Color,
-    /// Size multiplier at the start and end of life.
-    pub size_over_lifetime: Vector2,
+    /// Multiplies each particle's start colour over its life (Unity's Color over Lifetime).
+    pub color_over_lifetime: Gradient,
+    /// Multiplies each particle's start size over its life, 0..1 (Unity's Size over Lifetime).
+    pub size_over_lifetime: AnimationCurve,
     /// Velocity damping per second (0 = none).
     pub drag: f32,
     /// Random turbulence strength (m/s²).
@@ -138,8 +138,8 @@ impl Default for ParticleSystem {
             shape_angle: 25.0,
             shape_radius: 1.0,
             shape_box: Vector3::ONE,
-            end_color: Color::new(1.0, 1.0, 1.0, 0.0),
-            size_over_lifetime: Vector2::new(1.0, 1.0),
+            color_over_lifetime: fade(Color::new(1.0, 1.0, 1.0, 0.0)),
+            size_over_lifetime: AnimationCurve::constant(0.0, 1.0, 1.0),
             drag: 0.0,
             noise: 0.0,
             texture: Some(Handle::from_path("builtin:particle")),
@@ -149,6 +149,11 @@ impl Default for ParticleSystem {
             state: EmitterState::default(),
         }
     }
+}
+
+/// White fading to `end` over a particle's life (the old start/end colour pair).
+pub fn fade(end: Color) -> Gradient {
+    Gradient::two(Color::WHITE, end)
 }
 
 impl ParticleSystem {
@@ -198,8 +203,8 @@ impl ParticleSystem {
             rate_over_time: 12.0,
             shape_angle: 15.0,
             shape_radius: 0.2,
-            end_color: Color::new(0.6, 0.6, 0.6, 0.0),
-            size_over_lifetime: Vector2::new(0.6, 2.8),
+            color_over_lifetime: fade(Color::new(0.6, 0.6, 0.6, 0.0)),
+            size_over_lifetime: AnimationCurve::linear(0.0, 0.6, 1.0, 2.8),
             drag: 0.4,
             noise: 0.6,
             texture: Some(Handle::from_path("builtin:smoke")),
@@ -220,8 +225,8 @@ impl ParticleSystem {
             rate_over_time: 40.0,
             shape_angle: 10.0,
             shape_radius: 0.3,
-            end_color: Color::new(0.8, 0.1, 0.0, 0.0),
-            size_over_lifetime: Vector2::new(1.0, 0.2),
+            color_over_lifetime: fade(Color::new(0.8, 0.1, 0.0, 0.0)),
+            size_over_lifetime: AnimationCurve::linear(0.0, 1.0, 1.0, 0.2),
             blend: BlendMode::Additive,
             intensity: 3.0,
             noise: 1.0,
@@ -244,8 +249,8 @@ impl ParticleSystem {
             burst_count: 80,
             shape: ParticleShape::Sphere,
             shape_radius: 0.5,
-            end_color: Color::new(0.4, 0.05, 0.0, 0.0),
-            size_over_lifetime: Vector2::new(1.0, 2.0),
+            color_over_lifetime: fade(Color::new(0.4, 0.05, 0.0, 0.0)),
+            size_over_lifetime: AnimationCurve::linear(0.0, 1.0, 1.0, 2.0),
             drag: 2.5,
             blend: BlendMode::Additive,
             intensity: 4.0,
@@ -269,7 +274,7 @@ impl ParticleSystem {
             burst_count: 6,
             shape_angle: 8.0,
             shape_radius: 0.02,
-            end_color: Color::new(1.0, 0.5, 0.1, 0.0),
+            color_over_lifetime: fade(Color::new(1.0, 0.5, 0.1, 0.0)),
             blend: BlendMode::Additive,
             intensity: 8.0,
             simulation_space: SimulationSpace::Local,
@@ -291,8 +296,8 @@ impl ParticleSystem {
             rate_over_distance: 3.0,
             shape: ParticleShape::Hemisphere,
             shape_radius: 0.3,
-            end_color: Color::new(0.6, 0.55, 0.45, 0.0),
-            size_over_lifetime: Vector2::new(0.8, 3.0),
+            color_over_lifetime: fade(Color::new(0.6, 0.55, 0.45, 0.0)),
+            size_over_lifetime: AnimationCurve::linear(0.0, 0.8, 1.0, 3.0),
             drag: 1.5,
             texture: Some(Handle::from_path("builtin:smoke")),
             ..Default::default()
@@ -312,7 +317,7 @@ impl ParticleSystem {
             rate_over_time: 3000.0,
             shape: ParticleShape::Box,
             shape_box: Vector3::new(40.0, 1.0, 40.0),
-            end_color: Color::new(0.7, 0.75, 0.85, 0.3),
+            color_over_lifetime: fade(Color::new(0.7, 0.75, 0.85, 0.3)),
             simulation_space: SimulationSpace::World,
             ..Default::default()
         }
@@ -489,20 +494,15 @@ pub fn extract(world: &World, out: &mut Vec<ParticleBatch>) {
             .iter()
             .map(|p| {
                 let t = (p.age / p.lifetime).clamp(0.0, 1.0);
-                let c = Color::lerp(
-                    p.color,
-                    Color::new(
-                        p.color.r * ps.end_color.r,
-                        p.color.g * ps.end_color.g,
-                        p.color.b * ps.end_color.b,
-                        ps.end_color.a,
-                    ),
-                    t,
+                let g = ps.color_over_lifetime.evaluate(t);
+                let c = Color::new(
+                    p.color.r * g.r,
+                    p.color.g * g.g,
+                    p.color.b * g.b,
+                    p.color.a * g.a,
                 )
                 .linear();
-                let size = p.size
-                    * (ps.size_over_lifetime.x
-                        + (ps.size_over_lifetime.y - ps.size_over_lifetime.x) * t);
+                let size = p.size * ps.size_over_lifetime.evaluate(t).max(0.0);
                 let pos = match ps.simulation_space {
                     SimulationSpace::World => p.position,
                     SimulationSpace::Local => o + r * p.position,

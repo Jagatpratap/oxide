@@ -492,6 +492,13 @@ impl Input {
             b("Reload", &[R], &[], &[GamepadButton::West]),
             b("Interact", &[E, F], &[], &[GamepadButton::North]),
             b("Handbrake", &[Space], &[], &[GamepadButton::East]),
+            b("Shift Up", &[PageUp], &[], &[GamepadButton::RightShoulder]),
+            b(
+                "Shift Down",
+                &[PageDown],
+                &[],
+                &[GamepadButton::LeftShoulder],
+            ),
         ];
         Self {
             keys: HashSet::new(),

@@ -407,6 +407,85 @@ impl Component for CharacterController {
     }
 }
 
+/// Unity's `WheelFrictionCurve`: tyre force (as a multiple of the load on the tyre) by
+/// slip. It rises from zero to an extremum, where the tyre grips hardest, then falls to an
+/// asymptote while sliding. Reference:
+/// <https://docs.unity3d.com/ScriptReference/WheelFrictionCurve.html>
+#[derive(Clone, Copy, Debug, PartialEq, Reflect)]
+pub struct WheelFrictionCurve {
+    pub extremum_slip: f32,
+    pub extremum_value: f32,
+    pub asymptote_slip: f32,
+    pub asymptote_value: f32,
+    /// Multiplies the whole curve (Unity changes this per surface: ice, grass, ...).
+    pub stiffness: f32,
+}
+
+impl Default for WheelFrictionCurve {
+    fn default() -> Self {
+        Self::FORWARD
+    }
+}
+
+impl WheelFrictionCurve {
+    /// Default forward friction. Slip here is the true slip ratio
+    /// `(wheel speed − road speed) / road speed`, so the peak sits where road tyres peak
+    /// (about 12%) rather than at Unity's 0.4, which is in PhysX's own slip units.
+    pub const FORWARD: Self = Self {
+        extremum_slip: 0.12,
+        extremum_value: 1.0,
+        asymptote_slip: 0.5,
+        asymptote_value: 0.6,
+        stiffness: 1.0,
+    };
+    /// Default sideways friction; slip is the slip angle in radians (peak near 8.6°).
+    pub const SIDEWAYS: Self = Self {
+        extremum_slip: 0.15,
+        extremum_value: 1.0,
+        asymptote_slip: 0.45,
+        asymptote_value: 0.75,
+        stiffness: 1.0,
+    };
+
+    /// Force factor at `slip` (sign ignored), stiffness included: a two-piece spline that
+    /// is flat at the extremum and the asymptote, as Unity documents.
+    pub fn evaluate(&self, slip: f32) -> f32 {
+        let s = slip.abs();
+        let es = self.extremum_slip.max(1e-4);
+        let as_ = self.asymptote_slip.max(es + 1e-4);
+        let v = if s <= es {
+            // Starts at slope 2·value/slip (the linear "cornering stiffness"), flat at the peak.
+            let x = s / es;
+            self.extremum_value * (2.0 * x - x * x)
+        } else if s < as_ {
+            let x = (s - es) / (as_ - es);
+            let smooth = x * x * (3.0 - 2.0 * x);
+            self.extremum_value + (self.asymptote_value - self.extremum_value) * smooth
+        } else {
+            self.asymptote_value
+        };
+        v * self.stiffness
+    }
+
+    /// The curve as an [`oxide_core::AnimationCurve`] up to twice the asymptote slip (for
+    /// drawing it).
+    pub fn to_animation_curve(&self) -> oxide_core::AnimationCurve {
+        let end = self.asymptote_slip.max(self.extremum_slip) * 2.0;
+        oxide_core::AnimationCurve::new((0..=32).map(|i| {
+            let s = end * i as f32 / 32.0;
+            let mut k = oxide_core::Keyframe::new(s, self.evaluate(s));
+            k.in_mode = oxide_core::TangentMode::Linear;
+            k.out_mode = oxide_core::TangentMode::Linear;
+            k
+        }))
+    }
+
+    /// Largest force factor anywhere on the curve.
+    pub fn peak(&self) -> f32 {
+        self.extremum_value.max(self.asymptote_value) * self.stiffness
+    }
+}
+
 /// Unity `JointSpring` used by the wheel suspension.
 #[derive(Clone, Debug, Reflect)]
 pub struct WheelCollider {
@@ -419,10 +498,15 @@ pub struct WheelCollider {
     /// Spring stiffness (N/m per kg of sprung mass, Rapier scale).
     pub suspension_spring: f32,
     pub suspension_damper: f32,
-    /// Friction slip limit forwards (higher = more grip).
-    pub forward_friction: f32,
-    /// Side grip stiffness.
-    pub sideways_friction: f32,
+    /// Tyre grip along the rolling direction, by slip ratio (Unity `forwardFriction`).
+    pub forward_friction: WheelFrictionCurve,
+    /// Tyre grip across the wheel, by slip angle in radians (Unity `sidewaysFriction`).
+    pub sideways_friction: WheelFrictionCurve,
+    /// How quickly a free-spinning wheel slows down (Unity `wheelDampingRate`, N·m·s).
+    pub wheel_damping_rate: f32,
+    /// Height above the contact point where tyre forces push the body (Unity
+    /// `forceAppPointDistance`); at the centre of mass height the tyres can't roll the car.
+    pub force_app_point_distance: f32,
     /// Driving torque in N·m (set every frame by the car script).
     pub motor_torque: f32,
     pub brake_torque: f32,
@@ -447,6 +531,10 @@ pub struct WheelState {
     pub ground: Option<GameObjectId>,
     pub forward_slip: f32,
     pub sideways_slip: f32,
+    /// Tyre load (N) from the suspension.
+    pub load: f32,
+    /// Wheel angular speed (rad/s, positive rolling forwards).
+    pub angular_velocity: f32,
     pub suspension_length: f32,
     /// Wheel pose relative to the vehicle body.
     pub local_position: Vector3,
@@ -463,8 +551,10 @@ impl Default for WheelCollider {
             center: Vector3::ZERO,
             suspension_spring: 35.0,
             suspension_damper: 4.5,
-            forward_friction: 10.5,
-            sideways_friction: 1.2,
+            forward_friction: WheelFrictionCurve::FORWARD,
+            sideways_friction: WheelFrictionCurve::SIDEWAYS,
+            wheel_damping_rate: 0.25,
+            force_app_point_distance: 0.4,
             motor_torque: 0.0,
             brake_torque: 0.0,
             steer_angle: 0.0,
@@ -497,7 +587,12 @@ impl WheelCollider {
             self.state.ground,
         ))
     }
-    /// Slip magnitudes (for tire smoke and skid sounds).
+    /// Unity `WheelHit.force`: the tyre load in newtons while grounded.
+    pub fn load(&self) -> f32 {
+        self.state.load
+    }
+    /// Slip (forward slip ratio, sideways slip angle in radians), for tyre smoke and
+    /// skid sounds. Positive forward slip means wheelspin, negative means locking.
     pub fn slip(&self) -> (f32, f32) {
         (self.state.forward_slip, self.state.sideways_slip)
     }

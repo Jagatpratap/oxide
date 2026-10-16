@@ -235,7 +235,8 @@ fn wheel_collider_car_drives_and_steers() {
             .unwrap()
             .steer_angle = 25.0;
     }
-    s.step(0.5);
+    // Real tyres need a moment to build slip angle (the old model turned instantly).
+    s.step(1.0);
     let p2 = s.world.position(car);
     assert!(
         p2.x > p.x + 1.0,
@@ -243,6 +244,97 @@ fn wheel_collider_car_drives_and_steers() {
     );
     let yaw = s.world.rotation(car).euler_angles().y;
     assert!(yaw > 10.0 && yaw < 120.0, "yawed right: {yaw}");
+}
+
+/// Unity's WheelFrictionCurve tyre model: too much torque spins the wheels, a full brake
+/// locks them, and low-grip (icy) tyres slide further.
+#[test]
+fn wheel_friction_curves_spin_lock_and_slide() {
+    let wheel =
+        |s: &Sim, w: GameObjectId| s.world.get_component::<WheelCollider>(w).unwrap().clone();
+    // Wheelspin: 3000 N·m per wheel is far beyond what 1200 kg can put down.
+    let mut s = Sim::new();
+    s.ground();
+    let (car, wheels) = car(&mut s);
+    s.step(1.0);
+    let load = wheel(&s, wheels[0]).load();
+    assert!(
+        load > 1500.0 && load < 4500.0,
+        "about a quarter of the weight: {load}"
+    );
+    for &w in &wheels {
+        s.world
+            .get_component_mut::<WheelCollider>(w)
+            .unwrap()
+            .motor_torque = 3000.0;
+    }
+    s.step(0.3);
+    let (fs, _) = wheel(&s, wheels[0]).slip();
+    assert!(fs > 0.5, "wheelspin shows as positive forward slip: {fs}");
+    let tread = wheel(&s, wheels[0]).state.angular_velocity * 0.35;
+    let speed = s.world.position(car).z / 0.3;
+    assert!(tread > speed * 1.5, "tread {tread} m/s outruns the car");
+
+    // Locking: at speed, a huge brake stops the wheels and the car skids to a halt.
+    for &w in &wheels {
+        let wc = s.world.get_component_mut::<WheelCollider>(w).unwrap();
+        wc.motor_torque = 0.0;
+        wc.brake_torque = 50_000.0;
+    }
+    s.step(0.2);
+    let wc = wheel(&s, wheels[0]);
+    assert!(wc.rpm().abs() < 1.0, "locked: {} rpm", wc.rpm());
+    assert!(
+        wc.slip().0 < -0.5,
+        "locking shows as negative slip: {}",
+        wc.slip().0
+    );
+    s.step(4.0);
+    let v = s
+        .world
+        .get_component::<Rigidbody>(car)
+        .unwrap()
+        .velocity()
+        .length();
+    assert!(v < 0.2, "skidded to a stop: {v} m/s");
+
+    // Ice vs tarmac: the same steering input at the same speed turns far less on ice.
+    let turn = |stiffness: f32| {
+        let mut s = Sim::new();
+        s.ground();
+        let (body, wheels) = self::car(&mut s);
+        let car = body;
+        for &w in &wheels {
+            let wc = s.world.get_component_mut::<WheelCollider>(w).unwrap();
+            wc.sideways_friction.stiffness = stiffness;
+            wc.forward_friction.stiffness = stiffness;
+        }
+        s.step(0.5);
+        // Launch at 15 m/s and coast with the wheels turned.
+        s.world
+            .get_component_mut::<Rigidbody>(car)
+            .unwrap()
+            .set_velocity(Vector3::new(0.0, 0.0, 15.0));
+        for &w in &wheels {
+            let wc = s.world.get_component_mut::<WheelCollider>(w).unwrap();
+            wc.state.angular_velocity = 15.0 / 0.35;
+        }
+        for &w in &wheels[..2] {
+            s.world
+                .get_component_mut::<WheelCollider>(w)
+                .unwrap()
+                .steer_angle = 15.0;
+        }
+        s.step(1.0);
+        s.world.rotation(car).euler_angles().y
+    };
+    let tarmac = turn(1.0);
+    let ice = turn(0.1);
+    assert!(tarmac > 15.0, "tarmac turns: {tarmac}°");
+    assert!(
+        ice < tarmac * 0.5,
+        "ice turns much less: {ice}° vs {tarmac}°"
+    );
 }
 
 /// Big flat worlds (BGMI-size maps) use mesh/heightfield ground, like Unity's Plane and

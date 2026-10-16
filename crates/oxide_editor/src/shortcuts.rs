@@ -441,6 +441,24 @@ impl Keymap {
 /// Runs the shortcuts pressed this frame. Editor shortcuts are off while typing in a field
 /// or while the Game view has the keyboard in Play mode (Esc gives it back); Play, Pause
 /// and Step always work.
+fn claim_id() -> egui::Id {
+    egui::Id::new("editor-keys-claimed")
+}
+
+/// Called by a window that uses plain keys itself (Delete and F in the Curve Editor) while
+/// the pointer is over it: for the next frame editor shortcuts treat the keyboard as taken,
+/// as when typing in a text field (shortcuts marked "always", like ⌘S, still work).
+pub fn claim_keys(ctx: &egui::Context) {
+    let n = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| d.insert_temp(claim_id(), n));
+}
+
+fn keys_claimed(ctx: &egui::Context) -> bool {
+    let now = ctx.cumulative_pass_nr();
+    ctx.data(|d| d.get_temp::<u64>(claim_id()))
+        .is_some_and(|n| n + 1 >= now)
+}
+
 pub fn dispatch(st: &mut EditorState, engine: &mut Engine, ctx: &egui::Context) {
     if st.shortcuts_ui.capturing.is_some() {
         return;
@@ -454,7 +472,7 @@ pub fn dispatch(st: &mut EditorState, engine: &mut Engine, ctx: &egui::Context) 
         input.release_all();
         return;
     }
-    let typing = ctx.egui_wants_keyboard_input();
+    let typing = ctx.egui_wants_keyboard_input() || keys_claimed(ctx);
     let fired =
         ctx.input(|i| triggered(&st.keymap, &i.events, game_keys, typing, st.scene_ui.flying));
     for (binding, i) in fired {

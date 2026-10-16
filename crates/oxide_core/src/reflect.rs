@@ -316,6 +316,30 @@ macro_rules! reflect_struct {
     };
 }
 
+/// Builds `T::default()` when `T: Default` and `None` otherwise, chosen at compile time
+/// (autoref specialization), for `#[derive(Reflect)]`: a nested struct that arrives whole
+/// (in a list) is built from its default and then filled in.
+#[doc(hidden)]
+pub mod __private {
+    pub struct Maker<T>(pub std::marker::PhantomData<T>);
+    pub trait ViaDefault<T> {
+        fn make(&self) -> Option<T>;
+    }
+    impl<T: Default> ViaDefault<T> for Maker<T> {
+        fn make(&self) -> Option<T> {
+            Some(T::default())
+        }
+    }
+    pub trait NoDefault<T> {
+        fn make(&self) -> Option<T>;
+    }
+    impl<T> NoDefault<T> for &Maker<T> {
+        fn make(&self) -> Option<T> {
+            None
+        }
+    }
+}
+
 #[doc(hidden)]
 pub fn field_kind<T: FieldValue>(_: &T) -> ValueKind {
     T::KIND
