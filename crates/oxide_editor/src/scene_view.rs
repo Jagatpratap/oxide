@@ -713,9 +713,7 @@ fn draw_selection(st: &EditorState, world: &World, proj: &Projector, p: &egui::P
         draw_colliders(world, root, proj, p);
         if let Some(g) = world.get_component::<oxide_scene::LODGroup>(root) {
             let cam = st.scene_cam.camera_view();
-            let bias = world
-                .try_resource::<oxide_scene::RenderSettings>()
-                .map_or(1.0, |r| r.lod_bias);
+            let bias = oxide_scene::QualitySettings::of(world).lod_bias;
             let (c, r) = oxide_engine::extract::lod_group_sphere(world, root, g);
             let level = oxide_engine::extract::lod_level_for(world, root, g, &cam, bias);
             let pct = oxide_engine::extract::screen_relative_height(&cam, c, r) * bias * 100.0;
@@ -1058,7 +1056,8 @@ fn handles(
                     if let Some(s) = closest_on_axis(&ray, d.center, d.axes[i]) {
                         let mut delta = s - d.start_s;
                         if snap {
-                            delta = (delta / 0.25).round() * 0.25;
+                            let step = st.prefs.move_snap.max(1e-4);
+                            delta = (delta / step).round() * step;
                         }
                         for (id, p0, _, _) in &d.objects {
                             w.set_position(*id, *p0 + d.axes[i] * delta);
@@ -1070,7 +1069,8 @@ fn handles(
                         let mut off = hit - d.start_hit;
                         if snap {
                             let a = &d.axes;
-                            let comp = |v: Vector3| (v / 0.25).round() * 0.25;
+                            let step = st.prefs.move_snap.max(1e-4);
+                            let comp = |v: Vector3| (v / step).round() * step;
                             let c = comp(Vector3::new(off.dot(a[0]), off.dot(a[1]), off.dot(a[2])));
                             off = a[0] * c.x + a[1] * c.y + a[2] * c.z;
                         }
@@ -1082,7 +1082,8 @@ fn handles(
                 (Tool::Rotate, Handle3::Ring(i)) => {
                     let mut deg = ((m - d.start_mouse).dot(d.tangent) / d.radius_px).to_degrees();
                     if snap {
-                        deg = (deg / 15.0).round() * 15.0;
+                        let step = st.prefs.rotate_snap.max(0.01);
+                        deg = (deg / step).round() * step;
                     }
                     let q = Quaternion::angle_axis(deg, d.axes[i]);
                     for (id, _, r0, _) in &d.objects {
@@ -1099,7 +1100,8 @@ fn handles(
                         }
                     };
                     if snap {
-                        f = (f / 0.1).round() * 0.1;
+                        let step = st.prefs.scale_snap.max(1e-4);
+                        f = (f / step).round() * step;
                     }
                     let f = if f.abs() < 0.01 {
                         0.01f32.copysign(f)

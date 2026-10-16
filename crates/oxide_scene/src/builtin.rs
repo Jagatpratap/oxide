@@ -34,7 +34,9 @@ pub enum AntialiasingMode {
 }
 
 /// MSAA sample count (URP asset "Anti Aliasing (MSAA)").
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Default, Reflect, serde::Serialize, serde::Deserialize,
+)]
 pub enum MsaaQuality {
     Disabled,
     Msaa2x,
@@ -352,16 +354,9 @@ pub struct RenderSettings {
     pub bloom: bool,
     pub bloom_intensity: f32,
     pub bloom_threshold: f32,
-    /// Max distance shadows are drawn (Quality → Shadow Distance).
-    pub shadow_distance: f32,
     /// Vignette strength (0 = off).
     #[reflect(range(0, 1))]
     pub vignette: f32,
-    /// Multiplies LOD transition distances (Unity `QualitySettings.lodBias`): 2 keeps
-    /// detail twice as far.
-    pub lod_bias: f32,
-    /// Multisample anti-aliasing for all cameras that allow it (URP asset MSAA).
-    pub msaa: MsaaQuality,
     /// Baked lightmaps (Unity `LightmapSettings.lightmaps`), written by Generate Lighting.
     pub lightmaps: Vec<Handle<oxide_assets::Texture2D>>,
     /// Baked light probes: world positions and 27 SH floats (9 RGB coefficients) each.
@@ -413,10 +408,7 @@ impl Default for RenderSettings {
             bloom: true,
             bloom_intensity: 0.4,
             bloom_threshold: 1.0,
-            shadow_distance: 150.0,
             vignette: 0.15,
-            lod_bias: 1.0,
-            msaa: MsaaQuality::Msaa4x,
             lightmaps: Vec::new(),
             light_probe_positions: Vec::new(),
             light_probe_coefficients: Vec::new(),

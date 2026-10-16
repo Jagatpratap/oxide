@@ -19,6 +19,7 @@ pub mod mcp_streaming;
 pub mod mcp_terrain;
 pub mod mcp_tools;
 pub mod objects;
+pub mod project_settings;
 pub mod streaming;
 pub mod volumes;
 

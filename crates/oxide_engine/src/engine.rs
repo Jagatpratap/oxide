@@ -90,6 +90,10 @@ pub struct Engine {
     pub game_viewport: Option<GameViewport>,
     cursor: (CursorLockMode, bool),
     last_frame: Instant,
+    /// Vsync the surface is configured with (follows the active quality level).
+    vsync: bool,
+    /// Reimport asset files edited outside the engine (Preferences → Auto Refresh).
+    pub auto_refresh: bool,
 }
 
 impl Engine {
@@ -128,6 +132,8 @@ impl Engine {
             game_viewport: None,
             cursor: (CursorLockMode::None, true),
             last_frame: Instant::now(),
+            vsync: true,
+            auto_refresh: true,
         };
         e.world.resource_mut::<Input>().screen_height = size.height as f32;
         e.start_systems();
@@ -220,16 +226,22 @@ impl Engine {
             }
         }
         // Pick up asset files edited outside the engine (twice a second).
-        if self
-            .world
-            .resource::<Time>()
-            .frame_count()
-            .is_multiple_of(30)
+        if self.auto_refresh
+            && self
+                .world
+                .resource::<Time>()
+                .frame_count()
+                .is_multiple_of(30)
         {
             let reloaded = self.world.resource_mut::<AssetServer>().reload_changed();
             for p in reloaded {
                 oxide_core::debug_log!("Reloaded {p}");
             }
+        }
+        let vsync = oxide_scene::QualitySettings::of(&self.world).vsync;
+        if vsync != self.vsync {
+            self.vsync = vsync;
+            self.surface.set_vsync(&self.gpu, vsync);
         }
         let input = self.world.resource_mut::<Input>();
         input.end_frame();

@@ -13,6 +13,7 @@ pub mod component;
 pub mod ctx;
 pub mod id;
 pub mod prefab;
+pub mod quality;
 pub mod resources;
 pub mod scene_manager;
 pub mod serialize;
@@ -27,6 +28,7 @@ pub use component::{Collision, Component, ComponentRegistry, ContactPoint, Gizmo
 pub use ctx::{Ctx, TransformRef};
 pub use id::{ComponentId, GameObjectId};
 pub use prefab::{ObjectProperty, PrefabOverride, is_prefab_path};
+pub use quality::{QualityLevel, QualitySettings, ShadowQuality};
 pub use resources::Resources;
 pub use scene_manager::{AsyncOperation, PumpResult, SceneOpStatus, SceneOperations};
 pub use serialize::{ComponentData, ObjectData, SceneFile};
@@ -34,7 +36,7 @@ pub use system::{DebugDraw, DebugLine, System};
 pub use timers::Timers;
 pub use volume::*;
 pub use world::{
-    GameObject, LayerNames, Phase, ReloadedComponent, SceneHandle, SceneInfo, Space,
+    BUILTIN_TAGS, GameObject, LayerNames, Phase, ReloadedComponent, SceneHandle, SceneInfo, Space,
     StaticEditorFlags, Transform, World,
 };
 

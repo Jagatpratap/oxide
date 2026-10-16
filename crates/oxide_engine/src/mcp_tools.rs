@@ -236,6 +236,31 @@ pub fn build_server(bus: Arc<Bus>) -> McpServer {
 
     s.add_tool(
         ToolDef::new(
+            "log_message",
+            "Write to the Console",
+            "Logs a message like Unity's Debug.Log / LogWarning / LogError (errors also record a stack trace).",
+            schema(
+                json!({
+                    "message": { "type": "string" },
+                    "type": { "type": "string", "enum": ["Log", "Warning", "Error"] }
+                }),
+                &["message"],
+            ),
+        ),
+        |args| {
+            let msg = args.get("message").and_then(Json::as_str).unwrap_or("");
+            let t = args
+                .get("type")
+                .and_then(Json::as_str)
+                .and_then(LogType::parse)
+                .unwrap_or(LogType::Log);
+            debug::log_at(t, "mcp", file!(), line!(), msg);
+            ToolResult::text(format!("Logged {t:?}"))
+        },
+    );
+
+    s.add_tool(
+        ToolDef::new(
             "clear_console",
             "Clear the Console",
             "Removes all Console messages.",
@@ -1053,6 +1078,7 @@ pub fn build_server(bus: Arc<Bus>) -> McpServer {
     crate::mcp_audio::register(&mut s, bus);
     crate::mcp_network::register(&mut s, bus);
     crate::mcp_occlusion::register(&mut s, bus);
+    crate::project_settings::register(&mut s, bus);
     crate::mcp_rendering::register(&mut s, bus);
     crate::mcp_streaming::register(&mut s, bus);
     crate::mcp_animation::register(&mut s, bus);

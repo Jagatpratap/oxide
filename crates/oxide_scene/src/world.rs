@@ -230,6 +230,17 @@ impl Default for LayerNames {
     }
 }
 
+/// Unity's built-in tags (Tags & Layers); projects add their own after these.
+pub const BUILTIN_TAGS: [&str; 7] = [
+    "Untagged",
+    "Respawn",
+    "Finish",
+    "EditorOnly",
+    "MainCamera",
+    "Player",
+    "GameController",
+];
+
 impl LayerNames {
     /// Unity `LayerMask.NameToLayer`.
     pub fn name_to_layer(&self, name: &str) -> Option<u8> {
@@ -244,6 +255,17 @@ impl LayerNames {
             .iter()
             .filter_map(|n| self.name_to_layer(n))
             .fold(0, |m, l| m | (1 << l))
+    }
+}
+
+impl World {
+    /// Every tag: the built-in ones, then the project's (Unity `UnityEditorInternal.InternalEditorUtility.tags`).
+    pub fn all_tags(&self) -> Vec<String> {
+        BUILTIN_TAGS
+            .iter()
+            .map(|t| (*t).to_owned())
+            .chain(self.tags.iter().cloned())
+            .collect()
     }
 }
 
@@ -273,6 +295,8 @@ pub struct World {
     pub registry: ComponentRegistry,
     pub resources: Resources,
     pub layers: LayerNames,
+    /// Custom tags from Tags & Layers (the built-in ones are [`BUILTIN_TAGS`]).
+    pub tags: Vec<String>,
     /// Name of the active scene (Unity `SceneManager.GetActiveScene().name`).
     pub scene_name: String,
     pub scene_path: Option<String>,
@@ -302,6 +326,7 @@ impl World {
             registry: ComponentRegistry::default(),
             resources: Resources::default(),
             layers: LayerNames::default(),
+            tags: Vec::new(),
             scene_name: "Untitled".into(),
             scene_path: None,
             additive_scenes: Vec::new(),

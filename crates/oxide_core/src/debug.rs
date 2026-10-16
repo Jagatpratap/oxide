@@ -8,6 +8,7 @@
 
 use serde::Serialize;
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 const CAPACITY: usize = 10_000;
@@ -44,6 +45,13 @@ pub struct LogEntry {
     pub message: String,
     /// Module or crate that logged it.
     pub source: String,
+    /// Source file and line of the call (empty / 0 when unknown).
+    pub file: String,
+    pub line: u32,
+    /// Call stack, one frame per line pair (empty unless Stack Trace Logging is on for
+    /// this type, see [`set_stack_trace_logging`]).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub stack_trace: String,
 }
 
 #[derive(Default)]
@@ -58,10 +66,80 @@ fn console() -> &'static Mutex<Console> {
     CONSOLE.get_or_init(Default::default)
 }
 
+/// Log types that record a full stack trace (bit per [`LogType`]); errors and exceptions
+/// by default, like Unity's "Stack Trace Logging".
+static STACK_TRACES: AtomicU8 = AtomicU8::new(0b1100);
+
+/// Unity `Application.SetStackTraceLogType`: `true` records the call stack for this type.
+pub fn set_stack_trace_logging(log_type: LogType, full: bool) {
+    let bit = 1 << log_type as u8;
+    if full {
+        STACK_TRACES.fetch_or(bit, Ordering::Relaxed);
+    } else {
+        STACK_TRACES.fetch_and(!bit, Ordering::Relaxed);
+    }
+}
+
+pub fn stack_trace_logging(log_type: LogType) -> bool {
+    STACK_TRACES.load(Ordering::Relaxed) & (1 << log_type as u8) != 0
+}
+
+/// The current call stack without the logging and runtime frames.
+fn stack_trace() -> String {
+    let bt = std::backtrace::Backtrace::force_capture().to_string();
+    let skip = |f: &str| {
+        [
+            "std::",
+            "core::",
+            "alloc::",
+            "test::",
+            "oxide_core::debug::log",
+            "oxide_core::debug::stack_trace",
+            "__rust",
+        ]
+        .iter()
+        .any(|p| f.trim_start_matches('<').starts_with(p))
+            || f.starts_with('<') && f.contains(" as core::")
+            // C-level frames (thread start, unwinding shims).
+            || !f.contains("::")
+    };
+    let mut out = String::new();
+    let mut keep = false;
+    let mut frames = 0;
+    for line in bt.lines() {
+        let t = line.trim_start();
+        if let Some((n, f)) = t.split_once(": ")
+            && n.chars().all(|c| c.is_ascii_digit())
+        {
+            keep = !skip(f) && frames < 40;
+            if keep {
+                frames += 1;
+                out.push_str(f);
+                out.push('\n');
+            }
+        } else if keep && let Some(at) = t.strip_prefix("at ") {
+            out.push_str("    at ");
+            out.push_str(at);
+            out.push('\n');
+        }
+    }
+    out
+}
+
 /// Appends a message to the Console. Prefer the `debug_log!` family of macros.
 pub fn log(log_type: LogType, source: &str, message: impl Into<String>) {
+    log_at(log_type, source, "", 0, message);
+}
+
+/// [`log`] with the call site (what the macros use).
+pub fn log_at(log_type: LogType, source: &str, file: &str, line: u32, message: impl Into<String>) {
     let message = message.into();
     eprintln!("[{log_type:?}] {message}");
+    let trace = if stack_trace_logging(log_type) && !repeating(file, line) {
+        stack_trace()
+    } else {
+        String::new()
+    };
     let mut c = console().lock().unwrap_or_else(|e| e.into_inner());
     c.next_seq += 1;
     c.counts[log_type as usize] += 1;
@@ -71,11 +149,31 @@ pub fn log(log_type: LogType, source: &str, message: impl Into<String>) {
         log_type,
         message,
         source: source.to_owned(),
+        file: file.to_owned(),
+        line,
+        stack_trace: trace,
     };
     if c.entries.len() == CAPACITY {
         c.entries.pop_front();
     }
     c.entries.push_back(entry);
+}
+
+/// The same call site logged with a stack trace less than a second ago (an error every frame
+/// shouldn't capture 60 stacks a second).
+fn repeating(file: &str, line: u32) -> bool {
+    static LAST: Mutex<Vec<(String, u32, f64)>> = Mutex::new(Vec::new());
+    if file.is_empty() {
+        return false;
+    }
+    let now = crate::time::realtime_since_startup();
+    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    last.retain(|(_, _, t)| now - t < 1.0);
+    if last.iter().any(|(f, l, _)| f == file && *l == line) {
+        return true;
+    }
+    last.push((file.to_owned(), line, now));
+    false
 }
 
 /// Entries with `seq > after_seq` and severity `>= min_type`, oldest first, at most `limit`
@@ -109,7 +207,13 @@ pub fn counts() -> (u64, u64, u64) {
 #[macro_export]
 macro_rules! debug_log {
     ($($arg:tt)*) => {
-        $crate::debug::log($crate::debug::LogType::Log, module_path!(), format!($($arg)*))
+        $crate::debug::log_at(
+            $crate::debug::LogType::Log,
+            module_path!(),
+            file!(),
+            line!(),
+            format!($($arg)*),
+        )
     };
 }
 
@@ -117,7 +221,13 @@ macro_rules! debug_log {
 #[macro_export]
 macro_rules! debug_log_warning {
     ($($arg:tt)*) => {
-        $crate::debug::log($crate::debug::LogType::Warning, module_path!(), format!($($arg)*))
+        $crate::debug::log_at(
+            $crate::debug::LogType::Warning,
+            module_path!(),
+            file!(),
+            line!(),
+            format!($($arg)*),
+        )
     };
 }
 
@@ -125,7 +235,13 @@ macro_rules! debug_log_warning {
 #[macro_export]
 macro_rules! debug_log_error {
     ($($arg:tt)*) => {
-        $crate::debug::log($crate::debug::LogType::Error, module_path!(), format!($($arg)*))
+        $crate::debug::log_at(
+            $crate::debug::LogType::Error,
+            module_path!(),
+            file!(),
+            line!(),
+            format!($($arg)*),
+        )
     };
 }
 
@@ -180,5 +296,13 @@ mod tests {
         assert_eq!(errors[0].log_type, LogType::Error);
         let last_two = entries_since(start, LogType::Log, 2);
         assert_eq!(last_two[1].message, "broken");
+        // Call site always; a stack trace for errors only (the default).
+        assert!(all[0].file.ends_with("debug.rs") && all[0].line > 0);
+        assert!(all[0].stack_trace.is_empty());
+        assert!(
+            errors[0].stack_trace.contains("log_and_filter"),
+            "{}",
+            errors[0].stack_trace
+        );
     }
 }

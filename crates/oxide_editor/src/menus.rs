@@ -52,6 +52,8 @@ mod keys {
     pub const CHILD: &str = "⌥⇧N";
     pub const BUILD_SETTINGS: &str = "⇧⌘B";
     pub const BUILD_RUN: &str = "⌘B";
+    pub const PREFS: &str = "⌘,";
+    pub const REFRESH: &str = "⌘R";
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -72,6 +74,8 @@ mod keys {
     pub const CHILD: &str = "Alt+Shift+N";
     pub const BUILD_SETTINGS: &str = "Ctrl+Shift+B";
     pub const BUILD_RUN: &str = "Ctrl+B";
+    pub const PREFS: &str = "";
+    pub const REFRESH: &str = "Ctrl+R";
 }
 
 fn create_items(prefix: &str) -> Vec<MenuItem> {
@@ -186,6 +190,13 @@ pub fn menu_items(world: &World) -> Vec<MenuItem> {
         item("Edit/Tools/Move", "W", Action::SetTool(Tool::Move)),
         item("Edit/Tools/Rotate", "E", Action::SetTool(Tool::Rotate)),
         item("Edit/Tools/Scale", "R", Action::SetTool(Tool::Scale)),
+        sep("Edit"),
+        item(
+            "Edit/Project Settings...",
+            "",
+            Action::OpenProjectSettings(crate::settings_window::Page::default()),
+        ),
+        item("Edit/Preferences...", keys::PREFS, Action::OpenPreferences),
     ];
     v.extend(create_items("GameObject/"));
     v.push(sep("GameObject"));
@@ -225,6 +236,7 @@ pub fn menu_items(world: &World) -> Vec<MenuItem> {
             Action::OpenTab(t),
         ));
     }
+    v.push(item("Assets/Refresh", keys::REFRESH, Action::RefreshAssets));
     v.push(item(
         "Assets/Recompile Scripts",
         "",

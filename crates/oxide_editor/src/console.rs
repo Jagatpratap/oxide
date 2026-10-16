@@ -1,9 +1,12 @@
-//! Console window: log/warning/error filters, collapse, search, and a detail pane.
+//! Console window: log/warning/error filters, collapse, search, Error Pause, and a detail
+//! pane with the call site and stack trace (double-click opens the source).
 //! Reference: <https://docs.unity3d.com/Manual/Console.html>
 
 use crate::EditorState;
 use egui::{Color32, RichText, Sense, vec2};
 use oxide_core::debug::{self, LogEntry, LogType};
+use oxide_engine::Engine;
+use std::path::Path;
 
 const KEEP: usize = 5000;
 
@@ -12,7 +15,8 @@ pub struct ConsoleState {
     last_seq: u64,
     show: [bool; 3],
     collapse: bool,
-    pub clear_on_play: bool,
+    /// Pause Play mode when an error is logged (Unity "Error Pause").
+    pub error_pause: bool,
     search: String,
     selected: Option<u64>,
 }
@@ -24,7 +28,7 @@ impl Default for ConsoleState {
             last_seq: 0,
             show: [true; 3],
             collapse: false,
-            clear_on_play: true,
+            error_pause: false,
             search: String::new(),
             selected: None,
         }
@@ -52,16 +56,19 @@ impl ConsoleState {
         self.selected = None;
     }
 
-    fn pull(&mut self) {
+    /// Fetches new entries; returns whether any of them is an error.
+    fn pull(&mut self) -> bool {
         let new = debug::entries_since(self.last_seq, LogType::Log, 1000);
         if let Some(l) = new.last() {
             self.last_seq = l.seq;
         }
+        let error = new.iter().any(|e| e.log_type >= LogType::Error);
         self.entries.extend(new);
         if self.entries.len() > KEEP {
             let n = self.entries.len() - KEEP;
             self.entries.drain(..n);
         }
+        error
     }
 
     /// The newest entry (for the status bar).
@@ -71,9 +78,41 @@ impl ConsoleState {
     }
 }
 
-pub fn ui(st: &mut EditorState, ui: &mut egui::Ui) {
+/// Opens `file:line` (as logged) in the script editor from Preferences.
+fn open_source(prefs: &crate::prefs::EditorPrefs, project: &Path, file: &str, line: u32) -> String {
+    match crate::prefs::resolve_source(project, file) {
+        Some(p) => match prefs.open_file(&p, line) {
+            Ok(()) => format!("Opened {}:{line}", p.display()),
+            Err(e) => e,
+        },
+        None => format!("source file `{file}` not found"),
+    }
+}
+
+/// `path:line:col` at the end of a stack frame's "at" line.
+fn frame_location(at: &str) -> Option<(&str, u32)> {
+    let mut parts = at.rsplitn(3, ':');
+    let a = parts.next()?;
+    let b = parts.next()?;
+    match parts.next() {
+        Some(file) => Some((file, b.parse().ok()?)),
+        None => Some((b, a.parse().ok()?)),
+    }
+}
+
+pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
+    let project = engine
+        .world
+        .resource::<oxide_assets::AssetServer>()
+        .full_path("");
+    let playing = st.play == crate::PlayState::Playing;
     let c = &mut st.console;
-    c.pull();
+    if c.pull() && c.error_pause && playing && !engine.paused {
+        engine.paused = true;
+        st.status = "Paused on error (Error Pause)".into();
+    }
+    let c = &mut st.console;
+    let mut open: Option<(String, u32)> = None;
     let mut counts = [0usize; 3];
     for e in &c.entries {
         counts[level(e.log_type)] += 1;
@@ -84,7 +123,14 @@ pub fn ui(st: &mut EditorState, ui: &mut egui::Ui) {
             c.clear();
         }
         ui.toggle_value(&mut c.collapse, "Collapse");
-        ui.toggle_value(&mut c.clear_on_play, "Clear on Play");
+        if ui
+            .toggle_value(&mut st.prefs.clear_on_play, "Clear on Play")
+            .changed()
+        {
+            st.prefs_changed = true;
+        }
+        ui.toggle_value(&mut c.error_pause, "Error Pause")
+            .on_hover_text("Pause Play mode when an error is logged");
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             for (i, label) in [(2usize, "Errors"), (1, "Warnings"), (0, "Logs")] {
                 let text = RichText::new(format!("{label} {}", counts[i])).color(COLORS[i]);
@@ -125,7 +171,7 @@ pub fn ui(st: &mut EditorState, ui: &mut egui::Ui) {
         visible.into_iter().map(|e| (e, 1)).collect()
     };
 
-    let detail_h = if c.selected.is_some() { 90.0 } else { 0.0 };
+    let detail_h = if c.selected.is_some() { 140.0 } else { 0.0 };
     let list_h = (ui.available_height() - detail_h).max(40.0);
     let mut selected = c.selected;
     egui::ScrollArea::vertical()
@@ -169,6 +215,9 @@ pub fn ui(st: &mut EditorState, ui: &mut egui::Ui) {
                 if resp.clicked() {
                     selected = Some(e.seq);
                 }
+                if resp.double_clicked() && !e.file.is_empty() {
+                    open = Some((e.file.clone(), e.line));
+                }
             }
         });
     c.selected = selected;
@@ -181,10 +230,67 @@ pub fn ui(st: &mut EditorState, ui: &mut egui::Ui) {
             .max_height(detail_h)
             .show(ui, |ui| {
                 ui.label(RichText::new(&e.message).color(COLORS[level(e.log_type)]));
-                ui.weak(format!(
-                    "{:?} from {} at {:.3}s",
-                    e.log_type, e.source, e.time
-                ));
+                ui.horizontal(|ui| {
+                    ui.weak(format!(
+                        "{:?} from {} at {:.3}s",
+                        e.log_type, e.source, e.time
+                    ));
+                    if !e.file.is_empty()
+                        && ui
+                            .link(format!("{}:{}", e.file, e.line))
+                            .on_hover_text("Open in the script editor")
+                            .clicked()
+                    {
+                        open = Some((e.file.clone(), e.line));
+                    }
+                });
+                if !e.stack_trace.is_empty() {
+                    ui.add_space(4.0);
+                    for line in e.stack_trace.lines() {
+                        match line.trim_start().strip_prefix("at ") {
+                            Some(at) => match frame_location(at) {
+                                Some((file, l)) => {
+                                    if ui
+                                        .add(
+                                            egui::Label::new(
+                                                RichText::new(format!("    at {at}"))
+                                                    .monospace()
+                                                    .size(11.0)
+                                                    .color(Color32::from_rgb(110, 160, 230)),
+                                            )
+                                            .sense(Sense::click()),
+                                        )
+                                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                        .clicked()
+                                    {
+                                        open = Some((file.to_owned(), l));
+                                    }
+                                }
+                                None => {
+                                    ui.monospace(line);
+                                }
+                            },
+                            None => {
+                                ui.label(RichText::new(line).monospace().size(11.0));
+                            }
+                        }
+                    }
+                }
             });
+    }
+    if let Some((file, line)) = open {
+        st.status = open_source(&st.prefs, &project, &file, line);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn frame_locations() {
+        use super::frame_location;
+        assert_eq!(frame_location("./src/a.rs:12:5"), Some(("./src/a.rs", 12)));
+        assert_eq!(frame_location("C:\\x\\a.rs:3:1"), Some(("C:\\x\\a.rs", 3)));
+        assert_eq!(frame_location("src/a.rs:7"), Some(("src/a.rs", 7)));
+        assert_eq!(frame_location("nothing"), None);
     }
 }

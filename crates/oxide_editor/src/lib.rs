@@ -15,10 +15,12 @@ pub mod launch;
 pub mod mcp;
 mod menus;
 pub mod player_build;
+pub mod prefs;
 mod project;
 pub mod project_files;
 mod scene_view;
 pub mod scripting;
+pub mod settings_window;
 mod theme;
 mod undo;
 mod view;
@@ -43,6 +45,8 @@ pub enum Tab {
     Inspector,
     Project,
     Console,
+    ProjectSettings,
+    Preferences,
 }
 
 impl Tab {
@@ -63,6 +67,8 @@ impl Tab {
             Tab::Inspector => "Inspector",
             Tab::Project => "Project",
             Tab::Console => "Console",
+            Tab::ProjectSettings => "Project Settings",
+            Tab::Preferences => "Preferences",
         }
     }
 }
@@ -156,6 +162,11 @@ pub enum Action {
     /// Lighting window: bake lightmaps and light probes in the background.
     GenerateLighting,
     ClearBakedLighting,
+    /// Edit → Project Settings, on this page.
+    OpenProjectSettings(settings_window::Page),
+    OpenPreferences,
+    /// Assets → Refresh: reimport files changed on disk.
+    RefreshAssets,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -206,6 +217,12 @@ pub struct EditorState {
     /// The project has a Scripts crate (Create > Rust Script is available).
     pub scripts_available: bool,
     pub builder: player_build::PlayerBuilder,
+    /// Per-user Preferences, where they're saved, and whether they changed this frame.
+    pub prefs: prefs::EditorPrefs,
+    prefs_path: std::path::PathBuf,
+    pub(crate) prefs_page: prefs::Page,
+    pub(crate) prefs_changed: bool,
+    pub(crate) settings: settings_window::SettingsState,
 }
 
 impl EditorState {
@@ -236,6 +253,11 @@ impl EditorState {
             status: String::new(),
             scripts_available: false,
             builder: Default::default(),
+            prefs: Default::default(),
+            prefs_path: prefs::EditorPrefs::default_path(),
+            prefs_page: Default::default(),
+            prefs_changed: false,
+            settings: Default::default(),
         }
     }
 
@@ -348,7 +370,9 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::Hierarchy => hierarchy::ui(self.st, self.engine, ui),
             Tab::Inspector => inspector::ui(self.st, self.engine, ui),
             Tab::Project => project::ui(self.st, self.engine, ui),
-            Tab::Console => console::ui(self.st, ui),
+            Tab::Console => console::ui(self.st, self.engine, ui),
+            Tab::ProjectSettings => settings_window::ui(self.st, self.engine, ui),
+            Tab::Preferences => prefs::ui(self.st, self.engine, ui),
         }
     }
 
@@ -392,7 +416,13 @@ impl Editor {
             return;
         };
         match serde_json::from_str::<DockState<Tab>>(&text) {
-            Ok(dock) if dock.iter_all_tabs().next().is_some() => {
+            Ok(mut dock) if dock.iter_all_tabs().next().is_some() => {
+                // Settings windows open on demand at full size (floating sizes aren't saved).
+                for tab in [Tab::ProjectSettings, Tab::Preferences] {
+                    while let Some(path) = dock.find_tab(&tab) {
+                        dock.remove_tab(path);
+                    }
+                }
                 self.dock = dock;
                 self.saved_layout = Some(text);
             }
@@ -427,7 +457,7 @@ impl Editor {
         self.dock.iter_all_tabs().map(|(_, t)| *t).collect()
     }
 
-    fn focus_tab(&mut self, tab: Tab) {
+    pub(crate) fn focus_tab(&mut self, tab: Tab) {
         let found = self
             .dock
             .iter_all_tabs()
@@ -435,6 +465,13 @@ impl Editor {
             .map(|(p, _)| p);
         if let Some(path) = found {
             let _ = self.dock.set_active_tab(path);
+        } else if matches!(tab, Tab::ProjectSettings | Tab::Preferences) {
+            // Unity opens its settings in their own window.
+            let surface = self.dock.add_window(vec![tab]);
+            if let Some(ws) = self.dock.get_window_state_mut(surface) {
+                ws.set_position(egui::pos2(220.0, 110.0))
+                    .set_size(egui::vec2(760.0, 560.0));
+            }
         } else {
             self.dock.push_to_focused_leaf(tab);
         }
@@ -677,6 +714,20 @@ impl Editor {
                 self.focus_tab(tab);
                 return Ok(format!("Opened {}", tab.title()));
             }
+            Action::OpenProjectSettings(page) => {
+                st.settings.page = page;
+                self.focus_tab(Tab::ProjectSettings);
+                return Ok("Opened Project Settings".into());
+            }
+            Action::OpenPreferences => {
+                self.focus_tab(Tab::Preferences);
+                return Ok("Opened Preferences".into());
+            }
+            Action::RefreshAssets => {
+                let n = w.resource_mut::<AssetServer>().reload_changed().len();
+                st.project.cache = None;
+                format!("Refreshed assets ({n} reimported)")
+            }
             Action::ResetLayout => {
                 self.dock = default_layout();
                 return Ok("Layout reset".into());
@@ -786,17 +837,18 @@ impl Editor {
         let w = &mut engine.world;
         st.play_snapshot = Some(undo::Snapshot::take(w, "Play", &st.selection));
         st.play_undo_depth = st.undo.depth();
-        if st.console.clear_on_play {
+        if st.prefs.clear_on_play {
             oxide_core::debug::clear();
             st.console.clear();
         }
         // Fresh game clock, keeping the project's fixed timestep and time scale.
-        let (fixed, scale) = {
+        let (fixed, max, scale) = {
             let t = w.resource::<Time>();
-            (t.fixed_delta_time(), t.time_scale())
+            (t.fixed_delta_time(), t.maximum_delta_time(), t.time_scale())
         };
         let mut t = Time::new();
         t.set_fixed_delta_time(fixed);
+        t.set_maximum_delta_time(max);
         t.set_time_scale(scale);
         w.resources.insert(t);
         w.start_scripts();
@@ -1233,8 +1285,11 @@ impl Shell for Editor {
         if !self.styled {
             theme::apply(&ctx);
             self.load_layout(engine);
+            self.st.prefs = prefs::EditorPrefs::load(&self.st.prefs_path);
             self.styled = true;
         }
+        self.st.prefs.apply(&ctx);
+        engine.auto_refresh = self.st.prefs.auto_refresh;
         if let Some(host) = self.scripts.as_mut() {
             host.poll(engine);
         }
@@ -1258,13 +1313,14 @@ impl Shell for Editor {
         );
         let playing = self.st.playing();
         egui::Panel::top(egui::Id::new("editor-menu"))
-            .frame(theme::bar_frame(false))
+            .frame(theme::bar_frame(None))
             .show(&mut root, |ui| menus::menu_bar(&mut self.st, engine, ui));
+        let tint = playing.then(|| self.st.prefs.play_tint());
         egui::Panel::top(egui::Id::new("editor-toolbar"))
-            .frame(theme::bar_frame(playing))
+            .frame(theme::bar_frame(tint))
             .show(&mut root, |ui| menus::toolbar(&mut self.st, engine, ui));
         egui::Panel::bottom(egui::Id::new("editor-status"))
-            .frame(theme::bar_frame(false))
+            .frame(theme::bar_frame(None))
             .show(&mut root, |ui| {
                 menus::status_bar(&mut self.st, engine, self.scripts.as_ref(), ui)
             });
@@ -1295,6 +1351,16 @@ impl Shell for Editor {
         }
         self.update_game_viewport(engine, &ctx);
         self.save_layout(engine);
+        settings_window::flush(
+            &mut self.st,
+            engine,
+            oxide_core::time::realtime_since_startup(),
+        );
+        if std::mem::take(&mut self.st.prefs_changed)
+            && let Err(e) = self.st.prefs.save(&self.st.prefs_path)
+        {
+            self.st.status = format!("cannot save Preferences: {e}");
+        }
 
         let title = format!(
             "{}{} - Oxide Editor{}",

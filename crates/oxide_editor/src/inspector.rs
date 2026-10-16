@@ -13,16 +13,6 @@ use oxide_math::{Quaternion, QuaternionExt, Vector3};
 use oxide_scene::{ComponentId, GameObjectId, ObjectProperty, PrefabOverride, World};
 use std::collections::{BTreeMap, HashMap};
 
-const TAGS: &[&str] = &[
-    "Untagged",
-    "Respawn",
-    "Finish",
-    "EditorOnly",
-    "MainCamera",
-    "Player",
-    "GameController",
-];
-
 #[derive(Default)]
 pub struct InspectorState {
     /// Euler angles shown for each object's rotation, kept so values like 180 or 370 survive
@@ -107,7 +97,11 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
                     st.selection.len()
                 ));
             }
-            header(ui, w, id, &mut edits);
+            if header(ui, w, id, &mut edits) {
+                st.actions.push(Action::OpenProjectSettings(
+                    crate::settings_window::Page::TagsAndLayers,
+                ));
+            }
             prefab_header(ui, st, w, id);
             ui.separator();
             transform(ui, st, w, id, &mut edits);
@@ -123,8 +117,10 @@ fn key(id: GameObjectId, part: &str) -> u64 {
     egui::Id::new((id.to_bits(), part)).value()
 }
 
-fn header(ui: &mut egui::Ui, w: &World, id: GameObjectId, edits: &mut Vec<(Edit, u64)>) {
+/// Returns true when "Add Tag..." / "Add Layer..." was clicked (opens Tags and Layers).
+fn header(ui: &mut egui::Ui, w: &World, id: GameObjectId, edits: &mut Vec<(Edit, u64)>) -> bool {
     let o = w.get(id).expect("alive");
+    let mut open_tags = false;
     ui.horizontal(|ui| {
         let mut active = o.active_self();
         if ui.checkbox(&mut active, "").changed() {
@@ -168,8 +164,12 @@ fn header(ui: &mut egui::Ui, w: &World, id: GameObjectId, edits: &mut Vec<(Edit,
             .selected_text(&tag)
             .width(110.0)
             .show_ui(ui, |ui| {
-                for t in TAGS {
-                    ui.selectable_value(&mut tag, (*t).to_owned(), *t);
+                for t in w.all_tags() {
+                    ui.selectable_value(&mut tag, t.clone(), t);
+                }
+                ui.separator();
+                if ui.button("Add Tag...").clicked() {
+                    open_tags = true;
                 }
             });
         if tag != o.tag {
@@ -192,11 +192,16 @@ fn header(ui: &mut egui::Ui, w: &World, id: GameObjectId, edits: &mut Vec<(Edit,
                         ui.selectable_value(&mut layer, i as u8, format!("{i}: {n}"));
                     }
                 }
+                ui.separator();
+                if ui.button("Add Layer...").clicked() {
+                    open_tags = true;
+                }
             });
         if layer != o.layer {
             edits.push((Edit::Layer(layer), key(id, "layer")));
         }
     });
+    open_tags
 }
 
 /// Recomputes the prefab overrides shown for the selection (twice a second at most).
@@ -652,6 +657,49 @@ fn assets_of_type(assets: &AssetServer, type_name: Option<&str>) -> Vec<String> 
 }
 
 /// Draws one value. Returns true if the user changed it.
+/// Every reflected field of `obj` as a label / value grid, edits written back (Project
+/// Settings and other non-component objects). Returns whether anything changed.
+pub fn reflect_grid(
+    ui: &mut egui::Ui,
+    w: &World,
+    obj: &mut dyn oxide_core::reflect::Reflect,
+    salt: &str,
+) -> bool {
+    let info = obj.type_info();
+    let mut changed = false;
+    egui::Grid::new(salt)
+        .num_columns(2)
+        .spacing([16.0, 6.0])
+        .min_col_width(150.0)
+        .show(ui, |ui| {
+            for f in &info.fields {
+                let Some(v) = obj.get_field(f.name) else {
+                    continue;
+                };
+                let lr = ui.label(nicify(f.name));
+                if let Some(t) = f.tooltip {
+                    lr.on_hover_text(t);
+                }
+                let mut v2 = v.clone();
+                if value_ui(
+                    ui,
+                    w,
+                    f,
+                    f.kind,
+                    f.type_name,
+                    &mut v2,
+                    &format!("{salt}{}", f.name),
+                ) && v2 != v
+                    && obj.set_field(f.name, v2).is_ok()
+                {
+                    changed = true;
+                }
+                ui.end_row();
+            }
+        });
+    changed
+}
+
 fn value_ui(
     ui: &mut egui::Ui,
     w: &World,

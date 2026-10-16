@@ -52,13 +52,10 @@ pub fn apply(ctx: &egui::Context) {
 }
 
 /// Frame for the menu bar, toolbar and status bar (tinted in Play mode, like Unity).
-pub fn bar_frame(playing: bool) -> egui::Frame {
+/// Menu/tool/status bar; `tint` is the Play-mode tint (Preferences → Colors).
+pub fn bar_frame(tint: Option<Color32>) -> egui::Frame {
     egui::Frame::new()
-        .fill(if playing {
-            Color32::from_rgb(62, 78, 102)
-        } else {
-            BAR
-        })
+        .fill(tint.unwrap_or(BAR))
         .inner_margin(Margin::symmetric(6, 3))
 }
 

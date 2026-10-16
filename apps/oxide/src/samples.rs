@@ -499,7 +499,6 @@ pub fn open_world(world: &mut World) {
         rs.fog = true;
         rs.fog_density = 0.0012;
         rs.fog_color = Color::rgb(0.66, 0.74, 0.84);
-        rs.shadow_distance = 250.0;
     }
     let size = Vector3::new(2000.0, 220.0, 2000.0);
     let terrain = create_terrain(world, "Terrain", size, 1025, 7);

@@ -194,7 +194,7 @@ pub fn start(world: &mut World) -> Result<usize, String> {
                 .collect::<Vec<_>>()
         })
         .collect();
-    let env = crate::extract::environment(&rs);
+    let env = crate::extract::environment(&rs, &oxide_scene::QualitySettings::of(world));
     let input = BakeInput {
         objects,
         lights,

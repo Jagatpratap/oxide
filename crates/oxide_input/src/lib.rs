@@ -114,9 +114,10 @@ pub enum KeyCode {
 }
 
 impl KeyCode {
-    pub fn parse(s: &str) -> Option<KeyCode> {
+    /// Every key, in declaration order.
+    pub const ALL: &[KeyCode] = {
         use KeyCode::*;
-        const ALL: &[KeyCode] = &[
+        &[
             A,
             B,
             C,
@@ -213,8 +214,13 @@ impl KeyCode {
             KeypadEnter,
             KeypadPlus,
             KeypadMinus,
-        ];
-        ALL.iter()
+        ]
+    };
+
+    pub fn parse(s: &str) -> Option<KeyCode> {
+        use KeyCode::*;
+        Self::ALL
+            .iter()
             .copied()
             .find(|k| format!("{k:?}").eq_ignore_ascii_case(s))
             .or(match s.to_ascii_lowercase().as_str() {
@@ -280,7 +286,7 @@ pub enum GamepadAxis {
 }
 
 /// What drives a virtual axis or button.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum AxisSource {
     /// Negative/positive key pair, smoothed with `gravity`/`sensitivity` like Unity.
     Keys {
@@ -299,7 +305,7 @@ pub enum AxisSource {
 }
 
 /// Unity Input Manager axis entry.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct InputAxis {
     pub name: String,
     pub sources: Vec<AxisSource>,
@@ -314,6 +320,13 @@ pub struct InputAxis {
 }
 
 impl InputAxis {
+    /// A keyboard axis with Unity's defaults (gravity 3, sensitivity 3, dead 0.001, snap).
+    pub fn new(name: &str) -> Self {
+        let mut a = Self::keys(name, &[], &[], None);
+        a.dead = 0.001;
+        a
+    }
+
     fn keys(name: &str, neg: &[KeyCode], pos: &[KeyCode], pad: Option<GamepadAxis>) -> Self {
         let mut sources = vec![AxisSource::Keys {
             negative: neg.to_vec(),
@@ -347,7 +360,7 @@ impl InputAxis {
 }
 
 /// A named button (`Jump`, `Fire1`, ...): any listed key, mouse button or pad button.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct InputButton {
     pub name: String,
     pub keys: Vec<KeyCode>,
@@ -784,6 +797,12 @@ impl Input {
     }
     pub fn add_button(&mut self, b: InputButton) {
         self.buttons.push(b);
+    }
+    /// Replaces the Input Manager's axes and buttons (Project Settings → Input Manager).
+    pub fn set_mappings(&mut self, axes: Vec<InputAxis>, buttons: Vec<InputButton>) {
+        self.axes = axes;
+        self.buttons = buttons;
+        self.axis_values.clear();
     }
     pub fn pressed_keys(&self) -> Vec<KeyCode> {
         let mut v: Vec<_> = self.keys.iter().copied().collect();

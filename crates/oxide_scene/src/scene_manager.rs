@@ -261,6 +261,10 @@ impl World {
             // Lighting settings belong to the scene (Unity's Lighting window).
             let mut rs = RenderSettings::default();
             for (k, v) in &file.render_settings {
+                // Moved to the project's Quality settings; older scenes still have them.
+                if matches!(k.as_str(), "shadow_distance" | "lod_bias" | "msaa") {
+                    continue;
+                }
                 if let Err(e) = rs.set_field(k, v.clone()) {
                     warnings.push(format!("render settings {k}: {e}"));
                 }

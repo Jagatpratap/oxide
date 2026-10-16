@@ -9,9 +9,10 @@ use oxide_render::{
 };
 use oxide_scene::{
     AntialiasingMode, Camera, CameraClearFlags, DebugDraw, FogMode, LODGroup, Light, LightShadows,
-    LightType, MeshFilter, MeshRenderer, MsaaQuality, OcclusionPortal, Projection, ReflectionProbe,
-    ReflectionProbeClearFlags, ReflectionProbeMode, ReflectionProbeRefreshMode, RenderSettings,
-    ShadowCastingMode, SkinnedMeshRenderer, StaticEditorFlags, World,
+    LightType, MeshFilter, MeshRenderer, MsaaQuality, OcclusionPortal, Projection, QualityLevel,
+    QualitySettings, ReflectionProbe, ReflectionProbeClearFlags, ReflectionProbeMode,
+    ReflectionProbeRefreshMode, RenderSettings, ShadowCastingMode, ShadowQuality,
+    SkinnedMeshRenderer, StaticEditorFlags, World,
 };
 
 pub fn camera_view(world: &World, id: oxide_scene::GameObjectId, c: &Camera) -> CameraView {
@@ -130,7 +131,8 @@ pub fn texture_cameras(world: &World) -> Vec<(AssetId, CameraView)> {
     cams.into_iter().map(|(_, v)| v).collect()
 }
 
-pub fn environment(rs: &RenderSettings) -> Environment {
+/// Scene environment with the active quality level's shadow distance and MSAA.
+pub fn environment(rs: &RenderSettings, q: &QualityLevel) -> Environment {
     Environment {
         sky_tint: rs.sky_tint,
         ground_color: rs.ground_color,
@@ -161,8 +163,8 @@ pub fn environment(rs: &RenderSettings) -> Environment {
             falloff_distance: rs.ssao_falloff_distance,
             samples: rs.ssao_samples,
         }),
-        shadow_distance: rs.shadow_distance,
-        msaa_samples: match rs.msaa {
+        shadow_distance: q.shadow_distance,
+        msaa_samples: match q.msaa {
             MsaaQuality::Disabled => 1,
             MsaaQuality::Msaa2x => 2,
             MsaaQuality::Msaa4x => 4,
@@ -178,6 +180,7 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
         .try_resource::<RenderSettings>()
         .cloned()
         .unwrap_or_default();
+    let quality = QualitySettings::of(world);
     let matrices = world.all_world_matrices();
     let world_matrix =
         |id: oxide_scene::GameObjectId| matrices.get(id.index() as usize).copied().flatten();
@@ -191,7 +194,7 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
             .is_none_or(|(_, c)| c.post_processing);
     let mut frame = RenderFrame {
         cameras: cameras_override.unwrap_or_else(|| cameras(world)),
-        environment: environment(&settings),
+        environment: environment(&settings, &quality),
         time: world.resource::<oxide_core::Time>().time(),
         frame_index: world.resource::<oxide_core::Time>().frame_count(),
         texture_cameras: texture_cameras(world),
@@ -223,12 +226,7 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
                         SunLight {
                             direction: world.forward(id),
                             color,
-                            shadows: (l.shadows != LightShadows::None).then_some(ShadowSettings {
-                                soft: l.shadows == LightShadows::Soft,
-                                strength: l.shadow_strength,
-                                bias: l.shadow_bias,
-                                normal_bias: l.shadow_normal_bias,
-                            }),
+                            shadows: shadow_settings(l, &quality),
                         },
                     ));
                 }
@@ -239,12 +237,7 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
                 color,
                 spot: (l.light_type == LightType::Spot)
                     .then(|| (world.forward(id), l.spot_angle, l.inner_spot_angle)),
-                shadow: (l.shadows != LightShadows::None).then_some(ShadowSettings {
-                    soft: l.shadows == LightShadows::Soft,
-                    strength: l.shadow_strength,
-                    bias: l.shadow_bias,
-                    normal_bias: l.shadow_normal_bias,
-                }),
+                shadow: shadow_settings(l, &quality),
             }),
         }
     }
@@ -289,7 +282,7 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
         }
     }
     let hidden = match frame.cameras.first() {
-        Some(cam) => lod_hidden(world, cam, settings.lod_bias),
+        Some(cam) => lod_hidden(world, cam, quality.lod_bias),
         None => std::collections::HashSet::new(),
     };
     for (id, r) in world.query::<MeshRenderer>() {
@@ -426,7 +419,21 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
 }
 
 /// Active reflection probes as the renderer sees them.
+/// A light's realtime shadows, limited by the quality level (Unity `QualitySettings.shadows`).
+fn shadow_settings(l: &Light, q: &QualityLevel) -> Option<ShadowSettings> {
+    if l.shadows == LightShadows::None || q.shadows == ShadowQuality::Disable {
+        return None;
+    }
+    Some(ShadowSettings {
+        soft: l.shadows == LightShadows::Soft && q.shadows == ShadowQuality::All,
+        strength: l.shadow_strength,
+        bias: l.shadow_bias,
+        normal_bias: l.shadow_normal_bias,
+    })
+}
+
 pub fn reflection_probes(world: &World) -> Vec<ReflectionProbeView> {
+    let realtime = QualitySettings::of(world).realtime_reflection_probes;
     world
         .query::<ReflectionProbe>()
         .map(|(id, p)| {
@@ -455,6 +462,10 @@ pub fn reflection_probes(world: &World) -> Vec<ReflectionProbeView> {
                 refresh: match (p.mode, p.refresh_mode) {
                     (ReflectionProbeMode::Baked, _) => ProbeRefresh::OnAwake,
                     (_, ReflectionProbeRefreshMode::OnAwake) => ProbeRefresh::OnAwake,
+                    // Quality "Realtime Reflection Probes" off: capture once, never refresh.
+                    (_, ReflectionProbeRefreshMode::EveryFrame) if !realtime => {
+                        ProbeRefresh::OnAwake
+                    }
                     (_, ReflectionProbeRefreshMode::EveryFrame) => ProbeRefresh::EveryFrame,
                     (_, ReflectionProbeRefreshMode::ViaScripting) => ProbeRefresh::ViaScripting,
                 },
@@ -529,7 +540,11 @@ pub fn lod_level_for(
     bias: f32,
 ) -> Option<usize> {
     let (c, r) = lod_group_sphere(world, id, g);
-    oxide_scene::lod_level(&g.lods, screen_relative_height(cam, c, r) * bias.max(0.01))
+    let level =
+        oxide_scene::lod_level(&g.lods, screen_relative_height(cam, c, r) * bias.max(0.01))?;
+    // Quality "Maximum LOD Level": finer levels are skipped.
+    let max = QualitySettings::of(world).maximum_lod_level as usize;
+    Some(level.max(max.min(g.lods.len().saturating_sub(1))))
 }
 
 /// Renderer objects LOD groups hide from `cam` (levels not chosen, or culled groups).

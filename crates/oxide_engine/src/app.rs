@@ -92,6 +92,7 @@ impl App {
         for p in crate::default_plugins() {
             app = app.plugin(p.as_ref());
         }
+        crate::project_settings::load_and_apply(&mut app.world);
         app
     }
 

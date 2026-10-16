@@ -10,6 +10,10 @@ pub struct Application {
     pub pending_scene: Option<String>,
     /// Scenes in the build, in Build Settings order.
     pub build_scenes: Vec<String>,
+    /// Player settings: Unity `Application.companyName`, `productName` and `version`.
+    pub company_name: String,
+    pub product_name: String,
+    pub version: String,
 }
 
 impl Application {

@@ -348,6 +348,12 @@ fn main() -> std::process::ExitCode {
     }
     std::fs::copy(&built, &exe).map_err(|e| format!("cannot copy {}: {e}", built.display()))?;
     copy_dir(&project.join("Assets"), &data.join("Assets"))?;
+    if project.join("ProjectSettings").is_dir() {
+        copy_dir(
+            &project.join("ProjectSettings"),
+            &data.join("ProjectSettings"),
+        )?;
+    }
     let info = format!(
         "product_name: {:?}\nscenes:\n{}width: {}\nheight: {}\nfullscreen: {}\n",
         s.product_name,

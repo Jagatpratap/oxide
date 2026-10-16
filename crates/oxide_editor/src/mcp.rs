@@ -270,6 +270,108 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
         },
     );
 
+    let windows: Vec<&str> = crate::Tab::ALL
+        .iter()
+        .chain(&[crate::Tab::ProjectSettings, crate::Tab::Preferences])
+        .map(|t| t.title())
+        .collect();
+    tool(
+        s,
+        bus,
+        ToolDef::new(
+            "editor_open_window",
+            "Open editor window",
+            "Opens (or focuses) an editor window. For Project Settings and Preferences, `page` picks the page \
+             (e.g. \"Physics\", \"Quality\", \"Tags and Layers\", \"Input Manager\"; Preferences: \"General\", \
+             \"Console\", \"Scene View\", \"Colors\", \"External Tools\").",
+            schema(
+                json!({ "window": { "type": "string", "enum": windows }, "page": { "type": "string" } }),
+                &["window"],
+            ),
+        ),
+        |args, e| {
+            with_editor(e, |ed, e| {
+                let name = args.get("window").and_then(Json::as_str).unwrap_or("");
+                let all = crate::Tab::ALL
+                    .into_iter()
+                    .chain([crate::Tab::ProjectSettings, crate::Tab::Preferences]);
+                let Some(tab) = all
+                    .into_iter()
+                    .find(|t| t.title().eq_ignore_ascii_case(name))
+                else {
+                    return ToolResult::error(format!("unknown window `{name}`"));
+                };
+                if let Some(page) = args.get("page").and_then(Json::as_str) {
+                    let find = |n: &str| n.eq_ignore_ascii_case(page);
+                    match tab {
+                        crate::Tab::ProjectSettings => {
+                            match crate::settings_window::PAGES.iter().find(|(_, n)| find(n)) {
+                                Some((p, _)) => ed.st.settings.page = *p,
+                                None => {
+                                    return ToolResult::error(format!(
+                                        "no Project Settings page `{page}`"
+                                    ));
+                                }
+                            }
+                        }
+                        crate::Tab::Preferences => match crate::prefs::PAGES
+                            .iter()
+                            .find(|(_, n)| find(n))
+                        {
+                            Some((p, _)) => ed.st.prefs_page = *p,
+                            None => {
+                                return ToolResult::error(format!("no Preferences page `{page}`"));
+                            }
+                        },
+                        _ => {
+                            return ToolResult::error(
+                                "only Project Settings and Preferences have pages",
+                            );
+                        }
+                    }
+                }
+                ed.focus_tab(tab);
+                ToolResult::json(state_json(ed, e))
+            })
+        },
+    );
+
+    tool(
+        s,
+        bus,
+        ToolDef::new(
+            "editor_preferences",
+            "Editor Preferences",
+            "Reads the per-user editor Preferences; `values` changes some (e.g. {\"move_snap\": 0.5, \
+             \"script_editor\": \"code -g {file}:{line}\", \"stack_trace_warnings\": true}) and saves them.",
+            schema(json!({ "values": { "type": "object" } }), &[]),
+        ),
+        |args, e| {
+            with_editor(e, |ed, _| {
+                if let Some(values) = args.get("values").and_then(Json::as_object) {
+                    let mut cur = serde_json::to_value(&ed.st.prefs).unwrap_or_default();
+                    let Some(obj) = cur.as_object_mut() else {
+                        return ToolResult::error("preferences are not an object");
+                    };
+                    for (k, v) in values {
+                        if !obj.contains_key(k) {
+                            return ToolResult::error(format!("no preference `{k}`"));
+                        }
+                        obj.insert(k.clone(), v.clone());
+                    }
+                    match serde_json::from_value(cur) {
+                        Ok(p) => {
+                            ed.st.prefs = p;
+                            ed.st.prefs_changed = true;
+                        }
+                        Err(err) => return ToolResult::error(err.to_string()),
+                    }
+                }
+                ToolResult::json(serde_json::to_value(&ed.st.prefs).unwrap_or_default())
+            })
+        },
+    );
+
     tool(
         s,
         bus,
