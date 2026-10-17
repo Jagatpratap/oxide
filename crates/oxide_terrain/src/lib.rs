@@ -1,6 +1,7 @@
 //! Oxide terrain (Unity `Terrain` + `TerrainCollider`): a `TerrainData` asset rendered as
-//! LOD'd chunks with crack-hiding skirts and the splat-layer shader, trees drawn instanced
-//! with distance culling, and a heightfield collider kept in sync.
+//! LOD'd chunks with crack-hiding skirts and the splat-layer shader, trees as meshes up close
+//! and billboards (baked by the engine from each prototype) far away, bending in Wind Zones,
+//! and a heightfield collider kept in sync.
 //! Reference: <https://docs.unity3d.com/Manual/script-Terrain.html>
 
 // Submesh lists are `Vec<Range<u32>>`; a single-entry list is the normal case.
@@ -13,7 +14,10 @@ use oxide_assets::{
 use oxide_core::Reflect;
 use oxide_math::{Matrix4x4, Matrix4x4Ext, Quaternion, QuaternionExt, Vector2, Vector3, Vector4};
 use oxide_physics::TerrainCollider;
-use oxide_render::{DrawItem, GrassBatch, GrassInstance, TerrainDraw};
+use oxide_render::{
+    DrawItem, GrassBatch, GrassInstance, ParticleBatch, ParticleBlend, ParticleInstance,
+    ParticleMode, TerrainDraw,
+};
 use oxide_scene::{Component, GameObjectId, System, World};
 use std::collections::HashMap;
 
@@ -34,6 +38,12 @@ pub struct Terrain {
     pub draw_trees: bool,
     /// Trees beyond this distance from the camera are not drawn.
     pub tree_distance: f32,
+    /// Trees beyond this distance are drawn as billboards (Unity Billboard Start).
+    pub billboard_start: f32,
+    /// Distance over which trees cross-fade from mesh to billboard.
+    pub fade_length: f32,
+    /// At most this many trees are drawn as meshes (the nearest; Unity Max Mesh Trees).
+    pub max_mesh_trees: u32,
     /// Grass and detail meshes are drawn up to this distance.
     pub detail_distance: f32,
     /// Scales how many detail instances are drawn (0..1).
@@ -56,7 +66,10 @@ impl Default for Terrain {
             cast_shadows: true,
             lod_distance: 120.0,
             draw_trees: true,
-            tree_distance: 400.0,
+            tree_distance: 2000.0,
+            billboard_start: 50.0,
+            fade_length: 5.0,
+            max_mesh_trees: 50,
             detail_distance: 80.0,
             detail_density: 1.0,
             grouping_id: 0,
@@ -879,6 +892,15 @@ pub fn extract_details(
         let p0z = ((local.z - r) / patch_size.y).floor().max(0.0) as u32;
         let p1z = (((local.z + r) / patch_size.y).ceil().max(0.0) as u32).min(patches);
         let mut per_proto: Vec<Vec<GrassInstance>> = vec![Vec::new(); d.detail_prototypes.len()];
+        // Wind Zones make the grass sway harder (Unity: grass follows the terrain's wind
+        // settings, scaled by the zones blowing over it).
+        let wind_k = {
+            let time = world
+                .try_resource::<oxide_core::Time>()
+                .map_or(0.0, |t| t.time());
+            let center = origin + Vector3::new(d.size.x * 0.5, 0.0, d.size.z * 0.5);
+            1.0 + oxide_scene::wind::wind_at(world, center, time).length() * 0.5
+        };
         let r2 = r * r;
         for pz in p0z..p1z {
             for px in p0x..p1x {
@@ -894,6 +916,8 @@ pub fn extract_details(
                     }
                     let mut g = *g;
                     g.position = p.to_array();
+                    g.wind *= wind_k;
+                    g.color[3] *= wind_k;
                     // Shrink into the ground near the end of the range (no popping).
                     let fade = (1.0 - (dist2.sqrt() / r - 0.8) / 0.2).clamp(0.0, 1.0);
                     g.height *= fade;
@@ -1018,7 +1042,9 @@ pub fn extract(
             continue;
         }
         let max2 = t.tree_distance * t.tree_distance;
-        for tree in &data.trees {
+        let as_mesh = mesh_trees(t, data, origin, camera);
+        let billboards = world.try_resource::<TreeBillboards>();
+        for (ti, tree) in data.trees.iter().enumerate() {
             let Some(proto) = data.tree_prototypes.get(tree.prototype as usize) else {
                 continue;
             };
@@ -1032,11 +1058,18 @@ pub fn extract(
             if p.distance_squared(camera) > max2 {
                 continue;
             }
-            let m = Matrix4x4::trs(
-                p,
-                Quaternion::euler(0.0, tree.rotation, 0.0),
-                Vector3::new(tree.width_scale, tree.height_scale, tree.width_scale),
-            );
+            // Far trees are billboards (when the prototype has one).
+            if !as_mesh.contains(&ti)
+                && billboards.is_some_and(|b| b.by_mesh.contains_key(&proto.mesh.id()))
+            {
+                continue;
+            }
+            let m = Matrix4x4::trs(p, tree_bend(world, proto.bend_factor, p, ti), Vector3::ONE)
+                * Matrix4x4::trs(
+                    Vector3::ZERO,
+                    Quaternion::euler(0.0, tree.rotation, 0.0),
+                    Vector3::new(tree.width_scale, tree.height_scale, tree.width_scale),
+                );
             let subs = assets
                 .meshes
                 .get(&proto.mesh)
@@ -1071,6 +1104,158 @@ pub fn extract(
             }
         }
     }
+}
+
+/// Trees drawn as meshes: the nearest within the billboard distance (plus the fade), at
+/// most `max_mesh_trees`.
+fn mesh_trees(
+    t: &Terrain,
+    data: &TerrainData,
+    origin: Vector3,
+    camera: Vector3,
+) -> std::collections::HashSet<usize> {
+    let range = t.billboard_start + t.fade_length.max(0.0);
+    let mut near: Vec<(f32, usize)> = data
+        .trees
+        .iter()
+        .enumerate()
+        .filter_map(|(i, tree)| {
+            let d2 = tree_position(data, origin, tree).distance_squared(camera);
+            (d2 <= range * range).then_some((d2, i))
+        })
+        .collect();
+    near.sort_by(|a, b| a.0.total_cmp(&b.0));
+    near.truncate(t.max_mesh_trees as usize);
+    near.into_iter().map(|(_, i)| i).collect()
+}
+
+fn tree_position(
+    data: &TerrainData,
+    origin: Vector3,
+    tree: &oxide_assets::terrain::TreeInstance,
+) -> Vector3 {
+    origin
+        + Vector3::new(
+            tree.position.x * data.size.x,
+            data.interpolated_height(tree.position.x, tree.position.z),
+            tree.position.z * data.size.z,
+        )
+}
+
+/// How a tree leans in the wind: toward the wind, by its prototype's bend factor, swaying.
+fn tree_bend(world: &World, bend: f32, at: Vector3, index: usize) -> Quaternion {
+    if bend <= 0.0 {
+        return Quaternion::IDENTITY;
+    }
+    let time = world
+        .try_resource::<oxide_core::Time>()
+        .map_or(0.0, |t| t.time());
+    let wind = oxide_scene::wind::wind_at(world, at, time);
+    let strength = wind.length();
+    if strength < 1e-4 {
+        return Quaternion::IDENTITY;
+    }
+    let phase = index as f32 * 1.618;
+    let sway = 0.75 + 0.25 * (time * 1.7 + phase).sin();
+    let angle = (strength * bend * 0.03 * sway).min(0.35);
+    let axis = Vector3::Y.cross(wind / strength).normalize_or_zero();
+    if axis == Vector3::ZERO {
+        return Quaternion::IDENTITY;
+    }
+    Quaternion::from_axis_angle(axis, angle)
+}
+
+/// A tree prototype's billboard: an atlas of views around the tree (baked by the engine).
+#[derive(Clone, Debug)]
+pub struct TreeBillboard {
+    pub texture: AssetId,
+    pub width: f32,
+    pub height: f32,
+    /// How far below the tree's origin its image starts.
+    pub bottom: f32,
+    /// Texture rectangle per view angle, from the tree's front around +Y.
+    pub images: Vec<[f32; 4]>,
+}
+
+/// Billboards of tree prototypes by mesh (a World resource).
+#[derive(Default)]
+pub struct TreeBillboards {
+    pub by_mesh: HashMap<AssetId, TreeBillboard>,
+    /// Prototypes that couldn't be baked (drawn as meshes at every distance).
+    pub failed: std::collections::HashSet<AssetId>,
+}
+
+/// Distant terrain trees as camera-facing billboards (upright), fading in over the
+/// terrain's fade length while the mesh is still drawn.
+pub fn extract_tree_billboards(world: &World, camera: Vector3, out: &mut Vec<ParticleBatch>) {
+    let Some(bb) = world.try_resource::<TreeBillboards>() else {
+        return;
+    };
+    let assets = world.resource::<AssetServer>();
+    let mut batches: HashMap<AssetId, Vec<ParticleInstance>> = HashMap::new();
+    for (id, t) in world.query::<Terrain>() {
+        if !t.draw_trees || !world.get(id).is_some_and(|o| o.active_in_hierarchy()) {
+            continue;
+        }
+        let Some(data) = t.data.as_ref().and_then(|h| assets.terrains.get(h)) else {
+            continue;
+        };
+        let origin = world.position(id);
+        let max2 = t.tree_distance * t.tree_distance;
+        let fade = t.fade_length.max(1e-3);
+        let as_mesh = mesh_trees(t, data, origin, camera);
+        for (ti, tree) in data.trees.iter().enumerate() {
+            let Some(proto) = data.tree_prototypes.get(tree.prototype as usize) else {
+                continue;
+            };
+            let Some(b) = bb.by_mesh.get(&proto.mesh.id()) else {
+                continue;
+            };
+            let p = tree_position(data, origin, tree);
+            let d2 = p.distance_squared(camera);
+            if d2 > max2 {
+                continue;
+            }
+            let alpha = if as_mesh.contains(&ti) {
+                ((d2.sqrt() - t.billboard_start) / fade).clamp(0.0, 1.0)
+            } else {
+                1.0
+            };
+            if alpha <= 0.0 {
+                continue;
+            }
+            let rot = Quaternion::euler(0.0, tree.rotation, 0.0);
+            let uv = pick_image(&b.images, rot.inverse() * (camera - p));
+            let (w, h) = (b.width * tree.width_scale, b.height * tree.height_scale);
+            let center = p + Vector3::Y * (h * 0.5 - b.bottom * tree.height_scale);
+            batches.entry(b.texture).or_default().push(
+                ParticleInstance::billboard(center.to_array(), w, [1.0, 1.0, 1.0, alpha], 0.0)
+                    .with_mode(ParticleMode::Vertical, [0.0; 3])
+                    .with_uv(uv)
+                    .with_aspect(h / w.max(1e-4)),
+            );
+        }
+    }
+    for (texture, particles) in batches {
+        out.push(ParticleBatch {
+            texture: Some(texture),
+            blend: ParticleBlend::Alpha,
+            particles,
+        });
+    }
+}
+
+/// The view a billboard shows for a camera in direction `to_camera` (tree space).
+pub fn pick_image(images: &[[f32; 4]], to_camera: Vector3) -> [f32; 4] {
+    if images.is_empty() {
+        return [0.0, 0.0, 1.0, 1.0];
+    }
+    let angle = to_camera
+        .x
+        .atan2(to_camera.z)
+        .rem_euclid(std::f32::consts::TAU);
+    let i = ((angle / std::f32::consts::TAU * images.len() as f32).round() as usize) % images.len();
+    images[i]
 }
 
 /// Unity `Terrain.SampleHeight`: world-space Y of the ground under `position` (None if off

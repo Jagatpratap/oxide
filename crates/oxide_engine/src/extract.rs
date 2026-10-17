@@ -454,6 +454,7 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
         .first()
         .map_or(oxide_math::Vector3::ZERO, |c| c.position);
     oxide_terrain::extract(world, cam_pos, &mut frame.terrain_draws, &mut frame.draws);
+    oxide_terrain::extract_tree_billboards(world, cam_pos, &mut frame.particles);
     oxide_terrain::extract_details(world, cam_pos, &mut frame.grass, &mut frame.draws);
     oxide_particles::extract(world, &mut frame.particles);
     oxide_particles::extract_lights(world, &mut frame.lights);

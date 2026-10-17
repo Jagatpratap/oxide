@@ -433,6 +433,8 @@ impl Engine {
     }
 
     fn render(&mut self) {
+        // Far terrain trees need their billboards baked (one prototype per frame).
+        crate::tree_billboards::update(self);
         let frame = match self.surface.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f) => f,
             wgpu::CurrentSurfaceTexture::Suboptimal(f) => {

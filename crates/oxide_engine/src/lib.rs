@@ -37,6 +37,7 @@ pub mod project_settings;
 pub mod render_pipeline;
 pub mod sprites2d;
 pub mod streaming;
+pub mod tree_billboards;
 pub mod volumes;
 
 pub use app::{App, AppControl, EngineConfig, McpToolsFn};

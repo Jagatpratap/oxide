@@ -791,6 +791,10 @@ struct StepEnv<'a> {
     spawn: SpawnEnv<'a>,
     physics: Option<&'a oxide_physics::Physics>,
     fields: &'a [Field],
+    /// Wind Zones (External Forces).
+    wind: &'a [oxide_scene::wind::PlacedWindZone],
+    /// Game time, for gusts.
+    time: f32,
     sub_targets: &'a HashMap<GameObjectId, SubTarget>,
     /// This system is another's sub-emitter: it doesn't emit by itself.
     is_sub: bool,
@@ -1022,6 +1026,7 @@ fn step(ps: &mut ParticleSystem, env: &StepEnv, dt: f32, out: &mut StepOut) {
                 }
                 field_drag += ff.drag * k;
             }
+            f += oxide_scene::wind::wind_from(env.wind, wp, env.time);
             accel += dir_from_world_space(space, rot, f * ext.multiplier);
             if field_drag > 0.0 {
                 p.velocity *= (-field_drag * ext.multiplier * dt).exp();
@@ -1370,6 +1375,8 @@ pub fn simulate(world: &mut World) {
         return;
     }
     let physics = world.resources.remove::<oxide_physics::Physics>();
+    let wind = oxide_scene::wind::wind_zones(world);
+    let game_time = world.resource::<Time>().time();
     let fields: Vec<Field> = world
         .query::<ParticleSystemForceField>()
         .filter(|(id, _)| world.get(*id).is_some_and(|o| o.active_in_hierarchy()))
@@ -1469,6 +1476,8 @@ pub fn simulate(world: &mut World) {
             },
             physics: physics.as_ref(),
             fields: &fields,
+            wind: &wind,
+            time: game_time,
             sub_targets: &sub_targets,
             is_sub,
         };

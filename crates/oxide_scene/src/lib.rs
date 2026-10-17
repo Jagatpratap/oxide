@@ -30,6 +30,7 @@ pub mod testing;
 pub mod tilemap;
 pub mod timers;
 pub mod volume;
+pub mod wind;
 pub mod world;
 
 pub use application::{Application, RuntimePlatform, Screen};
@@ -80,6 +81,7 @@ pub fn register_builtin(reg: &mut ComponentRegistry) {
     reg.register::<MeshRenderer>("Mesh/Mesh Renderer");
     reg.register::<SkinnedMeshRenderer>("Mesh/Skinned Mesh Renderer");
     reg.register::<LODGroup>("Rendering/LOD Group");
+    reg.register::<wind::WindZone>("Miscellaneous/Wind Zone");
     reg.register::<OcclusionPortal>("Rendering/Occlusion Portal");
     reg.register::<ReflectionProbe>("Rendering/Reflection Probe");
     reg.register::<LightProbeGroup>("Rendering/Light Probe Group");
