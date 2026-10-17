@@ -413,7 +413,16 @@ runner, native plugins.
   ([Accessibility](https://docs.unity3d.com/Manual/accessibility/_index.html))
 - ◐ Particle System (Shuriken-style modules: emission, shape, velocity/size/color over lifetime, noise, collision, sub-emitters, trails, texture sheet) + editor
   ([Particle effects](https://docs.unity3d.com/Manual/ParticleSystems.html))
-- ☐ GPU VFX graph (node-based, compute) — later
+- ☑ VFX Graph (GPU particles): `.vfx` assets with Spawn → Initialize Particle → Update Particle → Output
+  Particle Quad contexts joined by flow, ~45 of Unity's blocks (spawn rates/bursts on the CPU; Set attribute
+  blocks with Composition, random variants, position shapes, Gravity/Force/Linear Drag/Turbulence/Conform to
+  Sphere/Vortex, collisions with plane/sphere/box, kill volumes, Color/Size/Alpha over Life with gradients and
+  curves, Flipbook Player), operators (Get Attribute, Random Number, the Shader Graph math library), exposed
+  properties; compute-shader simulation with a dead-particle stack, billboards drawn from the particle buffer
+  (alpha/additive/opaque, face camera or along velocity, flipbooks, soft default dot), local or world space;
+  Visual Effect component (Play/Stop/Reinit/pause/play rate/SetFloat/SetVector, plays in Edit mode), VFX Graph
+  window with live apply, `visual_effect` and `editor_vfx_graph` MCP tools. Not yet: multiple outputs per
+  system, mesh/strip/line outputs, GPU events, particle sorting, bounds culling, readback of the alive count
   ([Visual Effect Graph](https://docs.unity3d.com/Manual/VFXGraph.html))
 - ◐ Decals, lens flares, Line/Trail renderers, billboards: Lens Flare (SRP) ☑ (`.lensflare` data assets with Image/Circle/Polygon/Ring elements, blend modes, multiple elements with Uniform/Curve/Random distribution, radial distortion; Lens Flare component following Lights with distance, screen and spot-cone attenuation and GPU depth occlusion; previews in the Project window and Inspector), Screen Space Lens Flare Volume override ☑ (ghosts, warped halo, streaks, chromatic aberration from the bloom mips); decals, lines, trails, billboards ☐
   ([Lens flares](https://docs.unity3d.com/Manual/urp/shared/lens-flare/lens-flare.html),
@@ -432,7 +441,7 @@ runner, native plugins.
 - ◐ Node graph framework → Shader Graph, VFX Graph, Animator, visual scripting all built on it
   ([Graph Toolkit](https://docs.unity3d.com/Manual/gtk/gtk-index.html)): the node canvas ☑ (`node_canvas.rs`:
   typed ports, wires, pan/zoom, box select, Create Node searcher, drop-a-wire-to-create, groups, sticky notes,
-  copy/paste/duplicate, framing, the window's own undo); Shader Graph ☑; VFX Graph, visual scripting ☐
+  copy/paste/duplicate, framing, the window's own undo); Shader Graph ☑; VFX Graph ☑; visual scripting ☐
 - ☑ Shader Graph (URP Lit/Unlit targets): `.shadergraph` / `.shadersubgraph` assets, ~120 of Unity's nodes with
   Unity's formulas (inputs, geometry, textures, math, UV, noise/Voronoi/shapes, artistic blend/normal/colour,
   logic, Custom Function, Sub Graph, Boolean keywords), master stack (Vertex: Position/Normal/Tangent; Fragment:

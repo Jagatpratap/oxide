@@ -191,6 +191,70 @@ pub struct TerrainDraw {
     pub occluder: Option<AssetId>,
 }
 
+/// How a VFX Graph output blends (Unity's Blend Mode on an output context).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum VfxBlend {
+    #[default]
+    Alpha,
+    Additive,
+    Opaque,
+}
+
+/// How VFX Graph quads face (Unity's Orient block).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum VfxOrient {
+    #[default]
+    FaceCamera,
+    AlongVelocity,
+}
+
+/// A compiled VFX Graph system: its generated hooks and output settings.
+#[derive(Clone, Debug, Default)]
+pub struct VfxProgram {
+    /// Changes whenever the code or settings change (GPU programs are cached by it).
+    pub hash: u64,
+    /// Asset name, for error messages.
+    pub name: String,
+    /// `vfx_init`, `vfx_update` and `vfx_output` (see `vfx.rs`).
+    pub hooks: String,
+    pub capacity: u32,
+    pub blend: VfxBlend,
+    pub orient: VfxOrient,
+    /// Flipbook grid (columns, rows); 0 = no flipbook.
+    pub flipbook: [u32; 2],
+    /// Particles live in the effect's local space (they move with it).
+    pub local_space: bool,
+    /// No texture: draw Unity's default soft round particle.
+    pub soft_dot: bool,
+    /// Baked gradients and curves the hooks read (`luts`).
+    pub luts: Vec<[f32; 4]>,
+}
+
+/// One VFX Graph system of a Visual Effect to simulate on the GPU and draw.
+#[derive(Clone, Debug)]
+pub struct VfxDraw {
+    /// The effect instance and system (its particles persist between frames under it).
+    pub key: u64,
+    pub program: std::sync::Arc<VfxProgram>,
+    /// Particles to spawn this frame.
+    pub spawn: u32,
+    /// Kill every particle first (Reinit / Play after Stop).
+    pub reset: bool,
+    /// Advance the simulation this frame (false while paused).
+    pub simulate: bool,
+    /// The effect's update count: the system steps once per new value, however many views
+    /// render it (Edit mode has no frame counter of its own).
+    pub step: u64,
+    pub visible: bool,
+    pub dt: f32,
+    pub time: f32,
+    pub seed: u32,
+    pub object_to_world: Matrix4x4,
+    /// Exposed property values (vec4 slots).
+    pub properties: Vec<[f32; 4]>,
+    pub texture: Option<AssetId>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ParticleBlend {
     Alpha,
@@ -741,6 +805,8 @@ pub struct RenderFrame {
     /// centered on the origin under each matrix.
     pub occluder_boxes: Vec<Matrix4x4>,
     pub particles: Vec<ParticleBatch>,
+    /// VFX Graph systems (GPU particles).
+    pub vfx: Vec<VfxDraw>,
     /// Terrain grass and detail billboards.
     pub grass: Vec<GrassBatch>,
     pub sprites: Vec<SpriteDraw>,

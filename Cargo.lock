@@ -2623,6 +2623,7 @@ dependencies = [
  "oxide_shadergraph",
  "oxide_terrain",
  "oxide_ui",
+ "oxide_vfx",
  "serde",
  "serde_json",
  "serde_yaml_ng",
@@ -2657,6 +2658,7 @@ dependencies = [
  "oxide_text",
  "oxide_timeline",
  "oxide_ui",
+ "oxide_vfx",
  "png",
  "pollster",
  "serde",
@@ -2877,6 +2879,19 @@ dependencies = [
  "oxide_render",
  "oxide_scene",
  "oxide_text",
+]
+
+[[package]]
+name = "oxide_vfx"
+version = "0.1.0"
+dependencies = [
+ "oxide_assets",
+ "oxide_core",
+ "oxide_math",
+ "oxide_render",
+ "oxide_scene",
+ "oxide_shadergraph",
+ "pollster",
 ]
 
 [[package]]

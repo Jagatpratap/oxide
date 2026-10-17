@@ -219,6 +219,7 @@ pub struct SceneRenderer {
     sprites: crate::sprites::SpriteGpu,
     flares: crate::flares::FlareGpu,
     text: crate::text::TextGpu,
+    vfx: crate::vfx::VfxGpu,
     /// MSAA sample counts the GPU supports for the HDR and depth formats.
     supported_samples: Vec<u32>,
     frame_layout: wgpu::BindGroupLayout,
@@ -696,6 +697,7 @@ impl SceneRenderer {
             ),
         );
         let text = crate::text::TextGpu::new(device, &frame_layout, text_module);
+        let vfx = crate::vfx::VfxGpu::new(device, &gpu.queue, &frame_layout);
         let sprite_module = shader(device, "sprites.wgsl", include_str!("shaders/sprites.wgsl"));
         let sprites =
             crate::sprites::SpriteGpu::new(device, &gpu.queue, &frame_layout, sprite_module);
@@ -709,6 +711,7 @@ impl SceneRenderer {
             sprites,
             flares: crate::flares::FlareGpu::new(device, &gpu.queue),
             text,
+            vfx,
             gpu_assets,
             supported_samples,
             frame_layout,
@@ -2881,6 +2884,17 @@ impl SceneRenderer {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("scene"),
         });
+        if !frame.vfx.is_empty() {
+            self.vfx.simulate(
+                device,
+                queue,
+                &mut encoder,
+                &mut self.gpu_assets,
+                assets,
+                frame,
+                samples,
+            );
+        }
 
         // ---- shadow passes ------------------------------------------------------------
         if shadows.is_some() {
@@ -3161,6 +3175,9 @@ impl SceneRenderer {
                 draw_batches(&mut pass, tb, &mut stats);
                 if !particle_ranges.is_empty() {
                     stats.draw_calls += self.particles.draw(&mut pass, &particle_ranges, samples);
+                }
+                if !frame.vfx.is_empty() {
+                    stats.draw_calls += self.vfx.draw(&mut pass, frame, samples);
                 }
                 if !sprite_ranges.is_empty() {
                     stats.draw_calls += self.sprites.draw(&mut pass, &sprite_ranges, samples);

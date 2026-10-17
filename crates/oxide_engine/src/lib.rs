@@ -23,6 +23,7 @@ pub mod mcp_streaming;
 pub mod mcp_terrain;
 mod mcp_timeline;
 pub mod mcp_tools;
+mod mcp_vfx;
 pub mod navigation;
 pub mod objects;
 pub mod project_settings;
@@ -141,6 +142,7 @@ impl Plugin for TimelinePlugin {
         systems: &mut Vec<Box<dyn oxide_scene::System>>,
     ) {
         systems.push(oxide_timeline::install(world));
+        systems.push(oxide_vfx::install(world));
     }
 }
 
@@ -243,6 +245,7 @@ pub mod prelude {
         Anchor, Canvas, Gui, GuiExt, TextAlign, TextMeshProUGUI, UIButton, UIImage, UISlider,
         UIText, UIToggle, egui,
     };
+    pub use oxide_vfx::{VisualEffect, VisualEffectAsset};
 
     pub use oxide_core::{
         AnimationCurve, Gradient, MinMaxCurve, MinMaxGradient, Reflect, Time, debug_log,

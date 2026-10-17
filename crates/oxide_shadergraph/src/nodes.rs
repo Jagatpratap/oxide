@@ -17,6 +17,8 @@ pub enum Ty {
     Bool,
     Tex,
     Dyn,
+    /// A VFX Graph flow connection between contexts (connects only to Flow).
+    Flow,
 }
 
 impl Ty {
@@ -47,6 +49,7 @@ impl Ty {
             Ty::F4 => "vec4f",
             Ty::Bool => "bool",
             Ty::Tex => "texture_2d<f32>",
+            Ty::Flow => "",
         }
     }
 
@@ -59,6 +62,7 @@ impl Ty {
             Ty::F4 => "Vector 4",
             Ty::Bool => "Boolean",
             Ty::Tex => "Texture 2D",
+            Ty::Flow => "Flow",
             Ty::Dyn => "Dynamic Vector",
         }
     }
@@ -311,6 +315,7 @@ pub fn constant(ty: Ty, v: [f32; 4]) -> String {
         ),
         Ty::Bool => (v[0] != 0.0).to_string(),
         Ty::Tex => "base_map".into(),
+        Ty::Flow => String::new(),
     }
 }
 
@@ -324,7 +329,7 @@ pub fn convert(e: &str, from: Ty, to: Ty) -> Option<String> {
         return Some(e.to_owned());
     }
     Some(match (from, to) {
-        (Tex, _) | (_, Tex) => return None,
+        (Tex, _) | (_, Tex) | (Flow, _) | (_, Flow) => return None,
         (Bool, t) => format!("{}(select(0.0, 1.0, {e}))", t.wgsl()),
         (F1, Bool) => format!("({e} != 0.0)"),
         (_, Bool) => format!("(({e}).x != 0.0)"),
@@ -349,6 +354,7 @@ pub fn to_color(e: &str, ty: Ty) -> String {
         Ty::F4 => format!("vec4f(({e}).xyz, 1.0)"),
         Ty::Bool => format!("vec4f(vec3f(select(0.0, 1.0, {e})), 1.0)"),
         Ty::Tex => format!("textureSample({e}, mat_sampler, sample_uv(i.uv0))"),
+        Ty::Flow => "vec4f(0.0, 0.0, 0.0, 1.0)".into(),
     }
 }
 

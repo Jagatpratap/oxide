@@ -1435,6 +1435,11 @@ pub fn open(
             st.timeline.open_asset(&engine.world, path);
             st.actions.push(Action::OpenTab(crate::Tab::Timeline));
         }
+        "VisualEffectAsset" => {
+            st.vfx_graph
+                .open(engine.world.resource_mut::<AssetServer>(), path)?;
+            st.actions.push(Action::OpenTab(crate::Tab::VfxGraph));
+        }
         "ShaderGraph" | "ShaderSubGraph" => {
             st.shader_graph.open(engine, path)?;
             st.actions.push(Action::OpenTab(crate::Tab::ShaderGraph));

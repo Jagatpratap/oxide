@@ -48,6 +48,15 @@ pub trait CanvasModel {
     fn error(&self, node: u32) -> Option<String>;
     fn templates(&self) -> Vec<Template>;
     fn can_connect(&self, from: Ty, to: Ty) -> bool;
+    /// The inline value of an unconnected input (VFX Graph keeps block values on blocks).
+    fn value(&self, node: &GraphNode, slot: &str) -> Option<oxide_math::Vector4> {
+        node.value(slot)
+    }
+    fn set_value(&mut self, node: u32, slot: &str, v: oxide_math::Vector4) {
+        if let Some(n) = self.data_mut().node_mut(node) {
+            n.set_value(slot, v);
+        }
+    }
 }
 
 /// Unity's port colours by type.
@@ -59,6 +68,7 @@ pub fn port_color(ty: Ty) -> Color32 {
         Ty::F4 => Color32::from_rgb(251, 203, 244),
         Ty::Bool => Color32::from_rgb(148, 129, 230),
         Ty::Tex => Color32::from_rgb(255, 139, 139),
+        Ty::Flow => Color32::from_rgb(200, 200, 200),
     }
 }
 
@@ -668,12 +678,10 @@ pub fn show(
                 vec2(r.width() - 16.0 * z, ROW * z - 4.0),
             );
             if show_fields {
-                let mut v = n.value(&p.id).map_or(p.default, |v| v.to_array());
+                let mut v = m.value(n, &p.id).map_or(p.default, |v| v.to_array());
                 let resp = value_ui(ui, row, p, &mut v);
-                if resp.changed()
-                    && let Some(node) = m.data_mut().node_mut(n.id)
-                {
-                    node.set_value(&p.id, oxide_math::Vector4::from_array(v));
+                if resp.changed() {
+                    m.set_value(n.id, &p.id, oxide_math::Vector4::from_array(v));
                     out.edited = true;
                 }
                 if resp.drag_stopped() || resp.lost_focus() || (resp.changed() && !resp.dragged()) {
@@ -702,7 +710,7 @@ pub fn show(
                 Color32::from_gray(200),
             );
             // Unconnected inputs show their value to the left of the node (Unity).
-            if !connected && show_fields && ty != Ty::Tex {
+            if !connected && show_fields && ty != Ty::Tex && ty != Ty::Flow {
                 let w = match (p.color, ty) {
                     (true, _) => 40.0,
                     (_, Ty::Bool) => 20.0,
@@ -720,7 +728,7 @@ pub fn show(
                     ],
                     Stroke::new(1.5, col),
                 );
-                if let (Some(label), None) = (p.bind.label(), n.value(&p.id)) {
+                if let (Some(label), None) = (p.bind.label(), m.value(n, &p.id)) {
                     painter.text(
                         field.center(),
                         egui::Align2::CENTER_CENTER,
@@ -729,12 +737,10 @@ pub fn show(
                         Color32::from_gray(200),
                     );
                 } else {
-                    let mut v = n.value(&p.id).map_or(p.default, |v| v.to_array());
+                    let mut v = m.value(n, &p.id).map_or(p.default, |v| v.to_array());
                     let resp = value_ui(ui, field, p, &mut v);
-                    if resp.changed()
-                        && let Some(node) = m.data_mut().node_mut(n.id)
-                    {
-                        node.set_value(&p.id, oxide_math::Vector4::from_array(v));
+                    if resp.changed() {
+                        m.set_value(n.id, &p.id, oxide_math::Vector4::from_array(v));
                         out.edited = true;
                     }
                     if resp.drag_stopped()
@@ -1211,6 +1217,7 @@ fn short(ty: Ty) -> &'static str {
         Ty::F4 => "4",
         Ty::Bool => "B",
         Ty::Tex => "T2",
+        Ty::Flow => "",
         Ty::Dyn => "n",
     }
 }

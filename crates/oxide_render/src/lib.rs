@@ -28,6 +28,7 @@ pub mod sprites;
 pub mod ssao;
 pub mod terrain;
 pub mod text;
+pub mod vfx;
 
 pub use capture::{CapturedImage, capture_frame};
 pub use flares::{

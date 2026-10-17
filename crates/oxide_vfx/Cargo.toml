@@ -1,0 +1,20 @@
+[package]
+name = "oxide_vfx"
+description = "Oxide VFX Graph: .vfx assets (contexts, blocks, operators), GPU particle code generation, the Visual Effect component"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+oxide_math.workspace = true
+oxide_core.workspace = true
+oxide_assets.workspace = true
+oxide_scene.workspace = true
+oxide_render.workspace = true
+oxide_shadergraph.workspace = true
+
+[dev-dependencies]
+pollster.workspace = true
+
+[lints]
+workspace = true

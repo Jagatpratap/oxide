@@ -42,6 +42,7 @@ mod theme;
 mod tile_palette;
 mod timeline_window;
 mod undo;
+mod vfx_graph_window;
 mod view;
 mod visibility;
 
@@ -79,6 +80,7 @@ pub enum Tab {
     Navigation,
     Timeline,
     ShaderGraph,
+    VfxGraph,
 }
 
 impl Tab {
@@ -114,6 +116,7 @@ impl Tab {
             Tab::Navigation => "Navigation",
             Tab::Timeline => "Timeline",
             Tab::ShaderGraph => "Shader Graph",
+            Tab::VfxGraph => "VFX Graph",
         }
     }
 }
@@ -187,6 +190,10 @@ pub enum Create {
     Text3D,
     /// GameObject → UI → Text - TextMeshPro (under a Canvas, made if there is none).
     TextUI,
+    /// GameObject → Visual Effects → Visual Effect.
+    VisualEffect,
+    /// GameObject → Effects → Particle System.
+    ParticleSystem,
 }
 
 impl Create {
@@ -212,6 +219,8 @@ impl Create {
             Create::NavMeshLink => "NavMesh Link",
             Create::Text3D => "Text (TMP)",
             Create::TextUI => "Text (TMP)",
+            Create::VisualEffect => "Visual Effect",
+            Create::ParticleSystem => "Particle System",
         }
     }
 }
@@ -259,6 +268,10 @@ pub enum Action {
     SplitIntoCells(f32),
     /// Ragdoll Wizard on the active (humanoid) object.
     CreateRagdoll,
+    /// Play / Pause / Stop / Restart a Visual Effect (Unity's Play Controls).
+    VisualEffect(GameObjectId, &'static str),
+    /// Open a `.vfx` in the VFX Graph window.
+    OpenVfxGraph(String),
     /// Bake one NavMeshSurface, or every active one.
     BakeNavMesh(Option<GameObjectId>),
     CancelNavMeshBake,
@@ -345,6 +358,7 @@ pub struct EditorState {
     animation: animation_window::AnimationWindow,
     pub(crate) timeline: timeline_window::TimelineWindow,
     pub(crate) shader_graph: shader_graph_window::ShaderGraphWindow,
+    pub(crate) vfx_graph: vfx_graph_window::VfxGraphWindow,
     mask: anim_inspectors::MaskState,
     audio_mixer: audio_mixer_window::AudioMixerWindow,
     sprite_editor: sprite_editor::SpriteEditorWindow,
@@ -409,6 +423,7 @@ impl EditorState {
             animation: Default::default(),
             timeline: Default::default(),
             shader_graph: Default::default(),
+            vfx_graph: Default::default(),
             mask: Default::default(),
             audio_mixer: Default::default(),
             sprite_editor: Default::default(),
@@ -617,6 +632,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::Navigation => navigation_window::window_ui(self.st, self.engine, ui),
             Tab::Timeline => timeline_window::window_ui(self.st, self.engine, ui),
             Tab::ShaderGraph => shader_graph_window::window_ui(self.st, self.engine, ui),
+            Tab::VfxGraph => vfx_graph_window::window_ui(self.st, self.engine, ui),
         }
     }
 
@@ -721,7 +737,12 @@ impl Editor {
         if let Some(path) = found
             && matches!(
                 tab,
-                Tab::Animator | Tab::Animation | Tab::AudioMixer | Tab::Timeline | Tab::ShaderGraph
+                Tab::Animator
+                    | Tab::Animation
+                    | Tab::AudioMixer
+                    | Tab::Timeline
+                    | Tab::ShaderGraph
+                    | Tab::VfxGraph
             )
             && self.dock.iter_all_tabs().any(|(p, t)| {
                 p.node_path() == path.node_path()
@@ -764,7 +785,12 @@ impl Editor {
             // not into whichever small panel had focus.
             if matches!(
                 tab,
-                Tab::Animator | Tab::Animation | Tab::AudioMixer | Tab::Timeline | Tab::ShaderGraph
+                Tab::Animator
+                    | Tab::Animation
+                    | Tab::AudioMixer
+                    | Tab::Timeline
+                    | Tab::ShaderGraph
+                    | Tab::VfxGraph
             ) && let Some(p) = self
                 .dock
                 .find_tab(&Tab::Scene)
@@ -992,6 +1018,17 @@ impl Editor {
                 st.record(w, "Clear Baked Data", None, now);
                 oxide_engine::lighting::clear(w);
                 "Cleared baked lighting".into()
+            }
+            Action::VisualEffect(id, cmd) => {
+                let (v, _) =
+                    oxide_vfx::effect_mut(w, id).ok_or("no Visual Effect on that object")?;
+                vfx_graph_window::control(v, cmd);
+                format!("Visual Effect: {cmd}")
+            }
+            Action::OpenVfxGraph(path) => {
+                st.vfx_graph.open(w.resource_mut::<AssetServer>(), &path)?;
+                st.actions.push(Action::OpenTab(Tab::VfxGraph));
+                format!("Opened {path}")
             }
             Action::BakeNavMesh(only) => {
                 st.record(w, "Bake NavMesh", None, now);
@@ -1605,6 +1642,18 @@ fn create(w: &mut World, kind: Create, active: Option<GameObjectId>) -> GameObje
             w.add_component(id, oxide_engine::nav::NavMeshModifierVolume::default());
             id
         }
+        Create::VisualEffect => {
+            let id = w.create("Visual Effect");
+            w.add_component(id, oxide_vfx::VisualEffect::default());
+            id
+        }
+        Create::ParticleSystem => {
+            let id = w.create("Particle System");
+            let mut ps = oxide_engine::prelude::ParticleSystem::default();
+            ps.play();
+            w.add_component(id, ps);
+            id
+        }
         Create::Text3D => {
             let id = w.create("Text (TMP)");
             w.add_component(id, oxide_engine::text::TextMeshPro::default());
@@ -1738,6 +1787,11 @@ impl Shell for Editor {
         oxide_scene::sprite_library::resolve_all(&mut engine.world);
         oxide_engine::lens_flares::preload(&mut engine.world);
         oxide_shadergraph::sync(engine.world.resource_mut::<oxide_assets::AssetServer>());
+        // Visual Effects play in the Scene view in Edit mode too (Play mode runs them as a system).
+        if self.st.play == PlayState::Edit {
+            let dt = ctx.input(|i| i.stable_dt).min(1.0 / 15.0);
+            oxide_vfx::update(&mut engine.world, dt);
+        }
         oxide_engine::text::components::update(&mut engine.world);
         let animation_open = self.dock.iter_all_tabs().any(|(_, t)| *t == Tab::Animation);
         self.st.tile_palette_open = self

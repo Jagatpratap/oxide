@@ -1018,6 +1018,9 @@ fn components(
                     ));
                 }
             }
+            if type_name == "VisualEffect" && targets.len() == 1 {
+                visual_effect_footer(ui, w, id, &mut st.actions);
+            }
             if type_name == "NavMeshSurface" && targets.len() == 1 {
                 navmesh_surface_footer(ui, w, id, &mut st.actions);
             }
@@ -1043,6 +1046,45 @@ fn components(
 
 /// Bake / Clear buttons and the baked data's size under a NavMeshSurface (Unity's
 /// NavMeshSurface Inspector).
+/// Unity's Visual Effect playback controls and Edit button.
+fn visual_effect_footer(ui: &mut egui::Ui, w: &World, id: GameObjectId, actions: &mut Vec<Action>) {
+    let Some(v) = w.get_component::<oxide_vfx::VisualEffect>(id) else {
+        return;
+    };
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        for cmd in ["Play", "Pause", "Stop", "Restart"] {
+            if ui.button(cmd).clicked() {
+                actions.push(Action::VisualEffect(id, cmd));
+            }
+        }
+        if let Some(h) = &v.asset
+            && ui.button("Edit").clicked()
+        {
+            actions.push(Action::OpenVfxGraph(h.path().to_owned()));
+        }
+    });
+    let state = if !v.is_playing() {
+        "Stopped"
+    } else if v.pause {
+        "Paused"
+    } else {
+        "Playing"
+    };
+    let c = v.state.compiled.as_ref();
+    ui.weak(format!(
+        "{state} · {:.1} s · {} system(s) · {} spawned",
+        v.state.time,
+        c.map_or(0, |c| c.systems.len()),
+        v.state.spawned
+    ));
+    if let Some(c) = c {
+        for (n, e) in c.errors.iter().take(3) {
+            ui.colored_label(Color32::from_rgb(230, 120, 100), format!("Node {n}: {e}"));
+        }
+    }
+}
+
 fn navmesh_surface_footer(
     ui: &mut egui::Ui,
     w: &World,

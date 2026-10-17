@@ -259,6 +259,7 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
     oxide_terrain::extract(world, cam_pos, &mut frame.terrain_draws, &mut frame.draws);
     oxide_terrain::extract_details(world, cam_pos, &mut frame.grass, &mut frame.draws);
     oxide_particles::extract(world, &mut frame.particles);
+    oxide_vfx::extract(world, &mut frame.vfx);
     crate::sprites2d::extract(world, &mut frame.sprites);
     crate::lens_flares::extract(world, &mut frame.lens_flares);
     oxide_text::components::extract(world, &mut frame.texts);

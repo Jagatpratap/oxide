@@ -122,6 +122,14 @@ fn create_items(prefix: &str) -> Vec<MenuItem> {
         v.push(item(&format!("{prefix}AI/{name}"), Action::Create(kind)));
     }
     v.push(item(
+        &format!("{prefix}Effects/Particle System"),
+        Action::Create(Create::ParticleSystem),
+    ));
+    v.push(item(
+        &format!("{prefix}Visual Effects/Visual Effect"),
+        Action::Create(Create::VisualEffect),
+    ));
+    v.push(item(
         &format!("{prefix}Camera"),
         Action::Create(Create::Camera),
     ));

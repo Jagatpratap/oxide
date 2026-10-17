@@ -301,6 +301,7 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
             crate::Tab::Navigation,
             crate::Tab::Timeline,
             crate::Tab::ShaderGraph,
+            crate::Tab::VfxGraph,
         ])
         .map(|t| t.title())
         .collect();
@@ -335,6 +336,7 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
                     crate::Tab::Navigation,
                     crate::Tab::Timeline,
                     crate::Tab::ShaderGraph,
+                    crate::Tab::VfxGraph,
                 ]);
                 let Some(tab) = all
                     .into_iter()
@@ -565,6 +567,48 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
             }
             with_editor(e, |ed, e| {
                 match crate::shader_graph_window::mcp(&mut ed.st, e, args) {
+                    Ok(j) => ToolResult::json(j),
+                    Err(err) => ToolResult::error(err),
+                }
+            })
+        },
+    );
+
+    tool(
+        s,
+        bus,
+        ToolDef::new(
+            "editor_vfx_graph",
+            "VFX Graph window",
+            "Edits a Visual Effect Graph (.vfx) in the VFX Graph window, like Unity's VFX Graph. `open` a file; \
+             `library: true` lists contexts (with settings), blocks (contexts they fit, inputs, options) and \
+             operators. Returns nodes (contexts with their blocks, operators), edges, properties and compile errors. \
+             Edits (one undo step per call, applied to effects in the scene at once): `add_property` {type: Float|\
+             Vector2|Vector3|Vector4|Color|Boolean, name, default?}; `add_nodes` [{kind: context (Spawn, Initialize \
+             Particle, Update Particle, Output Particle Quad) or operator, position?, options?, values?}]; `settings` \
+             {node, <setting>: value} (Capacity, Space, Blend Mode, Orient, Main Texture, Flipbook); `add_blocks` \
+             [{context, kind, values?, options?}]; `set_blocks` [{block, values?, options?, enabled?}]; `remove_blocks` \
+             [ids]; `connect` [{from, output?, to, input} or {from, output, to: context, block, input}] (flow: output \
+             \"Flow Out\" to input \"Flow In\"); `delete` [nodes]. Nodes are ids, \"$k\" (k-th node added by this \
+             call) or a context name. `save: true` writes the file.",
+            schema(
+                json!({
+                    "open": { "type": "string" }, "library": { "type": "boolean" },
+                    "add_property": { "type": "object" }, "add_nodes": { "type": "array" },
+                    "settings": { "type": "object" }, "add_blocks": { "type": "array" },
+                    "set_blocks": { "type": "array" }, "remove_blocks": { "type": "array" },
+                    "connect": { "type": "array" }, "delete": { "type": "array" },
+                    "save": { "type": "boolean" }, "frame": { "type": "boolean" }
+                }),
+                &[],
+            ),
+        ),
+        |args, e| {
+            if args.get("library").and_then(Json::as_bool) == Some(true) {
+                return ToolResult::json(crate::vfx_graph_window::library_json());
+            }
+            with_editor(e, |ed, e| {
+                match crate::vfx_graph_window::mcp(&mut ed.st, e, args) {
                     Ok(j) => ToolResult::json(j),
                     Err(err) => ToolResult::error(err),
                 }
