@@ -280,8 +280,8 @@ pub mod prelude {
         FilteringSettings, RenderPipeline, RenderPipelines, ScriptableRenderContext,
     };
     pub use oxide_core::{
-        AnimationCurve, Gradient, MinMaxCurve, MinMaxGradient, PlayerPrefs, Random, Reflect, Time,
-        debug_log, debug_log_error, debug_log_warning,
+        AnimationCurve, Gradient, JobHandle, JobResult, Jobs, MinMaxCurve, MinMaxGradient,
+        PlayerPrefs, Random, Reflect, Time, debug_log, debug_log_error, debug_log_warning,
     };
     pub use oxide_input::{
         ActionState, CursorLockMode, GamepadAxis, GamepadButton, Input, InputActionAsset,

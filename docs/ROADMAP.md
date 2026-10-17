@@ -465,7 +465,11 @@ from the fixed edge and each object along its matching local axis).
   `default_execution_order()` (Unity `[DefaultExecutionOrder]`); applies to Awake/OnEnable, Start, FixedUpdate,
   Update and LateUpdate, scene order within equal orders
   ([Control when your code updates](https://docs.unity3d.com/Manual/managing-update-order.html))
-- ☐ Job system + parallel iteration
+- ☑ Job system + parallel iteration: a worker pool (one thread per core but the main one), `Jobs::schedule`
+  (IJob) and `Jobs::schedule_parallel_for` (IJobParallelFor, batch size) with `JobHandle` dependencies,
+  `complete` / `is_completed` / `combine`, `Jobs::run` with a result, blocking `Jobs::parallel_for` and
+  `par_for_each_mut` over borrowed data; Rust's `Send`/`Sync` take the place of Unity's safety checks; jobs
+  that panic are logged and still complete; waiting threads help run queued jobs (no pool deadlocks)
   ([Distribute work across threads](https://docs.unity3d.com/Manual/programming-distribute-work-threads.html))
 - ☐ Web requests
   ([Web servers](https://docs.unity3d.com/Manual/web-request.html))
@@ -481,7 +485,7 @@ crate is compiled in the background and hot-reloaded in Edit and Play mode; comp
 objects and physics state survive, scripts get OnDisable/OnEnable across the reload, compile
 errors go to the Console, panics are caught and logged, and scripts that fail to load keep
 their data as Missing Script. The engine is one shared library (`oxide_dylib`) that the
-project's editor and its Scripts both link. Not yet: jobs, test runner, native plugins.
+project's editor and its Scripts both link. Not yet: test runner, native plugins.
 
 ### P7 — Physics, Input, 2D
 - ◐ 3D: Rigidbody, Box/Sphere/Capsule/Mesh colliders, triggers, layers collision matrix, raycasts/overlaps, physics materials, joints (Fixed/Hinge/Character ☑), CharacterController, articulations, ragdoll wizard ☑, cloth (later)

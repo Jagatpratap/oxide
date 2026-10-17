@@ -6,6 +6,7 @@
 
 pub mod curves;
 pub mod debug;
+pub mod jobs;
 pub mod player_prefs;
 pub mod random;
 pub mod reflect;
@@ -16,6 +17,7 @@ pub use curves::{
     Keyframe, MinMaxCurve, MinMaxCurveMode, MinMaxGradient, MinMaxGradientMode, TangentMode,
 };
 pub use debug::{LogEntry, LogType};
+pub use jobs::{JobHandle, JobResult, Jobs};
 pub use oxide_derive::Reflect;
 pub use player_prefs::PlayerPrefs;
 pub use random::Random;
