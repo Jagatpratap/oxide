@@ -19,6 +19,7 @@ mod console;
 mod curve_editor;
 pub(crate) mod game_view;
 mod hierarchy;
+pub mod hub;
 mod input_actions_window;
 mod inspector;
 pub mod launch;
@@ -244,6 +245,8 @@ impl Create {
 /// Everything the menus, shortcuts and MCP can ask the editor to do.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
+    /// File > New Project / Open Project: brings up the Oxide Hub.
+    OpenHub,
     NewScene,
     OpenScene(String),
     SaveScene,
@@ -856,6 +859,10 @@ impl Editor {
         }
         let w = &mut engine.world;
         let msg = match action {
+            Action::OpenHub => {
+                hub::open_hub()?;
+                "Opening the Oxide Hub...".into()
+            }
             Action::NewScene => {
                 if st.playing() {
                     return Err("stop Play mode first".into());

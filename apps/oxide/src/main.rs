@@ -1,6 +1,8 @@
 //! `oxide` — the Oxide editor, with the MCP server on.
 //!
 //! ```text
+//! oxide                            the Oxide Hub (Unity Hub): open, add or create projects
+//! oxide hub [--mcp-addr HOST:PORT] the Hub, optionally with MCP (for automation)
 //! oxide new  <DIR> [editor args]   create a game project and open it
 //! oxide open <DIR> [editor args]   open a game project (its Scripts hot-reload)
 //! oxide [--scene Assets/Scenes/Main.scene] [--sample demo|vehicle|character|open_world|city] [--project DIR]
@@ -121,7 +123,44 @@ fn launch_project(create: bool, dir: &str, rest: Vec<String>) -> ExitCode {
     }
 }
 
+/// The Oxide Hub window (what `oxide` opens with no arguments).
+fn run_hub(mut args: impl Iterator<Item = String>) -> ExitCode {
+    let mut config = EngineConfig {
+        title: "Oxide Hub".into(),
+        width: 1100,
+        height: 680,
+        mcp_addr: None,
+        ..Default::default()
+    };
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "--mcp-addr" => config.mcp_addr = args.next(),
+            other => {
+                eprintln!("unknown argument `{other}`\nusage: oxide hub [--mcp-addr HOST:PORT]");
+                return ExitCode::from(2);
+            }
+        }
+    }
+    let app = App::with_config(config)
+        .shell(Box::new(oxide_editor::hub::Hub::new(engine_root())))
+        .mcp_tools(oxide_editor::mcp::register_window_tools);
+    match app.run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("oxide: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn main() -> ExitCode {
+    if std::env::args().len() == 1 {
+        return run_hub(std::iter::empty());
+    }
+    let mut raw = std::env::args().skip(1);
+    if raw.next().as_deref() == Some("hub") {
+        return run_hub(raw);
+    }
     let mut raw = std::env::args().skip(1);
     if let Some(cmd @ ("new" | "open")) = raw.next().as_deref() {
         let Some(dir) = raw.next() else {

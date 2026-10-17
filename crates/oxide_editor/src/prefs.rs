@@ -58,21 +58,25 @@ impl Default for EditorPrefs {
     }
 }
 
+/// This user's Oxide settings folder, shared by every project and the Hub.
+pub fn config_dir() -> PathBuf {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let base = if cfg!(target_os = "macos") {
+        home.map(|h| h.join("Library/Application Support/Oxide"))
+    } else if cfg!(windows) {
+        std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("Oxide"))
+    } else {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(|x| PathBuf::from(x).join("oxide"))
+            .or_else(|| home.map(|h| h.join(".config/oxide")))
+    };
+    base.unwrap_or_else(std::env::temp_dir)
+}
+
 impl EditorPrefs {
     /// Where preferences live for this user.
     pub fn default_path() -> PathBuf {
-        let home = std::env::var_os("HOME").map(PathBuf::from);
-        let base = if cfg!(target_os = "macos") {
-            home.map(|h| h.join("Library/Application Support/Oxide"))
-        } else if cfg!(windows) {
-            std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("Oxide"))
-        } else {
-            std::env::var_os("XDG_CONFIG_HOME")
-                .map(|x| PathBuf::from(x).join("oxide"))
-                .or_else(|| home.map(|h| h.join(".config/oxide")))
-        };
-        base.unwrap_or_else(std::env::temp_dir)
-            .join("EditorPrefs.yaml")
+        config_dir().join("EditorPrefs.yaml")
     }
 
     pub fn load(path: &Path) -> Self {

@@ -12,7 +12,8 @@ MCP server so AI agents can drive it.
 ## Make a game
 
 ```sh
-cargo run -p oxide -- new ~/Games/MyRacer     # create a project and open its editor
+cargo run -p oxide                            # the Oxide Hub: your projects, New project, Add from disk
+cargo run -p oxide -- new ~/Games/MyRacer     # or from the command line: create a project and open it
 cargo run -p oxide -- open ~/Games/MyRacer    # open it again later
 ```
 
@@ -48,7 +49,7 @@ impl Component for Spinner {
 ## Engine sandbox
 
 ```sh
-cargo run -p oxide                         # the editor on a default scene
+cargo run -p oxide -- --project .          # the editor on a default scene (no arguments opens the Hub)
 cargo run -p oxide -- --sample vehicle     # built-in samples: demo, vehicle, character, open_world
 cargo run -p oxide -- --player --sample vehicle   # the game alone, without the editor
 cargo test --workspace
@@ -78,7 +79,7 @@ Options: `--scene PATH`, `--project DIR`, `--size 1600x900`, `--mcp-addr 127.0.0
 | `crates/oxide_engine` | Window, player loop, scene extraction, MCP tools |
 | `crates/oxide_editor` | The editor, script hot reload, project templates |
 | `crates/oxide_dylib` | Engine + editor as one shared library (what project Scripts link) |
-| `apps/oxide` | The `oxide` binary (editor sandbox and project launcher) |
+| `apps/oxide` | The `oxide` binary (the Oxide Hub, project launcher and editor sandbox) |
 | `apps/oxide_mcp_stdio` | `oxide-mcp-stdio` bridge for stdio-only MCP clients |
 
 Oxide copies Unity's concepts and layout, not its name, logos, icons or assets.

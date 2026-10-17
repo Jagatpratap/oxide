@@ -82,6 +82,11 @@ pub fn run_project_editor(build_id: &'static str) -> ExitCode {
     let project =
         std::fs::canonicalize(&config.project_root).unwrap_or(config.project_root.clone());
     config.project_root = project.clone();
+    if let Some(name) = project.file_name() {
+        config.title = format!("{} - Oxide Editor", name.to_string_lossy());
+    }
+    // List it in the Hub, however it was opened.
+    crate::hub::remember_project(&project);
     let scene = initial_scene(&project, scene);
     let editor = Editor::new().with_scripts(ScriptHost::new(project.clone(), build_id));
     let app = App::with_config(config)

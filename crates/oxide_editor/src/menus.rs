@@ -149,6 +149,9 @@ fn create_items(prefix: &str) -> Vec<MenuItem> {
 /// Every main-menu item, in menu order. `Component/...` comes from the component registry.
 pub fn menu_items(world: &World, keymap: &Keymap) -> Vec<MenuItem> {
     let mut v = vec![
+        item("File/New Project...", Action::OpenHub),
+        item("File/Open Project...", Action::OpenHub),
+        sep("File"),
         item("File/New Scene", Action::NewScene),
         item("File/Open Scene...", Action::OpenSceneDialog),
         sep("File"),

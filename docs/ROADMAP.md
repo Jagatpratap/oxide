@@ -207,7 +207,7 @@ with `.meta` files in P3).
 - ☑ Preferences + Project Settings windows (Tags & Layers, Time, Physics, Quality, Graphics, Input, Player)
   ([Preferences](https://docs.unity3d.com/Manual/Preferences.html),
   [Project Settings](https://docs.unity3d.com/Manual/comp-ManagerGroup.html))
-- ✓ Project launcher (Hub equivalent): `oxide new <dir>` / `oxide open <dir>`
+- ✓ Project launcher: the **Oxide Hub** window (`oxide` with no arguments, or File > New/Open Project in the editor): recent projects with last-opened time and missing-folder warnings, search, New project (template, name, location with the system folder picker), Add project from disk, Show in Finder / Remove from list, Installs page; opening builds the project's editor with progress, then starts it. Also `oxide new <dir>` / `oxide open <dir>`
 
 **Exit:** create a project, place/move cubes with gizmos, edit in Inspector, Play/Stop restores state, Undo works for every edit.
 
