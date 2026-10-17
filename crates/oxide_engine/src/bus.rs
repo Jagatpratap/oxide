@@ -13,9 +13,18 @@ use winit::event_loop::EventLoopProxy;
 pub type Job = Box<dyn FnOnce(&mut Engine) -> ToolResult + Send>;
 pub type Envelope = (Job, SyncSender<ToolResult>);
 
-/// Event sent to wake the loop when a job is queued.
-#[derive(Debug, Clone, Copy)]
-pub struct Wake;
+/// Events for the window's loop: a queued job, or a screen reader (AccessKit) request.
+#[derive(Debug)]
+pub enum Wake {
+    Jobs,
+    AccessKit(egui_winit::accesskit_winit::Event),
+}
+
+impl From<egui_winit::accesskit_winit::Event> for Wake {
+    fn from(e: egui_winit::accesskit_winit::Event) -> Self {
+        Wake::AccessKit(e)
+    }
+}
 
 const TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -44,7 +53,7 @@ impl Bus {
             .lock()
             .map(|tx| tx.send((Box::new(job), reply_tx)).is_ok())
             .unwrap_or(false);
-        if !sent || self.proxy.send_event(Wake).is_err() {
+        if !sent || self.proxy.send_event(Wake::Jobs).is_err() {
             return ToolResult::error("the engine is shutting down");
         }
         reply_rx.recv_timeout(TIMEOUT).unwrap_or_else(|_| {

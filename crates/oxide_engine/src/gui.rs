@@ -120,6 +120,11 @@ impl GuiLayer {
         gui.wants_pointer = ctx.egui_wants_pointer_input();
         gui.wants_keyboard = ctx.egui_wants_keyboard_input();
         let requests = std::mem::take(&mut gui.texture_requests);
+        if let Some(update) = &full.platform_output.accesskit_update {
+            world
+                .resources
+                .insert(oxide_ui::accessibility::AccessKitSnapshot::record(update));
+        }
         self.state
             .handle_platform_output(window, full.platform_output);
         self.pixels_per_point = full.pixels_per_point;

@@ -11,6 +11,7 @@ pub mod gui;
 pub mod input_map;
 pub mod lens_flares;
 pub mod lighting;
+mod mcp_accessibility;
 pub mod mcp_animation;
 pub mod mcp_asset_database;
 pub mod mcp_audio;

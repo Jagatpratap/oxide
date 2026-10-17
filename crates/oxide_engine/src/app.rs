@@ -167,6 +167,8 @@ struct Runner {
     jobs: Receiver<Envelope>,
     mcp_url: Option<String>,
     failed: Option<String>,
+    /// For screen reader (AccessKit) events.
+    proxy: winit::event_loop::EventLoopProxy<Wake>,
 }
 
 impl Runner {
@@ -188,7 +190,9 @@ impl ApplicationHandler<Wake> for Runner {
         let Some((world, systems, shell)) = self.pending.take() else {
             return;
         };
+        // Hidden until the screen reader adapter is attached (AccessKit needs that).
         let mut attrs = Window::default_attributes()
+            .with_visible(false)
             .with_title(&self.config.title)
             .with_inner_size(LogicalSize::new(self.config.width, self.config.height));
         if self.config.fullscreen {
@@ -213,8 +217,13 @@ impl ApplicationHandler<Wake> for Runner {
                 )
             });
         match result {
-            Ok(engine) => {
+            Ok(mut engine) => {
                 debug_log!("Oxide {} running", oxide_core::ENGINE_VERSION);
+                engine
+                    .gui
+                    .state
+                    .init_accesskit(event_loop, &engine.window, self.proxy.clone());
+                engine.window.set_visible(true);
                 engine.window.request_redraw();
                 self.engine = Some(engine);
             }
@@ -226,8 +235,23 @@ impl ApplicationHandler<Wake> for Runner {
         }
     }
 
-    fn user_event(&mut self, _: &ActiveEventLoop, _: Wake) {
-        self.drain_jobs();
+    fn user_event(&mut self, _: &ActiveEventLoop, event: Wake) {
+        match event {
+            Wake::Jobs => self.drain_jobs(),
+            Wake::AccessKit(e) => {
+                use egui_winit::accesskit_winit::WindowEvent as Ax;
+                let Some(engine) = self.engine.as_mut() else {
+                    return;
+                };
+                match e.window_event {
+                    // A screen reader started: build the tree from now on.
+                    Ax::InitialTreeRequested => engine.gui.state.egui_ctx().enable_accesskit(),
+                    Ax::ActionRequested(r) => engine.gui.state.on_accesskit_action_request(r),
+                    Ax::AccessibilityDeactivated => engine.gui.state.egui_ctx().disable_accesskit(),
+                }
+                engine.window.request_redraw();
+            }
+        }
     }
 
     fn device_event(&mut self, _: &ActiveEventLoop, _: DeviceId, event: DeviceEvent) {
@@ -392,6 +416,7 @@ fn run_app(mut app: App) -> Result<(), Box<dyn Error>> {
         jobs,
         mcp_url: http.as_ref().map(HttpServer::url),
         failed: None,
+        proxy: event_loop.create_proxy(),
     };
     event_loop.run_app(&mut runner)?;
     drop(http);

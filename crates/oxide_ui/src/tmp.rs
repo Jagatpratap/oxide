@@ -658,10 +658,8 @@ pub(crate) fn draw(
     ctx: &egui::Context,
     screen_rect: egui::Rect,
     placed: Option<egui::Rect>,
-) {
-    let Some(mut t) = world.get_component::<TextMeshProUGUI>(id).cloned() else {
-        return;
-    };
+) -> Option<egui::Rect> {
+    let mut t = world.get_component::<TextMeshProUGUI>(id).cloned()?;
     let screen = screen_rect.size();
     let k = canvas_scale(world, id, screen);
     // A RectTransform tree sets the text box.
@@ -687,9 +685,7 @@ pub(crate) fn draw(
         world.resources.insert(cache);
         v
     };
-    let Some(lib) = world.try_resource::<FontLibrary>() else {
-        return;
-    };
+    let lib = world.try_resource::<FontLibrary>()?;
     let align = t.anchor.align();
     let (fx, fy) = (align.x().to_factor(), align.y().to_factor());
     let anchor_point = screen_rect.min
@@ -718,6 +714,7 @@ pub(crate) fn draw(
         egui::Id::new(("oxide-tmp", id.to_bits())),
     ));
     let origin = top_left + shift;
+    let drawn = placed.unwrap_or_else(|| egui::Rect::from_min_size(top_left, egui::vec2(w, h)));
     paint_text(
         &painter.with_clip_rect(screen_rect),
         lib,
@@ -729,7 +726,7 @@ pub(crate) fn draw(
     );
     // Links under the pointer (Unity's TMP_TextUtilities.FindIntersectingLink).
     if mesh.links.is_empty() {
-        return;
+        return Some(drawn);
     }
     let (pointer, clicked) = ctx.input(|i| (i.pointer.hover_pos(), i.pointer.primary_clicked()));
     let link = pointer
@@ -753,4 +750,5 @@ pub(crate) fn draw(
     {
         world.send_message(id, "OnLinkClicked", oxide_core::reflect::Value::String(l));
     }
+    Some(drawn)
 }
