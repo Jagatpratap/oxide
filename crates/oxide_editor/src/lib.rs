@@ -45,6 +45,7 @@ mod shader_graph_window;
 pub mod shortcuts;
 mod sprite_editor;
 mod terrain_tools;
+mod test_runner;
 mod theme;
 mod tile_palette;
 mod timeline_window;
@@ -94,6 +95,7 @@ pub enum Tab {
     ProBuilder,
     Lighting,
     LightExplorer,
+    TestRunner,
 }
 
 impl Tab {
@@ -129,6 +131,7 @@ impl Tab {
             Tab::Navigation => "Navigation",
             Tab::Lighting => "Lighting",
             Tab::LightExplorer => "Light Explorer",
+            Tab::TestRunner => "Test Runner",
             Tab::Timeline => "Timeline",
             Tab::ShaderGraph => "Shader Graph",
             Tab::VfxGraph => "VFX Graph",
@@ -408,6 +411,7 @@ pub struct EditorState {
     pub nav_display: oxide_engine::navigation::NavMeshDisplay,
     nav_window: navigation_window::NavigationWindow,
     lighting_window: lighting_window::LightingWindow,
+    pub(crate) tests: test_runner::TestRunner,
     hierarchy: hierarchy::HierarchyState,
     pub(crate) inspector: inspector::InspectorState,
     console: console::ConsoleState,
@@ -485,6 +489,7 @@ impl EditorState {
             nav_display: Default::default(),
             nav_window: Default::default(),
             lighting_window: Default::default(),
+            tests: Default::default(),
             hierarchy: Default::default(),
             inspector: Default::default(),
             console: Default::default(),
@@ -747,6 +752,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::Navigation => navigation_window::window_ui(self.st, self.engine, ui),
             Tab::Lighting => lighting_window::window_ui(self.st, self.engine, ui),
             Tab::LightExplorer => lighting_window::explorer_ui(self.st, self.engine, ui),
+            Tab::TestRunner => test_runner::window_ui(self.st, self.engine, ui),
             Tab::Timeline => timeline_window::window_ui(self.st, self.engine, ui),
             Tab::ShaderGraph => shader_graph_window::window_ui(self.st, self.engine, ui),
             Tab::VfxGraph => vfx_graph_window::window_ui(self.st, self.engine, ui),
@@ -2170,6 +2176,8 @@ impl Shell for Editor {
         project::sync_asset_types(&engine.world.resource::<oxide_assets::AssetServer>().types);
         // Terrain tool edits queued by the Inspector.
         terrain_tools::apply_commands(&mut self.st, engine);
+        // A running play-mode test run moves on.
+        self.update_tests(engine);
         // Open scenes edited outside the editor: reload them unless they have unsaved changes.
         if let Some(changed) = engine
             .world

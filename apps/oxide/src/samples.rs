@@ -42,7 +42,36 @@ fn sun_and_camera(world: &mut World) -> GameObjectId {
 }
 
 /// A small scene exercising lighting, shadows and materials.
+/// Play-mode tests of the demo (Window → General → Test Runner): they show how game code is
+/// tested across frames — Unity's `[UnityTest]`.
+async fn demo_cube_falls(co: Co) {
+    let cube = co.with(|ctx| {
+        let id = oxide_engine::objects::create_primitive(ctx.world, PrimitiveType::Cube);
+        ctx.world.set_position(id, Vector3::new(0.0, 5.0, 0.0));
+        ctx.world.add_component(id, Rigidbody::default());
+        id
+    });
+    co.wait_for_seconds(1.0).await;
+    let y = co.with(|ctx| ctx.world.position(cube).y);
+    assert!(y < 2.0, "the cube should fall under gravity: y = {y}");
+}
+
+async fn demo_frames_advance(co: Co) {
+    let start = co.with(|ctx| ctx.time().frame_count());
+    for _ in 0..3 {
+        co.next_frame().await;
+    }
+    let now = co.with(|ctx| ctx.time().frame_count());
+    assert!(now >= start + 3, "three frames later: {start} → {now}");
+}
+
 pub fn demo(world: &mut World) {
+    let mut tests = PlayModeTests::default();
+    tests.register("demo_cube_falls", |co| Box::pin(demo_cube_falls(co)));
+    tests.register("demo_frames_advance", |co| {
+        Box::pin(demo_frames_advance(co))
+    });
+    world.resources.insert(tests);
     let cam = sun_and_camera(world);
     world.set_position(cam, Vector3::new(0.0, 4.0, -12.0));
     world.look_at(cam, Vector3::new(0.0, 1.0, 0.0), Vector3::Y);

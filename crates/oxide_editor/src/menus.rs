@@ -290,6 +290,10 @@ pub fn menu_items(world: &World, keymap: &Keymap) -> Vec<MenuItem> {
         Action::OpenTab(Tab::Lighting),
     ));
     v.push(item(
+        "Window/General/Test Runner",
+        Action::OpenTab(Tab::TestRunner),
+    ));
+    v.push(item(
         "Window/Rendering/Light Explorer",
         Action::OpenTab(Tab::LightExplorer),
     ));

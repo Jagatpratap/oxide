@@ -100,6 +100,7 @@ fn downscale(img: CapturedImage, max: u32) -> CapturedImage {
 pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
     register_window_tools(s, bus);
     register_scene_tools(s, bus);
+    register_test_runner_tool(s, bus);
     register_overlay_tools(s, bus);
     register_package_tools(s, bus);
     tool(s, bus, ToolDef::new("editor_get_state", "Get editor state",
@@ -311,6 +312,7 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
             crate::Tab::ProBuilder,
             crate::Tab::Lighting,
             crate::Tab::LightExplorer,
+            crate::Tab::TestRunner,
         ])
         .map(|t| t.title())
         .collect();
@@ -351,6 +353,7 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
                     crate::Tab::ProBuilder,
                     crate::Tab::Lighting,
                     crate::Tab::LightExplorer,
+                    crate::Tab::TestRunner,
                 ]);
                 let Some(tab) = all
                     .into_iter()
@@ -1920,4 +1923,68 @@ pub fn register_window_tools(s: &mut McpServer, bus: &Arc<Bus>) {
                 Err(err) => ToolResult::error(err),
             }
         });
+}
+
+fn register_test_runner_tool(s: &mut McpServer, bus: &Arc<Bus>) {
+    tool(
+        s,
+        bus,
+        ToolDef::new(
+            "editor_test_runner",
+            "Test Runner",
+            "Unity's Test Runner. Lists the project's play-mode tests (`scripts! { ...; tests: f }`, async fns taking \
+             `co: Co`) and edit-mode tests (#[test] fns in the Scripts crate) with status (NotRun | Running | Passed \
+             | Failed | Ignored), seconds and failure messages. `run`: \"all\", \"failed\" or a test name, in `mode` \
+             PlayMode (enters Play mode, a fresh scene per test, leaves it after) or EditMode (cargo test in the \
+             background). Runs are asynchronous: call again to see results.",
+            schema(
+                json!({
+                    "mode": { "type": "string", "enum": ["PlayMode", "EditMode"] },
+                    "run": { "type": "string" }
+                }),
+                &[],
+            ),
+        ),
+        |args, e| {
+            with_editor(e, |ed, e| {
+                let project = e
+                    .world
+                    .resource::<oxide_assets::AssetServer>()
+                    .full_path("");
+                let names: Vec<&'static str> = e
+                    .world
+                    .try_resource::<oxide_scene::PlayModeTests>()
+                    .map(|t| t.names())
+                    .unwrap_or_default();
+                let t = &mut ed.st.tests;
+                t.sync_play_tests(&names);
+                let edit = args.get("mode").and_then(Json::as_str) == Some("EditMode");
+                if let Some(run) = args.get("run").and_then(Json::as_str) {
+                    if t.running() {
+                        return ToolResult::error("a test run is already in progress");
+                    }
+                    let rows = if edit { &t.edit } else { &t.play };
+                    let failed: Vec<String> = rows
+                        .iter()
+                        .filter(|r| r.status == crate::test_runner::TestStatus::Failed)
+                        .map(|r| r.name.clone())
+                        .collect();
+                    match (edit, run) {
+                        (false, "all") => t.run_play(None),
+                        (false, "failed") => t.run_play(Some(failed)),
+                        (false, name) => t.run_play(Some(vec![name.to_owned()])),
+                        (true, "all") => t.run_edit(project, None),
+                        (true, "failed") => t.run_edit(project, failed.first().cloned()),
+                        (true, name) => t.run_edit(project, Some(name.to_owned())),
+                    }
+                }
+                ToolResult::json(json!({
+                    "running": t.running(),
+                    "status": t.status,
+                    "play_mode": t.play,
+                    "edit_mode": t.edit,
+                }))
+            })
+        },
+    );
 }

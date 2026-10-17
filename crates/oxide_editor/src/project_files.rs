@@ -209,13 +209,44 @@ const LIB_RS: &str = r#"//! Game scripts. Save any file here and the editor reco
 //! `Component` (Unity's MonoBehaviour messages: start, update, on_collision_enter, ...).
 
 mod spinner;
+mod tests;
 
 pub use spinner::Spinner;
 
-// Every script component, with its Add Component menu path. The editor adds a line here
-// when you create a script from the Project window.
+// Every script component, with its Add Component menu path (the editor adds a line here
+// when you create a script from the Project window), then the play-mode tests.
 oxide::scripts! {
-    Spinner => "Scripts/Spinner",
+    Spinner => "Scripts/Spinner";
+    tests: tests::spinner_turns
+}
+"#;
+
+const TESTS_RS: &str = r#"//! Tests for the Test Runner (Window → General → Test Runner).
+//!
+//! Play-mode tests (Unity `[UnityTest]`) are `async fn`s listed under `tests:` in lib.rs: each
+//! runs in Play mode on a fresh scene, across frames, and fails by panicking. Edit-mode tests
+//! (Unity `[Test]`) are ordinary `#[test]` functions.
+
+use oxide::prelude::*;
+
+/// A Spinner turns its object while the game runs.
+pub async fn spinner_turns(co: Co) {
+    let id = co.with(|ctx| {
+        let id = ctx.world.create("Spinning");
+        ctx.world.add_component(id, crate::Spinner::default());
+        id
+    });
+    co.wait_for_seconds(0.5).await;
+    let yaw = co.with(|ctx| ctx.world.euler_angles(id).y);
+    assert!(yaw.abs() > 1.0, "the spinner should have turned: {yaw}");
+}
+
+#[cfg(test)]
+mod edit_mode {
+    #[test]
+    fn spinner_defaults_to_90_degrees_per_second() {
+        assert_eq!(crate::Spinner::default().speed, 90.0);
+    }
 }
 "#;
 
@@ -268,6 +299,7 @@ pub fn create_project(dir: &Path, engine_root: &Path) -> Result<(), String> {
     let scripts = dir.join("Scripts");
     write_if_missing(&scripts.join("src/lib.rs"), LIB_RS)?;
     write_if_missing(&scripts.join("src/spinner.rs"), SPINNER_RS)?;
+    write_if_missing(&scripts.join("src/tests.rs"), TESTS_RS)?;
     write_if_missing(
         &dir.join(".gitignore"),
         "/Library/\n/Logs/\n/UserSettings/\n",
@@ -464,7 +496,8 @@ mod tests {
         let lib = std::fs::read_to_string(dir.join("Scripts/src/lib.rs")).unwrap();
         assert!(lib.contains("pub use spinner::Spinner;\nmod player_controller;\npub use player_controller::PlayerController;\n"), "{lib}");
         assert!(lib.contains("PlayerController => \"Scripts/PlayerController\","));
-        assert!(lib.contains("Spinner => \"Scripts/Spinner\","));
+        assert!(lib.contains("Spinner => \"Scripts/Spinner\";\n    tests: tests::spinner_turns"));
+        assert!(dir.join("Scripts/src/tests.rs").exists());
         assert!(add_script(&dir.join("Scripts"), "PlayerController").is_err());
         let _ = std::fs::remove_dir_all(dir);
     }

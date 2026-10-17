@@ -324,6 +324,8 @@ impl ScriptHost {
         let register_pipelines: Option<
             libloading::Symbol<fn(&mut oxide_engine::render_pipeline::RenderPipelines)>,
         > = unsafe { lib.get(b"oxide_register_pipelines") }.ok();
+        let register_tests: Option<libloading::Symbol<fn(&mut oxide_scene::PlayModeTests)>> =
+            unsafe { lib.get(b"oxide_register_tests") }.ok();
 
         let w = &mut engine.world;
         let old = std::mem::take(&mut self.script_types);
@@ -384,6 +386,14 @@ impl ScriptHost {
                     .filter(|n| !before.contains(n))
                     .collect();
             }
+        }
+        // Play-mode tests: function pointers into the library, replaced on every load.
+        {
+            let mut tests = oxide_scene::PlayModeTests::default();
+            if let Some(f) = &register_tests {
+                f(&mut tests);
+            }
+            w.resources.insert(tests);
         }
         // Custom render pipelines, the same way.
         {

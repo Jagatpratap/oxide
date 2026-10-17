@@ -476,7 +476,11 @@ from the fixed edge and each object along its matching local axis).
   `is_done`, `result` (Success / ConnectionError / ProtocolError / DataProcessingError), `response_code`,
   `error`, response headers, `text` / `data` / `json` / `texture`, awaitable in coroutines (`op.wait().await`)
   ([Web servers](https://docs.unity3d.com/Manual/web-request.html))
-- ☐ Test framework (edit-mode & play-mode tests)
+- ☑ Test framework: play-mode tests (`async fn t(co: Co)` listed under `scripts! { ...; tests: t }`, Unity
+  `[UnityTest]`: run in Play mode on a fresh scene each, across frames, failing by panic, 30 s timeout) and
+  edit-mode tests (`#[test]` in the Scripts crate, run with `cargo test` in the background); Window → General
+  → Test Runner (PlayMode / EditMode tabs, Run All / Run Selected / Rerun Failed, status, durations, failure
+  output), MCP `editor_test_runner`; new projects get an example of each
   ([Testing your code](https://docs.unity3d.com/Manual/test-framework/test-framework-introduction.html))
 - ☐ Native plugin interface
   ([Plug-ins](https://docs.unity3d.com/Manual/plug-ins.html))
@@ -488,7 +492,7 @@ crate is compiled in the background and hot-reloaded in Edit and Play mode; comp
 objects and physics state survive, scripts get OnDisable/OnEnable across the reload, compile
 errors go to the Console, panics are caught and logged, and scripts that fail to load keep
 their data as Missing Script. The engine is one shared library (`oxide_dylib`) that the
-project's editor and its Scripts both link. Not yet: test runner, native plugins.
+project's editor and its Scripts both link. Not yet: native plugins.
 
 ### P7 — Physics, Input, 2D
 - ◐ 3D: Rigidbody, Box/Sphere/Capsule/Mesh colliders, triggers, layers collision matrix, raycasts/overlaps, physics materials, joints (Fixed/Hinge/Character ☑), CharacterController, articulations, ragdoll wizard ☑, cloth (later)

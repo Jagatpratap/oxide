@@ -48,7 +48,8 @@ macro_rules! scripts {
      $(; assets: $($at:ty => ($ext:expr, $amenu:expr)),* $(,)?)?
      $(; behaviours: $($bt:ty),* $(,)?)?
      $(; playables: $($pt:ty),* $(,)?)?
-     $(; pipelines: $($rpt:ty),* $(,)?)?) => {
+     $(; pipelines: $($rpt:ty),* $(,)?)?
+     $(; tests: $($tf:path),* $(,)?)?) => {
         /// Engine build these scripts were compiled against.
         #[unsafe(no_mangle)]
         pub fn oxide_scripts_build_id() -> &'static str {
@@ -95,6 +96,14 @@ macro_rules! scripts {
         pub fn oxide_register_pipelines(p: &mut $crate::render_pipeline::RenderPipelines) {
             let _ = &p;
             $($( p.register::<$rpt>(); )*)?
+        }
+
+        /// Registers the play-mode tests (`tests:` — `async fn name(co: Co)`, Unity
+        /// `[UnityTest]`), run from the editor's Test Runner.
+        #[unsafe(no_mangle)]
+        pub fn oxide_register_tests(t: &mut $crate::scene::PlayModeTests) {
+            let _ = &t;
+            $($( t.register(stringify!($tf), |co| ::std::boxed::Box::pin($tf(co))); )*)?
         }
     };
 }
@@ -148,10 +157,22 @@ mod tests {
         pub chance: f32,
     }
 
+    async fn spawns_and_waits(co: crate::prelude::Co) {
+        co.next_frame().await;
+    }
+
     crate::scripts! {
         Dial => "Scripts/Dial", Plain => "";
         editors: Dial;
-        assets: LootTable => ("loot", "Game/Loot Table")
+        assets: LootTable => ("loot", "Game/Loot Table");
+        tests: spawns_and_waits
+    }
+
+    #[test]
+    fn scripts_macro_registers_play_mode_tests() {
+        let mut t = crate::scene::PlayModeTests::default();
+        oxide_register_tests(&mut t);
+        assert_eq!(t.names(), ["spawns_and_waits"]);
     }
 
     #[test]

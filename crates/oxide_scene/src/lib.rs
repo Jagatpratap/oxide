@@ -26,6 +26,7 @@ pub mod scene_manager;
 pub mod serialize;
 pub mod sprite_library;
 pub mod system;
+pub mod testing;
 pub mod tilemap;
 pub mod timers;
 pub mod volume;
@@ -59,6 +60,7 @@ pub use scene_manager::{AsyncOperation, PumpResult, SceneOpStatus, SceneOperatio
 pub use serialize::{ComponentData, ObjectData, SceneFile};
 pub use sprite_library::{SpriteLibrary, SpriteLibraryAsset, SpriteResolver};
 pub use system::{DebugDraw, DebugLine, System};
+pub use testing::{PlayModeTest, PlayModeTests, TestRunnerHost};
 pub use tilemap::{
     AnimatedTile, Grid, RuleNeighbor, RuleOutput, RuleTile, Tile, TileBase, TileCell, TilePalette,
     Tilemap, TilemapRenderer, TilingRule,
