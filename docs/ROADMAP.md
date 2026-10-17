@@ -207,7 +207,10 @@ with `.meta` files in P3).
   Scale, Play Focused / Maximized / Unfocused, Mute Audio, Stats (graphics, culling, skinned meshes, animators,
   audio), Gizmos
   ([Game view](https://docs.unity3d.com/Manual/GameView.html))
-- ◐ **Console**: collapse, filter, stack trace, click-to-source
+- ☑ **Console**: collapse, filter, search, Error Pause, stack trace, click-to-source; Clear on Play / Build /
+  Recompile; Show Timestamp; 1- or 2-line entries; Copy / Copy with Stack Trace; context objects
+  (`debug_log_context!(obj, ...)`, Unity `Debug.Log(message, context)`) ping or select their object; Stack Trace
+  Logging per type; `Editor.log` and `Player.log` (Unity's locations) with Open Editor Log / Open Player Log
   ([Console](https://docs.unity3d.com/Manual/console-window.html))
 - ☑ Toolbar, status bar, Undo/Redo + Undo History, selection history, Shortcuts Manager (rebinding, conflicts,
   keyboard view), Search window (⌘K: assets, objects, menus, settings)

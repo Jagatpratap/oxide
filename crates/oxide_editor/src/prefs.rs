@@ -20,6 +20,8 @@ pub struct EditorPrefs {
     pub ui_scale: f32,
     // Console
     pub clear_on_play: bool,
+    pub clear_on_build: bool,
+    pub clear_on_recompile: bool,
     /// Record a call stack for logs / warnings / errors (Unity "Stack Trace Logging").
     pub stack_trace_logs: bool,
     pub stack_trace_warnings: bool,
@@ -50,6 +52,8 @@ impl Default for EditorPrefs {
             auto_refresh: true,
             ui_scale: 1.0,
             clear_on_play: true,
+            clear_on_build: true,
+            clear_on_recompile: false,
             stack_trace_logs: false,
             stack_trace_warnings: false,
             stack_trace_errors: true,

@@ -1516,6 +1516,10 @@ impl Editor {
                 String::new()
             }
             Action::BuildPlayer(run) => {
+                if st.prefs.clear_on_build {
+                    oxide_core::debug::clear();
+                    st.console.clear();
+                }
                 let project = w.resource::<AssetServer>().full_path("");
                 let settings = player_build::BuildSettings::load(&project);
                 if st.dirty {
@@ -2038,6 +2042,8 @@ impl Shell for Editor {
     fn install(&mut self, world: &mut World) {
         // Edit mode: components are added but no script callbacks run until Play.
         world.run_scripts = false;
+        // Unity's Editor.log.
+        let _ = oxide_core::debug::set_log_file(console::editor_log_path());
     }
 
     fn ui(&mut self, engine: &mut Engine) {
@@ -2059,7 +2065,16 @@ impl Shell for Editor {
         self.st.prefs.apply(&ctx);
         engine.auto_refresh = self.st.prefs.auto_refresh;
         if let Some(host) = self.scripts.as_mut() {
+            let was = host.state == scripting::ScriptState::Compiling;
             host.poll(engine);
+            // Console "Clear on Recompile".
+            if host.state == scripting::ScriptState::Compiling
+                && !was
+                && self.st.prefs.clear_on_recompile
+            {
+                oxide_core::debug::clear();
+                self.st.console.clear();
+            }
         }
         self.st.builder.poll();
         self.st.scripts_available = self

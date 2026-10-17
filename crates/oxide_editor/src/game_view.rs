@@ -265,9 +265,10 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
             });
             if close
                 && let Some(c) = g.adding.take()
-                    && ADDED.with(|a| a.borrow().is_some()) {
-                        g.size = c.size();
-                    }
+                && ADDED.with(|a| a.borrow().is_some())
+            {
+                g.size = c.size();
+            }
         }
         ui.label("Scale");
         ui.add(

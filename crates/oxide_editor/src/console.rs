@@ -1,4 +1,6 @@
-//! Console window: log/warning/error filters, collapse, search, Error Pause, and a detail
+//! Console window: log/warning/error filters, collapse, search, Error Pause, Clear on Play /
+//! Build / Recompile, timestamps, one- or two-line entries, Copy, context objects (clicking an
+//! entry logged with one pings it in the Hierarchy), Editor.log / Player.log, and a detail
 //! pane with the call site and stack trace (double-click opens the source).
 //! Reference: <https://docs.unity3d.com/Manual/Console.html>
 
@@ -19,6 +21,9 @@ pub struct ConsoleState {
     pub error_pause: bool,
     search: String,
     selected: Option<u64>,
+    /// Unity's ⋮ menu: Show Timestamp, Log Entry 1 or 2 lines.
+    show_timestamp: bool,
+    two_lines: bool,
 }
 
 impl Default for ConsoleState {
@@ -31,6 +36,8 @@ impl Default for ConsoleState {
             error_pause: false,
             search: String::new(),
             selected: None,
+            show_timestamp: true,
+            two_lines: false,
         }
     }
 }
@@ -89,6 +96,37 @@ fn open_source(prefs: &crate::prefs::EditorPrefs, project: &Path, file: &str, li
     }
 }
 
+/// Unity's `Editor.log` (`~/Library/Logs/Oxide/Editor.log` on macOS).
+pub fn editor_log_path() -> std::path::PathBuf {
+    debug::log_dir().join("Oxide/Editor.log")
+}
+
+/// The newest `Player.log` of a game built by Oxide (`<logs>/<Company>/<Product>/Player.log`).
+fn player_log_path(engine: &Engine) -> std::path::PathBuf {
+    let a = engine.world.resource::<oxide_scene::Application>();
+    let company = if a.company_name.is_empty() {
+        "DefaultCompany"
+    } else {
+        &a.company_name
+    };
+    debug::log_dir()
+        .join(company)
+        .join(&a.product_name)
+        .join("Player.log")
+}
+
+fn entry_text(e: &LogEntry, with_stack: bool) -> String {
+    let mut s = e.message.clone();
+    if !e.file.is_empty() {
+        s.push_str(&format!("\n(at {}:{})", e.file, e.line));
+    }
+    if with_stack && !e.stack_trace.is_empty() {
+        s.push('\n');
+        s.push_str(&e.stack_trace);
+    }
+    s
+}
+
 /// `path:line:col` at the end of a stack frame's "at" line.
 fn frame_location(at: &str) -> Option<(&str, u32)> {
     let mut parts = at.rsplitn(3, ':');
@@ -111,8 +149,10 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
         engine.paused = true;
         st.status = "Paused on error (Error Pause)".into();
     }
+    let player_log = player_log_path(engine);
     let c = &mut st.console;
     let mut open: Option<(String, u32)> = None;
+    let mut ping: Option<(u64, bool)> = None;
     let mut counts = [0usize; 3];
     for e in &c.entries {
         counts[level(e.log_type)] += 1;
@@ -122,16 +162,62 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
             debug::clear();
             c.clear();
         }
+        ui.menu_button("▾", |ui| {
+            let p = &mut st.prefs;
+            let mut ch = false;
+            ch |= ui.checkbox(&mut p.clear_on_play, "Clear on Play").changed();
+            ch |= ui
+                .checkbox(&mut p.clear_on_build, "Clear on Build")
+                .changed();
+            ch |= ui
+                .checkbox(&mut p.clear_on_recompile, "Clear on Recompile")
+                .changed();
+            st.prefs_changed |= ch;
+        })
+        .response
+        .on_hover_text("Clear options");
         ui.toggle_value(&mut c.collapse, "Collapse");
-        if ui
-            .toggle_value(&mut st.prefs.clear_on_play, "Clear on Play")
-            .changed()
-        {
-            st.prefs_changed = true;
-        }
         ui.toggle_value(&mut c.error_pause, "Error Pause")
             .on_hover_text("Pause Play mode when an error is logged");
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.menu_button("⋮", |ui| {
+                if ui.button("Open Player Log").clicked() {
+                    let r = crate::asset_ops::reveal(&player_log);
+                    st.status = match r {
+                        Ok(()) => format!("{}", player_log.display()),
+                        Err(e) => e,
+                    };
+                    ui.close();
+                }
+                if ui.button("Open Editor Log").clicked() {
+                    st.status = match crate::asset_ops::reveal(&editor_log_path()) {
+                        Ok(()) => format!("{}", editor_log_path().display()),
+                        Err(e) => e,
+                    };
+                    ui.close();
+                }
+                ui.separator();
+                ui.checkbox(&mut c.show_timestamp, "Show Timestamp");
+                ui.menu_button("Log Entry", |ui| {
+                    ui.radio_value(&mut c.two_lines, false, "1 Line");
+                    ui.radio_value(&mut c.two_lines, true, "2 Lines");
+                });
+                ui.menu_button("Stack Trace Logging", |ui| {
+                    let p = &mut st.prefs;
+                    let mut ch = false;
+                    ch |= ui.checkbox(&mut p.stack_trace_logs, "Log").changed();
+                    ch |= ui
+                        .checkbox(&mut p.stack_trace_warnings, "Warning")
+                        .changed();
+                    ch |= ui.checkbox(&mut p.stack_trace_errors, "Error").changed();
+                    if ch {
+                        debug::set_stack_trace_logging(LogType::Log, p.stack_trace_logs);
+                        debug::set_stack_trace_logging(LogType::Warning, p.stack_trace_warnings);
+                        debug::set_stack_trace_logging(LogType::Error, p.stack_trace_errors);
+                        st.prefs_changed = true;
+                    }
+                });
+            });
             for (i, label) in [(2usize, "Errors"), (1, "Warnings"), (0, "Logs")] {
                 let text = RichText::new(format!("{label} {}", counts[i])).color(COLORS[i]);
                 ui.toggle_value(&mut c.show[i], text);
@@ -174,16 +260,19 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
     let detail_h = if c.selected.is_some() { 140.0 } else { 0.0 };
     let list_h = (ui.available_height() - detail_h).max(40.0);
     let mut selected = c.selected;
+    let row_h = if c.two_lines { 34.0 } else { 20.0 };
+    let (show_time, two_lines) = (c.show_timestamp, c.two_lines);
+    let mut copy: Option<String> = None;
     egui::ScrollArea::vertical()
         .id_salt("console-list")
         .max_height(list_h)
         .auto_shrink([false, false])
         .stick_to_bottom(true)
-        .show_rows(ui, 20.0, rows.len(), |ui, range| {
+        .show_rows(ui, row_h, rows.len(), |ui, range| {
             ui.spacing_mut().item_spacing.y = 0.0;
             for (n, (e, count)) in rows[range.clone()].iter().enumerate() {
                 let (rect, resp) =
-                    ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::click());
+                    ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click());
                 let bg = if selected == Some(e.seq) {
                     crate::theme::SELECTION_BG
                 } else if (range.start + n) % 2 == 0 {
@@ -193,16 +282,46 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
                 };
                 ui.painter().rect_filled(rect, 0.0, bg);
                 let lv = level(e.log_type);
+                let top = rect.left_top() + vec2(0.0, 10.0);
                 ui.painter()
-                    .circle_filled(rect.left_center() + vec2(9.0, 0.0), 4.0, COLORS[lv]);
-                let first_line = e.message.lines().next().unwrap_or("");
+                    .circle_filled(top + vec2(9.0, 0.0), 4.0, COLORS[lv]);
+                let mut lines = e.message.lines();
+                let first_line = lines.next().unwrap_or("");
+                let stamp = if show_time {
+                    format!("[{:>7.2}] ", e.time)
+                } else {
+                    String::new()
+                };
                 ui.painter().text(
-                    rect.left_center() + vec2(20.0, 0.0),
+                    top + vec2(20.0, 0.0),
                     egui::Align2::LEFT_CENTER,
-                    format!("[{:>7.2}] {first_line}", e.time),
+                    format!("{stamp}{first_line}"),
                     egui::FontId::proportional(12.0),
                     COLORS[lv],
                 );
+                if two_lines {
+                    let second = lines
+                        .next()
+                        .map(str::to_owned)
+                        .or_else(|| (!e.file.is_empty()).then(|| format!("{}:{}", e.file, e.line)))
+                        .unwrap_or_default();
+                    ui.painter().text(
+                        top + vec2(20.0, 14.0),
+                        egui::Align2::LEFT_CENTER,
+                        second,
+                        egui::FontId::proportional(11.0),
+                        Color32::from_gray(140),
+                    );
+                }
+                if e.context.is_some() {
+                    ui.painter().text(
+                        rect.right_center() - vec2(if *count > 1 { 34.0 } else { 8.0 }, 0.0),
+                        egui::Align2::RIGHT_CENTER,
+                        "⊙",
+                        egui::FontId::proportional(11.0),
+                        Color32::from_gray(150),
+                    );
+                }
                 if *count > 1 {
                     ui.painter().text(
                         rect.right_center() - vec2(8.0, 0.0),
@@ -214,13 +333,35 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
                 }
                 if resp.clicked() {
                     selected = Some(e.seq);
+                    if let Some(ctx) = e.context {
+                        ping = Some((ctx, false));
+                    }
                 }
+                resp.context_menu(|ui| {
+                    if ui.button("Copy").clicked() {
+                        copy = Some(entry_text(e, false));
+                        ui.close();
+                    }
+                    if ui.button("Copy with Stack Trace").clicked() {
+                        copy = Some(entry_text(e, true));
+                        ui.close();
+                    }
+                    if let Some(ctx) = e.context
+                        && ui.button("Select Context Object").clicked()
+                    {
+                        ping = Some((ctx, true));
+                        ui.close();
+                    }
+                });
                 if resp.double_clicked() && !e.file.is_empty() {
                     open = Some((e.file.clone(), e.line));
                 }
             }
         });
     c.selected = selected;
+    if let Some(t) = copy {
+        ui.ctx().copy_text(t);
+    }
     if let Some(seq) = c.selected
         && let Some(e) = c.entries.iter().find(|e| e.seq == seq)
     {
@@ -235,6 +376,20 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
                         "{:?} from {} at {:.3}s",
                         e.log_type, e.source, e.time
                     ));
+                    if let Some(ctx) = e.context {
+                        let id = oxide_scene::GameObjectId::from_bits(ctx);
+                        let name = engine
+                            .world
+                            .get(id)
+                            .map_or("(destroyed)".to_owned(), |o| o.name.clone());
+                        if ui
+                            .link(format!("Context: {name}"))
+                            .on_hover_text("Select this object")
+                            .clicked()
+                        {
+                            ping = Some((ctx, true));
+                        }
+                    }
                     if !e.file.is_empty()
                         && ui
                             .link(format!("{}:{}", e.file, e.line))
@@ -280,6 +435,16 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
     }
     if let Some((file, line)) = open {
         st.status = open_source(&st.prefs, &project, &file, line);
+    }
+    // Unity pings the context object in the Hierarchy; Select makes it the selection.
+    if let Some((bits, select)) = ping {
+        let id = oxide_scene::GameObjectId::from_bits(bits);
+        if engine.world.is_alive(id) {
+            st.hierarchy.reveal(&engine.world, id);
+            if select {
+                st.select(id);
+            }
+        }
     }
 }
 

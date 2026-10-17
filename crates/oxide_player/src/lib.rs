@@ -158,6 +158,27 @@ pub fn run_scripts(
         project_root: data,
     };
     let mut app = App::with_config(config);
+    // Unity's Player.log: <logs>/<Company Name>/<Product Name>/Player.log.
+    {
+        let a = app.world_mut().resource::<scene::Application>();
+        let company = if a.company_name.is_empty() {
+            "DefaultCompany"
+        } else {
+            &a.company_name
+        };
+        let product = if a.product_name.is_empty() {
+            &info.product_name
+        } else {
+            &a.product_name
+        };
+        let path = self::core::debug::log_dir()
+            .join(company)
+            .join(product)
+            .join("Player.log");
+        if let Err(e) = self::core::debug::set_log_file(&path) {
+            eprintln!("cannot write {}: {e}", path.display());
+        }
+    }
     register(&mut app.world_mut().registry);
     register_assets(app.world_mut().resource_mut::<assets::AssetServer>());
     if let Some(f) = BEHAVIOURS.with(std::cell::Cell::get) {

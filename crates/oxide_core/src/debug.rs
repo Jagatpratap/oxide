@@ -52,6 +52,10 @@ pub struct LogEntry {
     /// this type, see [`set_stack_trace_logging`]).
     #[serde(skip_serializing_if = "String::is_empty")]
     pub stack_trace: String,
+    /// The object passed as `context` (Unity `Debug.Log(message, context)`), as its id bits:
+    /// clicking the entry pings it in the Hierarchy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<u64>,
 }
 
 #[derive(Default)]
@@ -133,6 +137,18 @@ pub fn log(log_type: LogType, source: &str, message: impl Into<String>) {
 
 /// [`log`] with the call site (what the macros use).
 pub fn log_at(log_type: LogType, source: &str, file: &str, line: u32, message: impl Into<String>) {
+    log_at_context(log_type, source, file, line, message, None);
+}
+
+/// [`log_at`] with a context object (its id bits), like Unity's `Debug.Log(message, context)`.
+pub fn log_at_context(
+    log_type: LogType,
+    source: &str,
+    file: &str,
+    line: u32,
+    message: impl Into<String>,
+    context: Option<u64>,
+) {
     let message = message.into();
     eprintln!("[{log_type:?}] {message}");
     let trace = if stack_trace_logging(log_type) && !repeating(file, line) {
@@ -152,11 +168,72 @@ pub fn log_at(log_type: LogType, source: &str, file: &str, line: u32, message: i
         file: file.to_owned(),
         line,
         stack_trace: trace,
+        context,
     };
+    write_log_file(&entry);
     if c.entries.len() == CAPACITY {
         c.entries.pop_front();
     }
     c.entries.push_back(entry);
+}
+
+static LOG_FILE: Mutex<Option<(std::path::PathBuf, std::fs::File)>> = Mutex::new(None);
+
+/// Where Unity-style log files go: `~/Library/Logs` on macOS, `%LOCALAPPDATA%` on Windows,
+/// `~/.config/unity3d`-like `~/.local/share` elsewhere.
+pub fn log_dir() -> std::path::PathBuf {
+    let home = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_default();
+    if cfg!(target_os = "macos") {
+        home.join("Library/Logs")
+    } else if cfg!(windows) {
+        std::env::var_os("LOCALAPPDATA").map_or(home, std::path::PathBuf::from)
+    } else {
+        home.join(".local/share")
+    }
+}
+
+/// Also writes every Console entry to `path` (Unity's `Editor.log` / `Player.log`). The
+/// previous file is kept as `<name>-prev.log`.
+pub fn set_log_file(path: impl Into<std::path::PathBuf>) -> std::io::Result<()> {
+    let path = path.into();
+    if let Some(d) = path.parent() {
+        std::fs::create_dir_all(d)?;
+    }
+    if path.is_file() {
+        let stem = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let _ = std::fs::rename(&path, path.with_file_name(format!("{stem}-prev.log")));
+    }
+    let f = std::fs::File::create(&path)?;
+    *LOG_FILE.lock().unwrap_or_else(|e| e.into_inner()) = Some((path, f));
+    Ok(())
+}
+
+/// The log file set with [`set_log_file`].
+pub fn log_file() -> Option<std::path::PathBuf> {
+    LOG_FILE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .map(|(p, _)| p.clone())
+}
+
+fn write_log_file(e: &LogEntry) {
+    use std::io::Write;
+    let mut guard = LOG_FILE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, f)) = guard.as_mut() {
+        let _ = writeln!(f, "[{:.3}] [{:?}] {}", e.time, e.log_type, e.message);
+        if !e.file.is_empty() {
+            let _ = writeln!(f, "  (at {}:{})", e.file, e.line);
+        }
+        if !e.stack_trace.is_empty() {
+            let _ = write!(f, "{}", e.stack_trace);
+        }
+    }
 }
 
 /// The same call site logged with a stack trace less than a second ago (an error every frame
@@ -213,6 +290,52 @@ macro_rules! debug_log {
             file!(),
             line!(),
             format!($($arg)*),
+        )
+    };
+}
+
+/// Unity `Debug.Log(message, context)`: `ctx` is a GameObject id (anything with `to_bits()`);
+/// clicking the entry in the Console pings that object.
+#[macro_export]
+macro_rules! debug_log_context {
+    ($ctx:expr, $($arg:tt)*) => {
+        $crate::debug::log_at_context(
+            $crate::debug::LogType::Log,
+            module_path!(),
+            file!(),
+            line!(),
+            format!($($arg)*),
+            Some(($ctx).to_bits()),
+        )
+    };
+}
+
+/// Unity `Debug.LogWarning(message, context)`.
+#[macro_export]
+macro_rules! debug_log_warning_context {
+    ($ctx:expr, $($arg:tt)*) => {
+        $crate::debug::log_at_context(
+            $crate::debug::LogType::Warning,
+            module_path!(),
+            file!(),
+            line!(),
+            format!($($arg)*),
+            Some(($ctx).to_bits()),
+        )
+    };
+}
+
+/// Unity `Debug.LogError(message, context)`.
+#[macro_export]
+macro_rules! debug_log_error_context {
+    ($ctx:expr, $($arg:tt)*) => {
+        $crate::debug::log_at_context(
+            $crate::debug::LogType::Error,
+            module_path!(),
+            file!(),
+            line!(),
+            format!($($arg)*),
+            Some(($ctx).to_bits()),
         )
     };
 }

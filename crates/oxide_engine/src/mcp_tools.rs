@@ -238,11 +238,13 @@ pub fn build_server(bus: Arc<Bus>) -> McpServer {
         ToolDef::new(
             "log_message",
             "Write to the Console",
-            "Logs a message like Unity's Debug.Log / LogWarning / LogError (errors also record a stack trace).",
+            "Logs a message like Unity's Debug.Log / LogWarning / LogError (errors also record a stack trace). \
+             `context`: a GameObject id (Debug.Log(message, context)); clicking the entry pings that object.",
             schema(
                 json!({
                     "message": { "type": "string" },
-                    "type": { "type": "string", "enum": ["Log", "Warning", "Error"] }
+                    "type": { "type": "string", "enum": ["Log", "Warning", "Error"] },
+                    "context": { "type": "integer" }
                 }),
                 &["message"],
             ),
@@ -254,7 +256,8 @@ pub fn build_server(bus: Arc<Bus>) -> McpServer {
                 .and_then(Json::as_str)
                 .and_then(LogType::parse)
                 .unwrap_or(LogType::Log);
-            debug::log_at(t, "mcp", file!(), line!(), msg);
+            let context = args.get("context").and_then(Json::as_u64);
+            debug::log_at_context(t, "mcp", file!(), line!(), msg, context);
             ToolResult::text(format!("Logged {t:?}"))
         },
     );
