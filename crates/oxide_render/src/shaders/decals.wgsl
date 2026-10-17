@@ -3,7 +3,7 @@
 // The result (premultiplied albedo, coverage) is blended into Lit surfaces before lighting.
 
 struct Decal {
-    to_local: mat4x4f,   // world -> unit box (-0.5..0.5), projecting along -Z
+    to_local: mat4x4f,   // world -> unit box (-0.5..0.5), projecting along +Z
     to_world: mat4x4f,
     color: vec4f,        // linear colour × opacity in a
     uv: vec4f,           // scale xy, offset zw
@@ -49,7 +49,11 @@ fn fs_main(in: DOut) -> @location(0) vec4f {
     let wp4 = frame.inv_view_proj * ndc;
     let wp = wp4.xyz / wp4.w;
     // Surface normal from the depth (derivatives before any discard).
-    let n = normalize(cross(dpdy(wp), dpdx(wp)));
+    var n = normalize(cross(dpdy(wp), dpdx(wp)));
+    // Visible surfaces face the camera.
+    if dot(n, frame.camera_pos.xyz - wp) < 0.0 {
+        n = -n;
+    }
     // Reverse-Z: 0 is the far plane (nothing drawn there).
     if d <= 0.0 {
         discard;
@@ -58,9 +62,9 @@ fn fs_main(in: DOut) -> @location(0) vec4f {
     if any(abs(local) > vec3f(0.5)) {
         discard;
     }
-    // Fade on surfaces turned away from the projector.
+    // Fade on surfaces turned away from the projector (0° facing it, 180° facing away).
     let facing = clamp(dot(n, -decal.axis.xyz), -1.0, 1.0);
-    let angle = degrees(acos(abs(facing)));
+    let angle = degrees(acos(facing));
     var fade = 1.0;
     if decal.fade.y > decal.fade.x {
         fade = 1.0 - clamp((angle - decal.fade.x) / (decal.fade.y - decal.fade.x), 0.0, 1.0);

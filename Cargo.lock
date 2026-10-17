@@ -3262,6 +3262,7 @@ dependencies = [
  "oxide_physics",
  "oxide_render",
  "oxide_scene",
+ "pollster",
 ]
 
 [[package]]

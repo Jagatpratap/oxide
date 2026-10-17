@@ -73,17 +73,18 @@ fn decals_project_onto_the_floor() {
     assets
         .materials
         .insert("test:white", Material::unlit("white", Color::WHITE));
-    // A 2 m box at the origin projecting straight down (local -Z = world -Y).
+    // A 2 m box at the origin projecting straight down (local +Z = world -Y), fading out
+    // only on surfaces that face away.
     let decal = DecalDraw {
         to_world: Matrix4x4::trs(
             Vector3::ZERO,
-            Quaternion::from_rotation_x(-std::f32::consts::FRAC_PI_2),
+            Quaternion::from_rotation_x(std::f32::consts::FRAC_PI_2),
             Vector3::splat(2.0),
         ),
         texture: None,
         color: [1.0, 0.0, 0.0, 1.0],
         uv: [1.0, 1.0, 0.0, 0.0],
-        angle_fade: [0.0, 0.0],
+        angle_fade: [80.0, 100.0],
     };
     let mut r = SceneRenderer::new(&gpu);
     let fmt = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -113,6 +114,23 @@ fn decals_project_onto_the_floor() {
             "{path:?}: white floor outside: {outside:?}"
         );
     }
+    // Projecting upward, the floor faces away: faded out.
+    let mut up = decal.clone();
+    up.to_world = Matrix4x4::trs(
+        Vector3::ZERO,
+        Quaternion::from_rotation_x(-std::f32::consts::FRAC_PI_2),
+        Vector3::splat(2.0),
+    );
+    let f = scene(vec![up], RenderingPath::Forward);
+    let img = capture_frame(&gpu, fmt, W, H, |view, _| {
+        r.render(&gpu, &assets, &f, view, fmt, W, H);
+    })
+    .unwrap();
+    let (cx, cy) = pixel_of(&f, Vector3::ZERO);
+    assert!(
+        img.pixel(cx, cy).iter().take(3).all(|&c| c > 200),
+        "angle fade"
+    );
     // Without decals the floor is white everywhere.
     let f = scene(vec![], RenderingPath::Forward);
     let img = capture_frame(&gpu, fmt, W, H, |view, _| {

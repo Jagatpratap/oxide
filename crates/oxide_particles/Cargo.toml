@@ -18,3 +18,4 @@ workspace = true
 
 [dev-dependencies]
 oxide_input.workspace = true
+pollster.workspace = true

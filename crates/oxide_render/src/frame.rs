@@ -498,6 +498,12 @@ impl ParticleInstance {
         self.uv = uv;
         self
     }
+
+    /// Height as a multiple of the width.
+    pub fn with_aspect(mut self, aspect: f32) -> Self {
+        self.aspect = aspect;
+        self
+    }
 }
 
 /// One sprite quad for the sprite pass: the unit square (0..1) placed by `model`.

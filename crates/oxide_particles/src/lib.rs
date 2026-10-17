@@ -9,7 +9,12 @@
 //! lights, trails and the renderer's billboard modes.
 //! Reference: <https://docs.unity3d.com/Manual/ParticleSystems.html>
 
+pub mod effects;
 pub mod modules;
+pub use effects::{
+    BillboardAsset, BillboardRenderer, DecalProjector, LineAlignment, LineRenderer,
+    LineTextureMode, TrailRenderer,
+};
 pub use modules::*;
 
 use oxide_assets::{AssetServer, Handle, Mesh, Texture2D};
@@ -1846,6 +1851,10 @@ impl System for ParticleSystemRunner {
     fn update(&mut self, world: &mut World) {
         simulate(world);
     }
+    /// Line and trail meshes, in Edit mode too.
+    fn always(&mut self, world: &mut World) {
+        effects::update(world);
+    }
 }
 
 /// Script helper: spawn a one-shot effect at a point that destroys itself when done.
@@ -1881,8 +1890,19 @@ pub fn install(world: &mut World) -> Box<dyn System> {
     world
         .registry
         .register::<ParticleSystemForceField>("Effects/Particle System Force Field");
+    let r = &mut world.registry;
+    r.register::<LineRenderer>("Effects/Line Renderer");
+    r.register::<TrailRenderer>("Effects/Trail Renderer");
+    r.register::<BillboardRenderer>("Rendering/Billboard Renderer");
+    r.register::<DecalProjector>("Rendering/Decal Projector");
     if let Some(a) = world.try_resource_mut::<AssetServer>() {
         register_builtin_textures(a);
+        effects::register_default_material(a);
+        a.register_data_asset::<BillboardAsset>(
+            oxide_assets::AssetTypeInfo::new("BillboardAsset", &["billboard"])
+                .menu("Billboard Asset", "New Billboard", 140)
+                .color(150, 210, 150),
+        );
     }
     Box::new(ParticleSystemRunner)
 }

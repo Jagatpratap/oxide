@@ -46,7 +46,7 @@ impl DecalTargets {
 /// One Decal Projector in the frame.
 #[derive(Clone, Debug)]
 pub struct DecalDraw {
-    /// The unit box (-0.5..0.5) → world; the decal projects along its local -Z.
+    /// The unit box (-0.5..0.5) → world; the decal projects along its local +Z (URP).
     pub to_world: Matrix4x4,
     pub texture: Option<AssetId>,
     /// Linear colour; alpha includes the opacity and distance fade.
@@ -228,10 +228,7 @@ impl DecalGpu {
         decals
             .iter()
             .map(|d| {
-                let axis = d
-                    .to_world
-                    .transform_vector3(Vector3::NEG_Z)
-                    .normalize_or_zero();
+                let axis = d.to_world.transform_vector3(Vector3::Z).normalize_or_zero();
                 let u = DecalUniform {
                     to_local: d.to_world.inverse().to_cols_array(),
                     to_world: d.to_world.to_cols_array(),
