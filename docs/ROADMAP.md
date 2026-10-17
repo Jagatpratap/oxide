@@ -416,10 +416,12 @@ from the fixed edge and each object along its matching local axis).
   ([Light Explorer](https://docs.unity3d.com/Manual/LightingExplorer-landing.html))
 - ☑ Volume framework: global and local (collider) Volumes, weight, priority, blend distance,
   per-parameter override checkboxes; the overrides on the Volume's object are its profile
-- ◐ Post FX ☑: Bloom (scatter, tint, clamp), Tonemapping (None/Neutral/ACES), Color
-  Adjustments, Lift Gamma Gain, White Balance, Channel Mixer, Vignette, Chromatic Aberration,
-  Film Grain, Lens Distortion, Depth of Field (Gaussian/Bokeh), Motion Blur, Split Toning,
-  Shadows/Midtones/Highlights. ☐: Color Curves, Panini Projection, LUT texture, bloom dirt
+- ☑ Post FX: Bloom (scatter, tint, clamp, lens dirt texture + intensity), Tonemapping (None/Neutral/ACES),
+  Color Adjustments, Lift Gamma Gain, White Balance, Channel Mixer, Vignette, Chromatic Aberration, Film Grain,
+  Lens Distortion, Depth of Field (Gaussian/Bokeh), Motion Blur, Split Toning, Shadows/Midtones/Highlights,
+  Screen Space Lens Flare, Color Curves (Master/Red/Green/Blue, Hue vs Hue, Hue vs Sat, Sat vs Sat, Lum vs
+  Sat; blended per sample across volumes), Color Lookup (Unity strip LUTs, contribution), Panini Projection
+  (distance, crop to fit)
   ([Post-processing in URP](https://docs.unity3d.com/Manual/urp/post-processing-and-full-screen-effects-urp.html),
   [Effect availability](https://docs.unity3d.com/Manual/post-processing-effect-availability-reference.html))
 - ☑ Custom full-screen passes / renderer features (see P4)

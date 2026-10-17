@@ -37,7 +37,22 @@ struct PostUniform {
     distortion_center_scale: [f32; 4],
     /// Screen Space Lens Flare (see `Post.sslf*` in post.wgsl).
     sslf: [[f32; 4]; 5],
-    _pad: [[f32; 4]; 3],
+    /// Panini: view extents xy, distance, crop scale (0 = off).
+    panini: [f32; 4],
+    /// Curves on, lookup contribution, lookup size, lookup texture is sRGB.
+    extra: [f32; 4],
+    /// Lens dirt intensity.
+    dirt: [f32; 4],
+}
+
+/// Textures the uber pass reads besides the image: a Color Lookup texture (with its strip
+/// height and whether it is sRGB) and a lens dirt texture.
+#[derive(Clone, Copy, Default)]
+pub struct PostTextures<'a> {
+    pub lookup: Option<(&'a wgpu::TextureView, u32, bool)>,
+    pub dirt: Option<&'a wgpu::TextureView>,
+    /// `tan` of the camera's half field of view, horizontally and vertically (Panini).
+    pub view_extents: [f32; 2],
 }
 
 fn gamma_to_linear(x: f32) -> f32 {
@@ -116,6 +131,10 @@ pub struct PostProcessor {
     uniforms: wgpu::Buffer,
     sampler: wgpu::Sampler,
     dummy: wgpu::TextureView,
+    /// Color Curves samples (128×2 RGBA32F) and what they hold.
+    curves: wgpu::Texture,
+    curves_view: wgpu::TextureView,
+    curves_key: Option<std::sync::Arc<crate::frame::ColorCurveSamples>>,
 }
 
 impl PostProcessor {
@@ -152,6 +171,18 @@ impl PostProcessor {
                 },
                 tex(3),
                 tex(4),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                tex(6),
+                tex(7),
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -232,7 +263,25 @@ impl PostProcessor {
                 view_formats: &[],
             })
             .create_view(&Default::default());
+        let curves = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("color curves"),
+            size: wgpu::Extent3d {
+                width: crate::frame::CURVE_SAMPLES as u32,
+                height: 2,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba32Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let curves_view = curves.create_view(&Default::default());
         Self {
+            curves,
+            curves_view,
+            curves_key: None,
             layout,
             pipeline_layout,
             module,
@@ -288,6 +337,17 @@ impl PostProcessor {
         bloom: &wgpu::TextureView,
         flare: &wgpu::TextureView,
     ) -> wgpu::BindGroup {
+        self.group_with(device, src, bloom, flare, &PostTextures::default())
+    }
+
+    fn group_with(
+        &self,
+        device: &wgpu::Device,
+        src: &wgpu::TextureView,
+        bloom: &wgpu::TextureView,
+        flare: &wgpu::TextureView,
+        extra: &PostTextures,
+    ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("post bind group"),
             layout: &self.layout,
@@ -315,6 +375,20 @@ impl PostProcessor {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: wgpu::BindingResource::TextureView(flare),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&self.curves_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(
+                        extra.lookup.map_or(&self.dummy, |l| l.0),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(extra.dirt.unwrap_or(&self.dummy)),
                 },
             ],
         })
@@ -517,7 +591,9 @@ impl PostProcessor {
                     ],
                 ]
             },
-            _pad: [[0.0; 4]; 3],
+            panini: [0.0; 4],
+            extra: [post.curves.is_some() as u32 as f32, 0.0, 0.0, 0.0],
+            dirt: [b.dirt.map_or(0.0, |d| d.1), 0.0, 0.0, 0.0],
         }
     }
 
@@ -535,6 +611,7 @@ impl PostProcessor {
         post: &PostSettings,
         aspect: f32,
         time: f32,
+        extra: PostTextures,
     ) {
         if !self.composite.contains_key(&format) {
             let p = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -564,7 +641,63 @@ impl PostProcessor {
             });
             self.composite.insert(format, p);
         }
-        let composite = Self::composite_uniform(post, !format.is_srgb(), aspect, time);
+        let mut composite = Self::composite_uniform(post, !format.is_srgb(), aspect, time);
+        if !post.enabled {
+            composite.extra = [0.0; 4];
+            composite.dirt = [0.0; 4];
+        }
+        if post.enabled
+            && let Some((_, n, srgb)) = extra.lookup
+            && let Some((_, contribution)) = post.lookup
+        {
+            composite.extra[1] = contribution;
+            composite.extra[2] = n as f32;
+            composite.extra[3] = srgb as u32 as f32;
+        }
+        if extra.dirt.is_none() {
+            composite.dirt = [0.0; 4];
+        }
+        let [d, crop] = post.panini;
+        if post.enabled && d > 0.0 {
+            // URP's crop-to-fit scale: no empty borders at the edges.
+            let [ex, ey] = extra.view_extents;
+            let view_dist = 1.0 + d;
+            let proj_hyp = (ex * ex + 1.0).sqrt();
+            let cyl_dist_minus_d = 1.0 / proj_hyp;
+            let cyl_dist = cyl_dist_minus_d + d;
+            let crop_x = ex * cyl_dist_minus_d * (view_dist / cyl_dist);
+            let scale = (crop_x / ex).min(1.0);
+            composite.panini = [ex, ey, d, 1.0 + (scale - 1.0) * crop];
+        }
+        // Color Curves samples, uploaded when they change.
+        if post.curves != self.curves_key {
+            if let Some(c) = &post.curves {
+                let n = crate::frame::CURVE_SAMPLES;
+                let data: Vec<f32> = (0..2)
+                    .flat_map(|row| {
+                        (0..n).flat_map(move |i| {
+                            let base = row * 4;
+                            [c[base][i], c[base + 1][i], c[base + 2][i], c[base + 3][i]]
+                        })
+                    })
+                    .collect();
+                queue.write_texture(
+                    self.curves.as_image_copy(),
+                    bytemuck::cast_slice(&data),
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(n as u32 * 16),
+                        rows_per_image: Some(2),
+                    },
+                    wgpu::Extent3d {
+                        width: n as u32,
+                        height: 2,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
+            self.curves_key = post.curves.clone();
+        }
         let bloom_on = composite.params2[2] > 0.5 && !chain.is_empty();
         let sslf_on = composite.sslf[0][0] > 0.0 && !chain.is_empty();
         let sslf = &post.screen_space_lens_flare;
@@ -665,7 +798,13 @@ impl PostProcessor {
             Self::pass(encoder, view, None, &self.sslf, &g, s);
         }
         let bloom_view = if bloom_on { &chain[0].0 } else { &self.dummy };
-        let g = self.group(device, hdr, bloom_view, sslf_view.unwrap_or(&self.dummy));
+        let g = self.group_with(
+            device,
+            hdr,
+            bloom_view,
+            sslf_view.unwrap_or(&self.dummy),
+            &extra,
+        );
         Self::pass(encoder, target, None, &self.composite[&format], &g, 0);
     }
 }

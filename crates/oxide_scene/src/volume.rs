@@ -124,6 +124,8 @@ impl Interp for Vector4 {
 }
 
 impl Interp for bool {}
+impl Interp for oxide_core::AnimationCurve {}
+impl<T: oxide_assets::Asset> Interp for Option<oxide_assets::Handle<T>> {}
 
 impl<T: Interp> VolumeParameter<T> {
     /// Applies this parameter to the accumulated value `into` with volume weight `w`.
@@ -213,6 +215,9 @@ pub struct Bloom {
     pub tint: VolumeParameter<Color>,
     /// Brightest value that can bloom (stops fireflies).
     pub clamp: VolumeParameter<f32>,
+    /// Lens dirt: a texture lit up by the bloom (URP "Lens Dirt").
+    pub dirt_texture: VolumeParameter<Option<oxide_assets::Handle<oxide_assets::Texture2D>>>,
+    pub dirt_intensity: VolumeParameter<f32>,
 }
 
 impl Default for Bloom {
@@ -223,10 +228,90 @@ impl Default for Bloom {
             scatter: VolumeParameter::new(0.7),
             tint: VolumeParameter::new(Color::WHITE),
             clamp: VolumeParameter::new(65472.0),
+            dirt_texture: VolumeParameter::new(None),
+            dirt_intensity: VolumeParameter::new(0.0),
         }
     }
 }
 volume_override!(Bloom);
+
+/// URP Color Curves override. YRGB curves map 0..1 to 0..1 (Master on every channel, then
+/// Red/Green/Blue); Hue vs Hue shifts hue (0.5 = none), the Sat curves scale saturation (0.5 =
+/// ×1). An empty curve (no keys) changes nothing.
+#[derive(Clone, Debug, Reflect)]
+pub struct ColorCurves {
+    pub master: VolumeParameter<oxide_core::AnimationCurve>,
+    pub red: VolumeParameter<oxide_core::AnimationCurve>,
+    pub green: VolumeParameter<oxide_core::AnimationCurve>,
+    pub blue: VolumeParameter<oxide_core::AnimationCurve>,
+    pub hue_vs_hue: VolumeParameter<oxide_core::AnimationCurve>,
+    pub hue_vs_sat: VolumeParameter<oxide_core::AnimationCurve>,
+    pub sat_vs_sat: VolumeParameter<oxide_core::AnimationCurve>,
+    pub lum_vs_sat: VolumeParameter<oxide_core::AnimationCurve>,
+}
+
+impl Default for ColorCurves {
+    fn default() -> Self {
+        let identity =
+            || VolumeParameter::new(oxide_core::AnimationCurve::linear(0.0, 0.0, 1.0, 1.0));
+        let empty = || {
+            VolumeParameter::new(oxide_core::AnimationCurve {
+                keys: Vec::new(),
+                ..oxide_core::AnimationCurve::linear(0.0, 0.0, 1.0, 1.0)
+            })
+        };
+        Self {
+            master: identity(),
+            red: identity(),
+            green: identity(),
+            blue: identity(),
+            hue_vs_hue: empty(),
+            hue_vs_sat: empty(),
+            sat_vs_sat: empty(),
+            lum_vs_sat: empty(),
+        }
+    }
+}
+volume_override!(ColorCurves);
+
+/// URP Color Lookup override: a lookup texture (Unity's strip layout, `N²`×`N`) applied
+/// after tonemapping, blended by Contribution.
+#[derive(Clone, Debug, Reflect)]
+pub struct ColorLookup {
+    pub texture: VolumeParameter<Option<oxide_assets::Handle<oxide_assets::Texture2D>>>,
+    #[reflect(range(0, 1))]
+    pub contribution: VolumeParameter<f32>,
+}
+
+impl Default for ColorLookup {
+    fn default() -> Self {
+        Self {
+            texture: VolumeParameter::new(None),
+            contribution: VolumeParameter::new(0.0),
+        }
+    }
+}
+volume_override!(ColorLookup);
+
+/// URP Panini Projection override: keeps wide field-of-view edges from stretching.
+#[derive(Clone, Debug, Reflect)]
+pub struct PaniniProjection {
+    #[reflect(range(0, 1))]
+    pub distance: VolumeParameter<f32>,
+    /// Scales the image so no empty borders show.
+    #[reflect(range(0, 1))]
+    pub crop_to_fit: VolumeParameter<f32>,
+}
+
+impl Default for PaniniProjection {
+    fn default() -> Self {
+        Self {
+            distance: VolumeParameter::new(0.0),
+            crop_to_fit: VolumeParameter::new(1.0),
+        }
+    }
+}
+volume_override!(PaniniProjection);
 
 /// URP Tonemapping override.
 #[derive(Clone, Debug, Reflect)]
@@ -638,6 +723,9 @@ pub fn register(reg: &mut crate::ComponentRegistry) {
     reg.register::<LensDistortion>(&format!("{o}Lens Distortion"));
     reg.register::<DepthOfField>(&format!("{o}Depth Of Field"));
     reg.register::<MotionBlur>(&format!("{o}Motion Blur"));
+    reg.register::<ColorCurves>(&format!("{o}Color Curves"));
+    reg.register::<ColorLookup>(&format!("{o}Color Lookup"));
+    reg.register::<PaniniProjection>(&format!("{o}Panini Projection"));
 }
 
 #[cfg(test)]
@@ -713,6 +801,9 @@ pub struct VolumeProfile {
     pub depth_of_field: Option<DepthOfField>,
     pub motion_blur: Option<MotionBlur>,
     pub screen_space_lens_flare: Option<ScreenSpaceLensFlare>,
+    pub color_curves: Option<ColorCurves>,
+    pub color_lookup: Option<ColorLookup>,
+    pub panini_projection: Option<PaniniProjection>,
 }
 
 impl oxide_assets::Asset for VolumeProfile {

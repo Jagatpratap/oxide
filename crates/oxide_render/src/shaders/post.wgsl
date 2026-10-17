@@ -1,7 +1,8 @@
 // Post-processing: bloom (prefilter, downsample, upsample) and the final uber pass in URP's
-// order: lens distortion, chromatic aberration, exposure, bloom, vignette, color grading
-// (white balance, contrast, color filter, channel mixer, shadows/midtones/highlights,
-// lift/gamma/gain, split toning, hue, saturation), tonemapping, film grain, sRGB encode.
+// order: Panini projection, lens distortion, chromatic aberration, exposure, bloom (with lens
+// dirt), vignette, color grading (white balance, contrast, color filter, channel mixer,
+// shadows/midtones/highlights, lift/gamma/gain, split toning, color curves, hue,
+// saturation), tonemapping, color lookup, film grain, sRGB encode.
 
 struct Post {
     params: vec4f,          // x threshold (linear), y knee, z bloom intensity, w exposure
@@ -34,6 +35,9 @@ struct Post {
     sslf2: vec4f,           // xy warped scale, z sample dimmer, w vignette effect
     sslf3: vec4f,           // x starting position, y scale, z chromatic aberration, w streaks intensity
     sslf4: vec4f,           // x streaks length, y orientation (rad), z streaks threshold, w aspect
+    panini: vec4f,          // xy view extents (tan of the half field of view), z distance, w crop scale (0 = off)
+    extra: vec4f,           // x color curves on, y lookup contribution (0 = off), z lookup size, w lookup texture is sRGB
+    dirt: vec4f,            // x lens dirt intensity (0 = off)
 };
 
 @group(0) @binding(0) var<uniform> post: Post;
@@ -41,6 +45,11 @@ struct Post {
 @group(0) @binding(2) var src_sampler: sampler;
 @group(0) @binding(3) var bloom_tex: texture_2d<f32>;
 @group(0) @binding(4) var flare_tex: texture_2d<f32>;
+// Color Curves: 128 samples, row 0 Master/Red/Green/Blue, row 1 Hue vs Hue / Hue vs Sat /
+// Sat vs Sat / Lum vs Sat.
+@group(0) @binding(5) var curves_tex: texture_2d<f32>;
+@group(0) @binding(6) var lut_tex: texture_2d<f32>;
+@group(0) @binding(7) var dirt_tex: texture_2d<f32>;
 
 struct VsOut {
     @builtin(position) clip: vec4f,
@@ -216,7 +225,7 @@ fn luminance(c: vec3f) -> f32 {
 fn rgb_to_hsv(c: vec3f) -> vec3f {
     let k = vec4f(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
     let p = select(vec4f(c.gb, k.xy), vec4f(c.bg, k.wz), c.g < c.b);
-    let q = select(vec4f(p.xyw, c.r), vec4f(c.r, p.yzx), c.r < p.x);
+    let q = select(vec4f(c.r, p.yzx), vec4f(p.xyw, c.r), c.r < p.x);
     let d = q.x - min(q.w, q.y);
     let e = 1e-4;
     return vec3f(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
@@ -248,6 +257,67 @@ fn white_balance(c: vec3f) -> vec3f {
     );
 }
 
+// Curve `k` (see `curves_tex`) at `x` in 0..1, linearly interpolated.
+fn curve(k: u32, x: f32) -> f32 {
+    let row = i32(k / 4u);
+    let f = clamp(x, 0.0, 1.0) * 127.0;
+    let i0 = i32(floor(f));
+    let i1 = min(i0 + 1, 127);
+    let a = textureLoad(curves_tex, vec2i(i0, row), 0)[k % 4u];
+    let b = textureLoad(curves_tex, vec2i(i1, row), 0)[k % 4u];
+    return mix(a, b, f - floor(f));
+}
+
+// URP Color Curves on a gamma-space colour in 0..1: the hue and saturation curves, then
+// Master and the Red / Green / Blue curves.
+fn color_curves(g_in: vec3f) -> vec3f {
+    var hsv = rgb_to_hsv(g_in);
+    hsv.x = fract(hsv.x + curve(4u, hsv.x) - 0.5 + 1.0);
+    let sat = curve(5u, hsv.x) * curve(6u, hsv.y) * curve(7u, luminance(g_in)) * 8.0;
+    hsv.y = clamp(hsv.y * sat, 0.0, 1.0);
+    var g = hsv_to_rgb(hsv);
+    g = vec3f(curve(0u, g.r), curve(0u, g.g), curve(0u, g.b));
+    return vec3f(curve(1u, g.r), curve(2u, g.g), curve(3u, g.b));
+}
+
+// URP Color Lookup on a linear colour in 0..1 (after tonemapping): Unity's strip layout,
+// N slices of N×N along x, blue choosing the slice.
+fn color_lookup(c: vec3f) -> vec3f {
+    let n = post.extra.z;
+    let g = to_srgb(clamp(c, vec3f(0.0), vec3f(1.0)));
+    let b = g.b * (n - 1.0);
+    let s0 = floor(b);
+    let s1 = min(s0 + 1.0, n - 1.0);
+    let x = (g.r * (n - 1.0) + 0.5) / (n * n);
+    let y = 1.0 - (g.g * (n - 1.0) + 0.5) / n;
+    let a = textureSampleLevel(lut_tex, src_sampler, vec2f(x + s0 / n, y), 0.0).rgb;
+    let e = textureSampleLevel(lut_tex, src_sampler, vec2f(x + s1 / n, y), 0.0).rgb;
+    var l = mix(a, e, b - s0);
+    if (post.extra.w < 0.5) {
+        // A linear (data) texture holds sRGB-coded colours.
+        l = to_linear(l);
+    }
+    return mix(c, l, post.extra.y);
+}
+
+// URP Panini Projection of the screen position (Panini_Generic).
+fn panini(uv: vec2f) -> vec2f {
+    if (post.panini.w <= 0.0) {
+        return uv;
+    }
+    let d = post.panini.z;
+    let view_pos = (2.0 * uv - 1.0) * post.panini.xy * post.panini.w;
+    let view_dist = 1.0 + d;
+    let view_hyp_sq = view_pos.x * view_pos.x + view_dist * view_dist;
+    let isect_d = view_pos.x * d;
+    let isect_discrim = view_hyp_sq - isect_d * isect_d;
+    let cyl_dist_minus_d = (-isect_d * view_pos.x + view_dist * sqrt(isect_discrim)) / view_hyp_sq;
+    let cyl_dist = cyl_dist_minus_d + d;
+    let cyl_pos = view_pos * (cyl_dist / view_dist);
+    let proj = cyl_pos / (cyl_dist - d);
+    return proj / post.panini.xy * 0.5 + 0.5;
+}
+
 fn grade(c_in: vec3f) -> vec3f {
     var c = c_in;
     if (post.white_balance.w > 0.5) {
@@ -275,6 +345,11 @@ fn grade(c_in: vec3f) -> vec3f {
     if (any(post.split_shadows.rgb != vec3f(0.5)) || any(post.split_highlights.rgb != vec3f(0.5))) {
         g = soft_light(soft_light(g, sh), hi);
         c = select(c, to_linear(g), c <= vec3f(1.0));
+    }
+    // Color curves (gamma space; HDR values above 1 keep their brightness).
+    if (post.extra.x > 0.5) {
+        let curved = to_linear(color_curves(to_srgb(clamp(c, vec3f(0.0), vec3f(1.0)))));
+        c = select(c, curved, c <= vec3f(1.0));
     }
     // Hue and saturation.
     if (post.color.z != 0.0) {
@@ -312,7 +387,7 @@ fn hash(p: vec2f) -> f32 {
 
 @fragment
 fn fs_composite(in: VsOut) -> @location(0) vec4f {
-    let uv = distort(in.uv);
+    let uv = distort(panini(in.uv));
     var c: vec3f;
     let ca = post.color.w;
     if (ca > 0.0) {
@@ -326,7 +401,12 @@ fn fs_composite(in: VsOut) -> @location(0) vec4f {
     }
     c *= post.params.w;
     if (post.params2.z > 0.5) {
-        c += textureSampleLevel(bloom_tex, src_sampler, uv, 0.0).rgb * post.params.z * post.bloom_tint.rgb;
+        let bloom = textureSampleLevel(bloom_tex, src_sampler, uv, 0.0).rgb * post.params.z * post.bloom_tint.rgb;
+        c += bloom;
+        if (post.dirt.x > 0.0) {
+            // Lens dirt lights up where the bloom is.
+            c += bloom * textureSampleLevel(dirt_tex, src_sampler, in.uv, 0.0).rgb * post.dirt.x;
+        }
     }
     if (post.sslf0.x > 0.0) {
         c += textureSampleLevel(flare_tex, src_sampler, uv, 0.0).rgb * post.sslf0.x;
@@ -348,6 +428,9 @@ fn fs_composite(in: VsOut) -> @location(0) vec4f {
         c = neutral(c);
     } else {
         c = clamp(c, vec3f(0.0), vec3f(1.0));
+    }
+    if (post.extra.y > 0.0) {
+        c = color_lookup(c);
     }
     // Film grain, less in bright areas.
     if (post.grain.x > 0.0) {

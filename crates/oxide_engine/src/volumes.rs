@@ -10,11 +10,11 @@ use oxide_render::{
     ScreenSpaceLensFlareSettings, TonemapMode, VignetteSettings,
 };
 use oxide_scene::{
-    Bloom, ChannelMixer, ChromaticAberration, ColorAdjustments, Component, DepthOfField,
-    DepthOfFieldMode, FilmGrain, GameObjectId, LensDistortion, LiftGammaGain, MotionBlur,
-    RenderSettings, ScreenSpaceLensFlare, ScreenSpaceLensFlareResolution,
-    ShadowsMidtonesHighlights, SplitToning, Tonemapping, TonemappingMode, Vignette, Volume,
-    VolumeProfile, WhiteBalance, World,
+    Bloom, ChannelMixer, ChromaticAberration, ColorAdjustments, ColorCurves, ColorLookup,
+    Component, DepthOfField, DepthOfFieldMode, FilmGrain, GameObjectId, LensDistortion,
+    LiftGammaGain, MotionBlur, PaniniProjection, RenderSettings, ScreenSpaceLensFlare,
+    ScreenSpaceLensFlareResolution, ShadowsMidtonesHighlights, SplitToning, Tonemapping,
+    TonemappingMode, Vignette, Volume, VolumeProfile, WhiteBalance, World,
 };
 use std::collections::HashMap;
 
@@ -62,6 +62,37 @@ pub struct VolumeStack {
     pub depth_of_field: DepthOfField,
     pub motion_blur: MotionBlur,
     pub screen_space_lens_flare: ScreenSpaceLensFlare,
+    pub bloom_dirt: Option<oxide_assets::Handle<oxide_assets::Texture2D>>,
+    pub bloom_dirt_intensity: f32,
+    /// Color Curves sampled (blended per sample, like Unity's TextureCurve), or None.
+    pub curves: Option<oxide_render::ColorCurveSamples>,
+    pub lookup: Option<oxide_assets::Handle<oxide_assets::Texture2D>>,
+    pub lookup_contribution: f32,
+    pub panini_distance: f32,
+    pub panini_crop: f32,
+}
+
+/// The unchanged Color Curves: identity YRGB, flat 0.5 for the hue/saturation curves.
+fn neutral_curves() -> oxide_render::ColorCurveSamples {
+    let n = oxide_render::CURVE_SAMPLES;
+    std::array::from_fn(|k| {
+        std::array::from_fn(|i| {
+            if k < 4 {
+                i as f32 / (n - 1) as f32
+            } else {
+                0.5
+            }
+        })
+    })
+}
+
+/// A curve sampled over 0..1; an empty one gives curve `k`'s neutral samples.
+fn sample_curve(c: &oxide_core::AnimationCurve, k: usize) -> [f32; oxide_render::CURVE_SAMPLES] {
+    let n = oxide_render::CURVE_SAMPLES;
+    if c.keys.is_empty() {
+        return neutral_curves()[k];
+    }
+    std::array::from_fn(|i| c.evaluate(i as f32 / (n - 1) as f32))
 }
 
 impl VolumeStack {
@@ -117,6 +148,13 @@ impl VolumeStack {
             depth_of_field: DepthOfField::default(),
             motion_blur: MotionBlur::default(),
             screen_space_lens_flare: ScreenSpaceLensFlare::default(),
+            bloom_dirt: None,
+            bloom_dirt_intensity: 0.0,
+            curves: None,
+            lookup: None,
+            lookup_contribution: 0.0,
+            panini_distance: 0.0,
+            panini_crop: 1.0,
         }
     }
 
@@ -142,6 +180,11 @@ impl VolumeStack {
                 scatter: self.bloom_scatter,
                 tint: lin(self.bloom_tint),
                 clamp: self.bloom_clamp,
+                dirt: self
+                    .bloom_dirt
+                    .as_ref()
+                    .filter(|_| self.bloom_dirt_intensity > 0.0)
+                    .map(|h| (h.id(), self.bloom_dirt_intensity)),
             },
             white_balance: [self.temperature, self.tint],
             contrast: self.contrast,
@@ -222,6 +265,16 @@ impl VolumeStack {
                     chromatic_aberration: f.chromatic_abberation_intensity.value,
                 }
             },
+            curves: self.curves.map(std::sync::Arc::new),
+            lookup: self
+                .lookup
+                .as_ref()
+                .filter(|_| self.lookup_contribution > 0.0)
+                .map(|h| (h.id(), self.lookup_contribution.min(1.0))),
+            panini: [
+                self.panini_distance.clamp(0.0, 1.0),
+                self.panini_crop.clamp(0.0, 1.0),
+            ],
         }
     }
 }
@@ -315,6 +368,9 @@ pub fn evaluate(world: &World, rs: &RenderSettings, position: Vector3) -> Volume
     let blur = overrides::<MotionBlur>(world, &order, |p| p.motion_blur.as_ref());
     let sslf =
         overrides::<ScreenSpaceLensFlare>(world, &order, |p| p.screen_space_lens_flare.as_ref());
+    let curves = overrides::<ColorCurves>(world, &order, |p| p.color_curves.as_ref());
+    let lookup = overrides::<ColorLookup>(world, &order, |p| p.color_lookup.as_ref());
+    let panini = overrides::<PaniniProjection>(world, &order, |p| p.panini_projection.as_ref());
 
     let s = &mut stack;
     for (id, w) in order {
@@ -324,6 +380,39 @@ pub fn evaluate(world: &World, rs: &RenderSettings, position: Vector3) -> Volume
             b.scatter.blend(&mut s.bloom_scatter, w);
             b.tint.blend(&mut s.bloom_tint, w);
             b.clamp.blend(&mut s.bloom_clamp, w);
+            b.dirt_texture.blend(&mut s.bloom_dirt, w);
+            b.dirt_intensity.blend(&mut s.bloom_dirt_intensity, w);
+        }
+        if let Some(c) = curves.get(&id) {
+            let params = [
+                &c.master,
+                &c.red,
+                &c.green,
+                &c.blue,
+                &c.hue_vs_hue,
+                &c.hue_vs_sat,
+                &c.sat_vs_sat,
+                &c.lum_vs_sat,
+            ];
+            if params.iter().any(|p| p.override_state) {
+                let dst = s.curves.get_or_insert_with(neutral_curves);
+                for (k, p) in params.iter().enumerate() {
+                    if p.override_state {
+                        let samples = sample_curve(&p.value, k);
+                        for (d, v) in dst[k].iter_mut().zip(samples) {
+                            *d += (v - *d) * w;
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(c) = lookup.get(&id) {
+            c.texture.blend(&mut s.lookup, w);
+            c.contribution.blend(&mut s.lookup_contribution, w);
+        }
+        if let Some(c) = panini.get(&id) {
+            c.distance.blend(&mut s.panini_distance, w);
+            c.crop_to_fit.blend(&mut s.panini_crop, w);
         }
         if let Some(t) = tonemap.get(&id) {
             t.mode.blend(&mut s.tonemapping, w);
@@ -572,5 +661,51 @@ mod tests {
             at(7.0)
         );
         assert_eq!(at(20.0), 0.0, "beyond the blend distance");
+    }
+
+    #[test]
+    fn color_curves_lookup_and_panini_blend_into_post() {
+        let mut w = world();
+        let rs = RenderSettings::default();
+        assert!(
+            evaluate(&w, &rs, Vector3::ZERO)
+                .to_post(&rs, true)
+                .curves
+                .is_none()
+        );
+        let v = w.create("Global Volume");
+        w.add_component(
+            v,
+            Volume {
+                weight: 0.5,
+                ..Default::default()
+            },
+        );
+        let mut curves = ColorCurves::default();
+        curves
+            .master
+            .set(oxide_core::AnimationCurve::linear(0.0, 1.0, 1.0, 0.0));
+        w.add_component(v, curves);
+        let mut lookup = ColorLookup::default();
+        lookup.texture.set(Some(oxide_assets::Handle::from_path(
+            "Assets/lut.png".to_owned(),
+        )));
+        lookup.contribution.set(1.0);
+        w.add_component(v, lookup);
+        let mut panini = PaniniProjection::default();
+        panini.distance.set(1.0);
+        w.add_component(v, panini);
+        let post = evaluate(&w, &rs, Vector3::ZERO).to_post(&rs, true);
+        let c = post.curves.expect("curves");
+        // Halfway (weight 0.5) between identity and inverted: flat 0.5 for Master.
+        assert!(
+            c[0].iter().all(|v| (v - 0.5).abs() < 1e-3),
+            "{:?}",
+            &c[0][..4]
+        );
+        // Unset curves stay neutral.
+        assert!((c[1][0]).abs() < 1e-6 && (c[4][7] - 0.5).abs() < 1e-6);
+        assert_eq!(post.lookup.map(|l| l.1), Some(0.5));
+        assert_eq!(post.panini, [0.5, 1.0]);
     }
 }

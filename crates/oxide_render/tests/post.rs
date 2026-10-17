@@ -268,3 +268,167 @@ fn depth_of_field_and_motion_blur() {
         "turning camera blurs: {moving} vs {sharp}"
     );
 }
+
+#[test]
+fn color_curves_lookup_panini_and_lens_dirt() {
+    let Some(gpu) = Gpu::headless() else {
+        eprintln!("no GPU; skipped");
+        return;
+    };
+    let mut assets = AssetServer::new(std::env::temp_dir());
+    // Lookup strips (16 slices of 16×16): identity, and one that maps everything to red.
+    let n = 16u32;
+    let strip = |f: &dyn Fn(f32, f32, f32) -> [u8; 3]| -> Vec<u8> {
+        let mut px = Vec::with_capacity((n * n * n * 4) as usize);
+        for y in 0..n {
+            for x in 0..n * n {
+                let (slice, rx) = (x / n, x % n);
+                let r = rx as f32 / (n - 1) as f32;
+                // Unity strips: green grows upward (rows are stored top first).
+                let g = (n - 1 - y) as f32 / (n - 1) as f32;
+                let b = slice as f32 / (n - 1) as f32;
+                let c = f(r, g, b);
+                px.extend_from_slice(&[c[0], c[1], c[2], 255]);
+            }
+        }
+        px
+    };
+    let to8 = |v: f32| (v * 255.0).round() as u8;
+    let identity = assets
+        .textures
+        .insert(
+            "test:lut_identity.png",
+            oxide_assets::Texture2D::from_rgba8(
+                "lut",
+                n * n,
+                n,
+                strip(&|r, g, b| [to8(r), to8(g), to8(b)]),
+                false,
+            ),
+        )
+        .id();
+    let red = assets
+        .textures
+        .insert(
+            "test:lut_red.png",
+            oxide_assets::Texture2D::from_rgba8(
+                "lut",
+                n * n,
+                n,
+                strip(&|_, _, _| [255, 0, 0]),
+                false,
+            ),
+        )
+        .id();
+    let dirt = assets
+        .textures
+        .insert(
+            "test:dirt.png",
+            oxide_assets::Texture2D::from_rgba8("dirt", 4, 4, [0, 255, 0, 255].repeat(16), true),
+        )
+        .id();
+    let mut r = SceneRenderer::new(&gpu);
+    let mut shot = |post: PostSettings| {
+        let f = frame(&mut assets, post);
+        render(&gpu, &mut r, &assets, &f)
+    };
+    let base = PostSettings {
+        tonemapping: TonemapMode::None,
+        ..PostSettings::neutral()
+    };
+    let plain = center(&shot(base.clone()));
+
+    // Master curve inverted: 1 - x on every channel.
+    let mut curves: ColorCurveSamples = [[0.5; CURVE_SAMPLES]; 8];
+    for (k, c) in curves.iter_mut().enumerate().take(4) {
+        for (i, v) in c.iter_mut().enumerate() {
+            let x = i as f32 / (CURVE_SAMPLES - 1) as f32;
+            *v = if k == 0 { 1.0 - x } else { x };
+        }
+    }
+    let inverted = center(&shot(PostSettings {
+        curves: Some(std::sync::Arc::new(curves)),
+        ..base.clone()
+    }));
+    for k in 0..3 {
+        assert!(
+            (inverted[k] - (255 - plain[k])).abs() <= 6,
+            "inverted {inverted:?} vs {plain:?}"
+        );
+    }
+
+    // Identity lookup: unchanged; the red one turns everything red; half contribution blends.
+    let same = center(&shot(PostSettings {
+        lookup: Some((identity, 1.0)),
+        ..base.clone()
+    }));
+    for k in 0..3 {
+        assert!(
+            (same[k] - plain[k]).abs() <= 4,
+            "identity LUT {same:?} vs {plain:?}"
+        );
+    }
+    let reddened = center(&shot(PostSettings {
+        lookup: Some((red, 1.0)),
+        ..base.clone()
+    }));
+    assert!(
+        reddened[0] > 250 && reddened[1] < 5 && reddened[2] < 5,
+        "{reddened:?}"
+    );
+    let half = center(&shot(PostSettings {
+        lookup: Some((red, 0.5)),
+        ..base.clone()
+    }));
+    assert!(
+        half[1] > 20 && half[1] < plain[1],
+        "half contribution {half:?}"
+    );
+
+    // Lens dirt (green) shows where the bloom is.
+    let bloom = PostSettings {
+        bloom: BloomSettings {
+            intensity: 1.0,
+            threshold: 0.1,
+            ..base.bloom
+        },
+        ..base.clone()
+    };
+    let clean = center(&shot(bloom.clone()));
+    let dirty = center(&shot(PostSettings {
+        bloom: BloomSettings {
+            dirt: Some((dirt, 3.0)),
+            ..bloom.bloom
+        },
+        ..bloom.clone()
+    }));
+    assert!(
+        dirty[1] > clean[1] + 10,
+        "dirt adds green: {dirty:?} vs {clean:?}"
+    );
+
+    // Panini: the checkerboard near the edges is pulled toward the centre (fewer, wider
+    // squares cross the screen), and crop-to-fit leaves no black border.
+    let mut f = checker_frame(&mut assets, 3.0, base.clone());
+    f.cameras[0].projection = ProjectionKind::Perspective { fov: 100.0 };
+    // Wide enough to fill the 100° view.
+    f.draws[0].model = Matrix4x4::trs(
+        Vector3::new(0.0, 0.0, 3.0),
+        Quaternion::IDENTITY,
+        Vector3::new(30.0, 30.0, 0.1),
+    );
+    let flat = render(&gpu, &mut r, &assets, &f);
+    let flat_edge = flat.pixel(0, SIZE / 2);
+    assert!(
+        flat_edge[0] > 10 || flat_edge[1] > 10,
+        "the plane fills the view: {flat_edge:?}"
+    );
+    f.environment.post.panini = [1.0, 1.0];
+    let panini = render(&gpu, &mut r, &assets, &f);
+    assert_ne!(flat.rgba, panini.rgba, "panini changes the image");
+    let edge = panini.pixel(0, SIZE / 2);
+    assert!(
+        edge[0] > 10 || edge[1] > 10,
+        "no border with crop to fit: {edge:?}"
+    );
+}

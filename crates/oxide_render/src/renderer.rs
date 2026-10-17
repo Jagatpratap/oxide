@@ -1828,6 +1828,40 @@ impl SceneRenderer {
     ) -> RenderStats {
         let (w, h) = (width.max(1), height.max(1));
         let (mut encoder, stats, out) = self.render_scene(gpu, assets, frame, w, h, None);
+        // Textures of the uber pass: Color Lookup (a strip N² × N) and lens dirt.
+        let post_settings = &frame.environment.post;
+        let lookup_view = post_settings.lookup.and_then(|(id, _)| {
+            let t = assets.textures.get_by_id(id)?;
+            let (n, srgb) = (t.height, t.srgb);
+            if t.width != n * n {
+                oxide_core::debug_log_warning!(
+                    "Color Lookup: {} is {}×{}; a lookup texture is N²×N (e.g. 1024×32)",
+                    t.name,
+                    t.width,
+                    t.height
+                );
+                return None;
+            }
+            let v = self
+                .gpu_assets
+                .texture_view(&gpu.device, &gpu.queue, assets, id)?
+                .clone();
+            Some((v, n, srgb))
+        });
+        let dirt_view = post_settings.bloom.dirt.and_then(|(id, _)| {
+            self.gpu_assets
+                .texture_view(&gpu.device, &gpu.queue, assets, id)
+                .cloned()
+        });
+        let view_extents = frame
+            .cameras
+            .first()
+            .and_then(|cam| {
+                let a = (w as f32 * cam.viewport[2]) / (h as f32 * cam.viewport[3]).max(1.0);
+                let t = (cam.projection.vertical_fov(a)?.to_radians() * 0.5).tan();
+                Some([t * a, t])
+            })
+            .unwrap_or([1.0, 1.0]);
 
         // ---- post-processing into the target ------------------------------------------
         let key = (w, h, out.samples);
@@ -2035,6 +2069,11 @@ impl SceneRenderer {
                         &env.post,
                         aspect,
                         time,
+                        crate::post::PostTextures {
+                            lookup: lookup_view.as_ref().map(|(v, n, s)| (v, *n, *s)),
+                            dirt: dirt_view.as_ref(),
+                            view_extents,
+                        },
                     )
                 },
             );

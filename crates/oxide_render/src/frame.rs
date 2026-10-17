@@ -610,7 +610,16 @@ pub struct BloomSettings {
     pub tint: [f32; 3],
     /// Brightest value that can bloom.
     pub clamp: f32,
+    /// Lens dirt texture and intensity.
+    pub dirt: Option<(AssetId, f32)>,
 }
+
+/// Samples per Color Curves curve.
+pub const CURVE_SAMPLES: usize = 128;
+
+/// URP Color Curves, sampled over 0..1: Master, Red, Green, Blue (outputs 0..1), Hue vs
+/// Hue (0.5 = no shift), Hue vs Sat, Sat vs Sat, Lum vs Sat (0.5 = ×1).
+pub type ColorCurveSamples = [[f32; CURVE_SAMPLES]; 8];
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VignetteSettings {
@@ -708,6 +717,12 @@ pub struct PostSettings {
     /// `(intensity, clamp)`: blur length scale and longest blur as a fraction of the screen.
     pub motion_blur: [f32; 2],
     pub screen_space_lens_flare: ScreenSpaceLensFlareSettings,
+    /// Color Curves (None: unchanged).
+    pub curves: Option<std::sync::Arc<ColorCurveSamples>>,
+    /// Color Lookup texture (Unity strip) and contribution.
+    pub lookup: Option<(AssetId, f32)>,
+    /// Panini Projection `(distance, crop to fit)`.
+    pub panini: [f32; 2],
 }
 
 /// URP's Screen Space Lens Flare: ghosts, a halo and streaks built from a bloom mip.
@@ -779,6 +794,7 @@ impl Default for PostSettings {
                 scatter: 0.7,
                 tint: [1.0; 3],
                 clamp: 65472.0,
+                dirt: None,
             },
             white_balance: [0.0; 2],
             contrast: 0.0,
@@ -814,6 +830,9 @@ impl Default for PostSettings {
             depth_of_field: DofSettings::default(),
             motion_blur: [0.0, 0.05],
             screen_space_lens_flare: ScreenSpaceLensFlareSettings::default(),
+            curves: None,
+            lookup: None,
+            panini: [0.0, 1.0],
         }
     }
 }
