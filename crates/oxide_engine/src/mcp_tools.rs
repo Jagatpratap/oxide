@@ -1085,6 +1085,7 @@ pub fn build_server(bus: Arc<Bus>) -> McpServer {
     crate::mcp_streaming::register(&mut s, bus);
     crate::mcp_animation::register(&mut s, bus);
     crate::mcp_timeline::register(&mut s, bus);
+    crate::mcp_constraints::register(&mut s, bus);
     crate::mcp_vfx::register(&mut s, bus);
     crate::mcp_uitk::register(&mut s, bus);
     crate::mcp_localization::register(&mut s, bus);

@@ -10,6 +10,7 @@
 pub mod application;
 pub mod builtin;
 pub mod component;
+pub mod constraints;
 pub mod ctx;
 pub mod id;
 pub mod lens_flare;
@@ -30,6 +31,11 @@ pub mod world;
 pub use application::Application;
 pub use builtin::*;
 pub use component::{Collision, Component, ComponentRegistry, ContactPoint, Gizmos};
+pub use constraints::{
+    AimConstraint, ConstraintAxes, ConstraintKind, ConstraintSource, ConstraintSystem,
+    LookAtConstraint, ParentConstraint, ParentConstraintOffset, PositionConstraint,
+    RotationConstraint, ScaleConstraint, WorldUpType,
+};
 pub use ctx::{Ctx, TransformRef};
 pub use id::{ComponentId, GameObjectId};
 pub use lens_flare::{
@@ -78,6 +84,7 @@ pub fn register_builtin(reg: &mut ComponentRegistry) {
     reg.register::<tilemap::Grid>("Tilemap/Grid");
     reg.register::<tilemap::Tilemap>("Tilemap/Tilemap");
     reg.register::<tilemap::TilemapRenderer>("Tilemap/Tilemap Renderer");
+    constraints::register(reg);
 }
 
 #[cfg(test)]

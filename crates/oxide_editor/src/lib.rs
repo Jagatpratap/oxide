@@ -293,6 +293,8 @@ pub enum Action {
     OpenVfxGraph(String),
     /// Bake one NavMeshSurface, or every active one.
     BakeNavMesh(Option<GameObjectId>),
+    /// A constraint's Activate (`true`) or Zero (`false`) button.
+    ConstraintButton(GameObjectId, oxide_scene::ConstraintKind, bool),
     CancelNavMeshBake,
     ClearNavMesh(GameObjectId),
     /// Lighting window: bake lightmaps and light probes in the background.
@@ -1067,6 +1069,19 @@ impl Editor {
                 let ids = only.map(|i| vec![i]);
                 let n = oxide_engine::nav::bake::start(w, ids.as_deref(), true)?;
                 format!("Baking {n} NavMesh surface(s)…")
+            }
+            Action::ConstraintButton(id, kind, activate) => {
+                let label = if activate { "Activate" } else { "Zero" };
+                st.record(w, &format!("{label} {}", kind.type_name()), None, now);
+                let ok = if activate {
+                    oxide_scene::constraints::activate(w, id, kind)
+                } else {
+                    oxide_scene::constraints::zero(w, id, kind)
+                };
+                if !ok {
+                    return Err(format!("no {} on that object", kind.type_name()));
+                }
+                format!("{label}: {}", kind.type_name())
             }
             Action::CancelNavMeshBake => {
                 oxide_engine::nav::bake::cancel(w);

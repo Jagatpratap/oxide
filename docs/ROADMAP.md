@@ -163,7 +163,10 @@ pause/step advances exactly N frames. Checked live over MCP, including screensho
   [Nested](https://docs.unity3d.com/Manual/NestedPrefabs.html),
   [Variants](https://docs.unity3d.com/Manual/PrefabVariants.html),
   [Overrides](https://docs.unity3d.com/Manual/prefabs-override.html))
-- ☐ Constraints (Position/Rotation/Scale/Parent/Aim/LookAt)
+- ☑ Constraints: Position, Rotation, Scale, Parent, Aim and Look At (`oxide_scene::constraints`): weighted
+  sources, Weight, at-rest values, offsets, per-axis freeze, Lock (unlocked edits update the offsets),
+  Aim world-up types (Scene/Object/Object Rotation/Vector/None), Look At roll and up object; evaluated after
+  animation and live in Edit mode; Activate / Zero buttons in the Inspector; `constraints` MCP tool
   ([Constraint components](https://docs.unity3d.com/Manual/constraint-components.html))
 
 **Exit:** build a scene in code, save to YAML, reload it identically; prefab variant override round-trips.

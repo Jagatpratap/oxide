@@ -13,6 +13,7 @@ pub mod lens_flares;
 pub mod lighting;
 pub mod mcp_animation;
 pub mod mcp_audio;
+pub mod mcp_constraints;
 pub mod mcp_data_assets;
 mod mcp_localization;
 pub mod mcp_network;
@@ -164,6 +165,19 @@ impl Plugin for NavigationPlugin {
     }
 }
 
+/// Position, Rotation, Scale, Parent, Aim and Look At constraints, after animation.
+pub struct ConstraintsPlugin;
+
+impl Plugin for ConstraintsPlugin {
+    fn build(
+        &self,
+        _world: &mut oxide_scene::World,
+        systems: &mut Vec<Box<dyn oxide_scene::System>>,
+    ) {
+        systems.push(Box::new(oxide_scene::ConstraintSystem::default()));
+    }
+}
+
 /// Multiplayer: NetworkManager, NetworkObject, NetworkTransform, RPCs.
 pub struct NetworkPlugin;
 
@@ -196,6 +210,7 @@ pub fn default_plugins() -> Vec<Box<dyn Plugin>> {
         Box::new(TerrainPlugin),
         Box::new(ParticlesPlugin),
         Box::new(TimelinePlugin),
+        Box::new(ConstraintsPlugin),
         Box::new(NavigationPlugin),
         Box::new(NetworkPlugin),
         Box::new(StandardAssetsPlugin),
@@ -274,6 +289,10 @@ pub mod prelude {
         MeshCollider, Physics, PhysicsExt, PhysicsMaterial, PhysicsMaterialCombine, RaycastHit,
         Rigidbody, RigidbodyInterpolation, SphereCollider, TerrainCollider, WheelCollider,
         WheelFrictionCurve,
+    };
+    pub use oxide_scene::{
+        AimConstraint, ConstraintAxes, ConstraintSource, LookAtConstraint, ParentConstraint,
+        PositionConstraint, RotationConstraint, ScaleConstraint, WorldUpType,
     };
     pub use oxide_scene::{
         Camera, CameraClearFlags, Collision, Component, Ctx, GameObjectId, Light, LightShadows,

@@ -1040,6 +1040,12 @@ fn components(
             if type_name == "VisualEffect" && targets.len() == 1 {
                 visual_effect_footer(ui, w, id, &mut st.actions);
             }
+            if let (Some(kind), 1) = (
+                oxide_scene::ConstraintKind::from_type_name(type_name),
+                targets.len(),
+            ) {
+                constraint_footer(ui, id, kind, &mut st.actions);
+            }
             if type_name == "NavMeshSurface" && targets.len() == 1 {
                 navmesh_surface_footer(ui, w, id, &mut st.actions);
             }
@@ -1061,6 +1067,33 @@ fn components(
             "{hidden} component(s) not on every selected object are hidden."
         ));
     }
+}
+
+/// Unity's constraint buttons: Activate keeps the object where it is and works out the
+/// offsets; Zero clears them so the object snaps onto its sources.
+fn constraint_footer(
+    ui: &mut egui::Ui,
+    id: GameObjectId,
+    kind: oxide_scene::ConstraintKind,
+    actions: &mut Vec<Action>,
+) {
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        if ui
+            .button("Activate")
+            .on_hover_text("Turn on, keeping the current pose (offsets are computed)")
+            .clicked()
+        {
+            actions.push(Action::ConstraintButton(id, kind, true));
+        }
+        if ui
+            .button("Zero")
+            .on_hover_text("Turn on with zero offsets: snap onto the sources")
+            .clicked()
+        {
+            actions.push(Action::ConstraintButton(id, kind, false));
+        }
+    });
 }
 
 /// Bake / Clear buttons and the baked data's size under a NavMeshSurface (Unity's
