@@ -1678,18 +1678,25 @@ impl SceneRenderer {
         stats
     }
 
-    /// Cameras with a target texture render into it (once per frame each).
+    /// Cameras with a target texture render into it (once per frame each; the cameras that
+    /// share a texture, such as a Base camera and its Stack, draw into it together).
     fn render_texture_cameras(&mut self, gpu: &Gpu, assets: &AssetServer, frame: &RenderFrame) {
-        for (rt, cam) in &frame.texture_cameras {
+        for (rt, _) in &frame.texture_cameras {
             if self.rt_frames.get(rt) == Some(&frame.frame_index) {
                 continue;
             }
+            let cams: Vec<CameraView> = frame
+                .texture_cameras
+                .iter()
+                .filter(|(r, _)| r == rt)
+                .map(|(_, c)| c.clone())
+                .collect();
             self.rt_frames.insert(*rt, frame.frame_index);
             let Some((view, w, h)) = self.gpu_assets.render_target(&gpu.device, assets, *rt) else {
                 continue;
             };
             let sub = RenderFrame {
-                cameras: vec![cam.clone()],
+                cameras: cams,
                 texture_cameras: Vec::new(),
                 ..frame.clone()
             };
@@ -4323,12 +4330,12 @@ fn compute_cascades(
         let corners: Vec<Vector3> = [prev, split]
             .iter()
             .flat_map(|&d| {
-                let (hw, hh) = match cam.projection {
-                    ProjectionKind::Perspective { fov } => {
-                        let t = (fov.to_radians() * 0.5).tan();
+                let (hw, hh) = match (cam.projection, cam.projection.vertical_fov(aspect)) {
+                    (ProjectionKind::Orthographic { size }, _) => (size * aspect, size),
+                    (_, fov) => {
+                        let t = (fov.unwrap_or(60.0).to_radians() * 0.5).tan();
                         (d * t * aspect, d * t)
                     }
-                    ProjectionKind::Orthographic { size } => (size * aspect, size),
                 };
                 [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)]
                     .map(|(sx, sy)| Vector3::new(sx * hw, sy * hh, d))

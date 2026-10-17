@@ -10,6 +10,53 @@ pub enum ProjectionKind {
     Perspective { fov: f32 },
     /// Half the vertical view height in world units.
     Orthographic { size: f32 },
+    /// Unity Physical Camera: focal length and sensor size (mm), lens shift (in sensor
+    /// sizes) and how the sensor fits the screen.
+    Physical {
+        focal_length: f32,
+        sensor: [f32; 2],
+        lens_shift: [f32; 2],
+        gate_fit: GateFit,
+    },
+}
+
+/// Unity `Camera.GateFitMode`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GateFit {
+    Vertical,
+    #[default]
+    Horizontal,
+    Fill,
+    Overscan,
+    None,
+}
+
+impl ProjectionKind {
+    /// Vertical field of view (degrees) at a screen aspect; `None` for orthographic.
+    pub fn vertical_fov(&self, aspect: f32) -> Option<f32> {
+        match *self {
+            ProjectionKind::Perspective { fov } => Some(fov),
+            ProjectionKind::Orthographic { .. } => None,
+            ProjectionKind::Physical {
+                focal_length,
+                sensor,
+                gate_fit,
+                ..
+            } => {
+                let f = focal_length.max(1e-3);
+                let v = 2.0 * (sensor[1] / (2.0 * f)).atan();
+                // Vertical fov when the sensor width fills the screen width.
+                let h = 2.0 * (sensor[0] / (2.0 * f) / aspect.max(1e-6)).atan();
+                let fov = match gate_fit {
+                    GateFit::Vertical | GateFit::None => v,
+                    GateFit::Horizontal => h,
+                    GateFit::Fill => v.min(h),
+                    GateFit::Overscan => v.max(h),
+                };
+                Some(fov.to_degrees().clamp(1.0, 179.0))
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -94,15 +141,35 @@ impl CameraView {
     /// Reversed-Z projection (near → 1, far → 0) for precision in large worlds.
     pub fn projection(&self, aspect: f32) -> Matrix4x4 {
         match self.projection {
-            ProjectionKind::Perspective { fov } => Matrix4x4::perspective(
-                fov.clamp(1.0, 179.0).to_radians(),
-                aspect,
-                self.far,
-                self.near,
-            ),
             ProjectionKind::Orthographic { size } => {
                 let w = size * aspect;
                 Matrix4x4::ortho(-w, w, -size, size, self.far, self.near)
+            }
+            p => {
+                let fov = p.vertical_fov(aspect).unwrap_or(60.0);
+                let mut m = Matrix4x4::perspective(
+                    fov.clamp(1.0, 179.0).to_radians(),
+                    aspect,
+                    self.far,
+                    self.near,
+                );
+                if let ProjectionKind::Physical { lens_shift, .. } = p {
+                    // Lens shift moves the image by a share of the view: an off-center
+                    // frustum (clip x += 2·shift·w).
+                    let shift = Matrix4x4::from_cols(
+                        oxide_math::Vector4::X,
+                        oxide_math::Vector4::Y,
+                        oxide_math::Vector4::Z,
+                        oxide_math::Vector4::new(
+                            2.0 * lens_shift[0],
+                            2.0 * lens_shift[1],
+                            0.0,
+                            1.0,
+                        ),
+                    );
+                    m = shift * m;
+                }
+                m
             }
         }
     }

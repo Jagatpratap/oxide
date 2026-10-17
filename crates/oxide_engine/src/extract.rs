@@ -21,6 +21,18 @@ pub fn camera_view(world: &World, id: oxide_scene::GameObjectId, c: &Camera) -> 
         position: world.position(id),
         rotation: world.rotation(id),
         projection: match c.projection {
+            Projection::Perspective if c.use_physical_properties => ProjectionKind::Physical {
+                focal_length: c.focal_length,
+                sensor: c.sensor_size.to_array(),
+                lens_shift: c.lens_shift.to_array(),
+                gate_fit: match c.gate_fit {
+                    oxide_scene::GateFitMode::Vertical => oxide_render::GateFit::Vertical,
+                    oxide_scene::GateFitMode::Horizontal => oxide_render::GateFit::Horizontal,
+                    oxide_scene::GateFitMode::Fill => oxide_render::GateFit::Fill,
+                    oxide_scene::GateFitMode::Overscan => oxide_render::GateFit::Overscan,
+                    oxide_scene::GateFitMode::None => oxide_render::GateFit::None,
+                },
+            },
             Projection::Perspective => ProjectionKind::Perspective {
                 fov: c.field_of_view,
             },
@@ -61,15 +73,50 @@ pub fn camera_view(world: &World, id: oxide_scene::GameObjectId, c: &Camera) -> 
 pub struct ActiveDisplay(pub u32);
 
 /// Cameras that render to the screen on the active display, in depth order.
+/// Base cameras are followed by the Overlay cameras of their Stack (URP camera stacking):
+/// overlays draw into the Base camera's viewport without clearing colour, and Overlay
+/// cameras that are in no Stack don't render.
 pub fn cameras(world: &World) -> Vec<CameraView> {
     let display = world.try_resource::<ActiveDisplay>().map_or(0, |d| d.0);
     let mut cams: Vec<_> = world
         .query::<Camera>()
-        .filter(|(_, c)| c.target_texture.is_none() && c.target_display == display)
-        .map(|(id, c)| (c.depth, camera_view(world, id, c)))
+        .filter(|(_, c)| {
+            c.target_texture.is_none()
+                && c.target_display == display
+                && c.render_type == oxide_scene::CameraRenderType::Base
+        })
+        .map(|(id, c)| (c.depth, id, c))
         .collect();
     cams.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-    cams.into_iter().map(|(_, v)| v).collect()
+    let mut out = Vec::new();
+    for (_, id, c) in cams {
+        let base = camera_view(world, id, c);
+        let viewport = base.viewport;
+        out.push(base);
+        out.extend(stack_overlays(world, c, viewport));
+    }
+    out
+}
+
+/// A Base camera's Stack: its active Overlay cameras, in order.
+pub fn stack_overlays(world: &World, base: &Camera, viewport: [f32; 4]) -> Vec<CameraView> {
+    base.camera_stack
+        .iter()
+        .filter_map(|&o| {
+            // Active, enabled cameras only (as `query` sees them).
+            let (_, c) = world.query::<Camera>().find(|(id, _)| *id == o)?;
+            (c.render_type == oxide_scene::CameraRenderType::Overlay).then(|| {
+                let mut v = camera_view(world, o, c);
+                v.viewport = viewport;
+                v.clear = if c.clear_depth {
+                    ClearMode::DepthOnly
+                } else {
+                    ClearMode::Nothing
+                };
+                v
+            })
+        })
+        .collect()
 }
 
 /// Renderer features from the Full Screen Pass and Render Objects components.
@@ -125,16 +172,27 @@ pub fn renderer_features(world: &World) -> Vec<oxide_render::RendererFeature> {
 pub fn texture_cameras(world: &World) -> Vec<(AssetId, CameraView)> {
     let mut cams: Vec<_> = world
         .query::<Camera>()
+        .filter(|(_, c)| c.render_type == oxide_scene::CameraRenderType::Base)
         .filter_map(|(id, c)| {
             let rt = c.target_texture.as_ref()?.id();
             let mut v = camera_view(world, id, c);
             // A target texture is the whole viewport.
             v.viewport = [0.0, 0.0, 1.0, 1.0];
-            Some((c.depth, (rt, v)))
+            Some((c.depth, rt, v, c))
         })
         .collect();
     cams.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-    cams.into_iter().map(|(_, v)| v).collect()
+    let mut out = Vec::new();
+    for (_, rt, v, c) in cams {
+        let viewport = v.viewport;
+        out.push((rt, v));
+        out.extend(
+            stack_overlays(world, c, viewport)
+                .into_iter()
+                .map(|o| (rt, o)),
+        );
+    }
+    out
 }
 
 /// Scene environment with the active quality level's shadow distance and MSAA.
@@ -576,11 +634,13 @@ pub fn lod_group_sphere(
 /// Fraction of the screen height a sphere covers from a camera.
 pub fn screen_relative_height(cam: &CameraView, center: oxide_math::Vector3, radius: f32) -> f32 {
     match cam.projection {
-        ProjectionKind::Perspective { fov } => {
+        ProjectionKind::Orthographic { size } => radius / size.max(1e-3),
+        p => {
+            // LOD uses the 16:9 field of view for physical cameras (the screen isn't known).
+            let fov = p.vertical_fov(16.0 / 9.0).unwrap_or(60.0);
             let d = (center - cam.position).length().max(1e-3);
             radius * 2.0 / (2.0 * d * (fov * 0.5).to_radians().tan())
         }
-        ProjectionKind::Orthographic { size } => radius / size.max(1e-3),
     }
 }
 
@@ -699,5 +759,141 @@ mod lod_tests {
         );
         // At 50 m: ~1.7% -> culled.
         assert!(drawn(-50.0).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod camera_tests {
+    use super::*;
+
+    #[test]
+    fn camera_stack_follows_its_base_camera() {
+        let mut w = World::new();
+        crate::init_world(&mut w, std::env::temp_dir());
+        let cam = |w: &mut World, name: &str, c: Camera| {
+            let id = w.create(name);
+            w.add_component(id, c);
+            id
+        };
+        let ui = cam(
+            &mut w,
+            "UI",
+            Camera {
+                render_type: oxide_scene::CameraRenderType::Overlay,
+                culling_mask: 1 << 5,
+                ..Default::default()
+            },
+        );
+        let stray = cam(
+            &mut w,
+            "Stray Overlay",
+            Camera {
+                render_type: oxide_scene::CameraRenderType::Overlay,
+                ..Default::default()
+            },
+        );
+        let _ = stray;
+        cam(
+            &mut w,
+            "Main",
+            Camera {
+                viewport_rect: oxide_math::Vector4::new(0.5, 0.0, 0.5, 1.0),
+                camera_stack: vec![ui],
+                ..Default::default()
+            },
+        );
+        let cams = cameras(&w);
+        // Base, then its stack; an Overlay in no Stack doesn't render.
+        assert_eq!(cams.len(), 2, "{cams:?}");
+        assert_eq!(cams[0].clear, ClearMode::Sky);
+        assert_eq!(cams[1].culling_mask, 1 << 5);
+        assert_eq!(
+            cams[1].viewport,
+            [0.5, 0.0, 0.5, 1.0],
+            "the Base camera's viewport"
+        );
+        assert_eq!(cams[1].clear, ClearMode::DepthOnly, "Clear Depth");
+        // A disabled overlay drops out of the stack.
+        w.set_active(ui, false);
+        assert_eq!(cameras(&w).len(), 1);
+    }
+
+    #[test]
+    fn physical_camera_field_of_view_and_lens_shift() {
+        // Unity Camera.FocalLengthToFieldOfView: 50 mm on a 24 mm-high sensor ≈ 26.99°.
+        let fov = Camera::focal_length_to_field_of_view(50.0, 24.0);
+        assert!((fov - 26.9915).abs() < 1e-3, "{fov}");
+        assert!((Camera::field_of_view_to_focal_length(fov, 24.0) - 50.0).abs() < 1e-3);
+        let lens = |gate_fit| ProjectionKind::Physical {
+            focal_length: 50.0,
+            sensor: [36.0, 24.0],
+            lens_shift: [0.0, 0.0],
+            gate_fit,
+        };
+        let aspect = 16.0 / 9.0;
+        let v = lens(oxide_render::GateFit::Vertical)
+            .vertical_fov(aspect)
+            .unwrap();
+        let h = lens(oxide_render::GateFit::Horizontal)
+            .vertical_fov(aspect)
+            .unwrap();
+        assert!((v - fov).abs() < 1e-3);
+        // 36 mm across a 16:9 screen: 2·atan(18/50 / (16/9)).
+        assert!(
+            (h - 2.0 * (0.36f32 / aspect).atan().to_degrees()).abs() < 1e-3,
+            "{h}"
+        );
+        // Fill crops (the narrower view), Overscan shows the whole sensor (the wider).
+        assert_eq!(
+            lens(oxide_render::GateFit::Fill).vertical_fov(aspect),
+            Some(v.min(h))
+        );
+        assert_eq!(
+            lens(oxide_render::GateFit::Overscan).vertical_fov(aspect),
+            Some(v.max(h))
+        );
+        // Lens shift moves the image: a point on the view axis lands off-center by 2·shift.
+        let mut view = CameraView {
+            position: oxide_math::Vector3::ZERO,
+            rotation: oxide_math::Quaternion::IDENTITY,
+            projection: ProjectionKind::Physical {
+                focal_length: 50.0,
+                sensor: [36.0, 24.0],
+                lens_shift: [0.25, -0.1],
+                gate_fit: oxide_render::GateFit::Vertical,
+            },
+            near: 0.1,
+            far: 100.0,
+            viewport: [0.0, 0.0, 1.0, 1.0],
+            clear: ClearMode::Sky,
+            culling_mask: u32::MAX,
+            occlusion_culling: false,
+            antialiasing: Default::default(),
+        };
+        let c = view.view_projection(aspect) * oxide_math::Vector4::new(0.0, 0.0, 10.0, 1.0);
+        assert!(
+            (c.x / c.w - 0.5).abs() < 1e-4 && (c.y / c.w + 0.2).abs() < 1e-4,
+            "{c:?}"
+        );
+        // Extraction makes physical cameras from the Camera component.
+        let mut w = World::new();
+        crate::init_world(&mut w, std::env::temp_dir());
+        let id = w.create("Cam");
+        w.add_component(
+            id,
+            Camera {
+                use_physical_properties: true,
+                focal_length: 35.0,
+                ..Default::default()
+            },
+        );
+        view = cameras(&w).remove(0);
+        assert!(matches!(
+            view.projection,
+            ProjectionKind::Physical {
+                focal_length: 35.0,
+                ..
+            }
+        ));
     }
 }

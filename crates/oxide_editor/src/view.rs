@@ -183,8 +183,13 @@ impl Projector {
         let aspect = rect.width() / rect.height().max(1.0);
         let view_proj = cam.projection(aspect) * cam.view();
         let (half_h, ortho) = match cam.projection {
-            ProjectionKind::Perspective { fov } => ((fov * 0.5).to_radians().tan(), false),
             ProjectionKind::Orthographic { size } => (size, true),
+            p => (
+                (p.vertical_fov(aspect).unwrap_or(60.0) * 0.5)
+                    .to_radians()
+                    .tan(),
+                false,
+            ),
         };
         Self {
             rect,

@@ -323,7 +323,11 @@ from the fixed edge and each object along its matching local axis).
   ([URP](https://docs.unity3d.com/Manual/universal-render-pipeline.html),
   [Rendering paths](https://docs.unity3d.com/Manual/rendering-paths-introduction.html))
 - ◐ MeshFilter / MeshRenderer / SkinnedMeshRenderer, submeshes, GPU instancing, SRP-batcher-style persistent buffers, frustum culling, LOD groups
-- ◐ Cameras: perspective/ortho, viewport rect, multiple cameras/stacking, render textures, physical camera, clear flags, culling mask
+- ☑ Cameras: perspective/ortho, viewport rect, multiple cameras, render textures, clear flags, culling mask; URP
+  camera stacking (Render Type Base/Overlay, the Base camera's Stack, Overlay Clear Depth, overlays in the Base
+  camera's viewport and render texture, post-processing at the end of the stack); Physical Camera (focal length,
+  sensor size, lens shift, Gate Fit Vertical/Horizontal/Fill/Overscan/None, ISO/shutter/aperture/focus/blades/
+  curvature/barrel clipping/anamorphism, `FocalLengthToFieldOfView`), Inspector shows the fields for the mode
   ([Cameras](https://docs.unity3d.com/Manual/Cameras.html),
   [Multiple cameras](https://docs.unity3d.com/Manual/MultipleCameras-landing.html),
   [Physical cameras](https://docs.unity3d.com/Manual/PhysicalCameras.html))

@@ -45,9 +45,43 @@ pub enum MsaaQuality {
     Msaa8x,
 }
 
+/// URP camera "Render Type".
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
+pub enum CameraRenderType {
+    /// Renders to the screen or a texture; can have a stack of Overlay cameras.
+    #[default]
+    Base,
+    /// Draws on top of a Base camera's output, only when it is in that camera's Stack.
+    Overlay,
+}
+
+/// Unity `Camera.GateFitMode`: how the sensor (film gate) fits the screen when the aspect
+/// ratios differ.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
+pub enum GateFitMode {
+    /// The sensor height fills the screen height.
+    Vertical,
+    /// The sensor width fills the screen width.
+    #[default]
+    Horizontal,
+    /// The screen shows only the sensor (the larger of the two fits, cropping).
+    Fill,
+    /// The screen shows all of the sensor (the smaller fit, with extra around it).
+    Overscan,
+    /// Stretch the sensor to the screen.
+    None,
+}
+
 /// Unity `Camera`. <https://docs.unity3d.com/Manual/class-Camera.html>
 #[derive(Clone, Debug, Reflect)]
+#[reflect(default)]
 pub struct Camera {
+    /// URP Render Type: Base, or Overlay (drawn by a Base camera's Stack).
+    pub render_type: CameraRenderType,
+    /// Base cameras: the Overlay cameras drawn on top, in order (URP camera Stack).
+    pub camera_stack: Vec<GameObjectId>,
+    /// Overlay cameras: clear the depth buffer before drawing (URP "Clear Depth").
+    pub clear_depth: bool,
     pub projection: Projection,
     /// Vertical field of view in degrees.
     #[reflect(range(1, 179))]
@@ -83,6 +117,46 @@ pub struct Camera {
     pub target_texture: Option<Handle<oxide_assets::RenderTexture>>,
     /// Which display this camera renders to, 0-7 (Unity `Camera.targetDisplay`: Display 1-8).
     pub target_display: u32,
+    // Physical Camera (Unity `Camera.usePhysicalProperties`).
+    /// Field of view comes from Focal Length and Sensor Size.
+    pub use_physical_properties: bool,
+    /// Millimetres.
+    pub focal_length: f32,
+    /// Millimetres (width, height); 36 × 24 is 35 mm full frame.
+    pub sensor_size: oxide_math::Vector2,
+    /// Off-center projection, in sensor sizes (Unity "Shift").
+    pub lens_shift: oxide_math::Vector2,
+    pub gate_fit: GateFitMode,
+    /// Sensor sensitivity (Unity `Camera.iso`).
+    pub iso: u32,
+    /// Seconds (Unity `Camera.shutterSpeed`).
+    pub shutter_speed: f32,
+    /// f-number (Unity `Camera.aperture`).
+    pub aperture: f32,
+    /// Metres (Unity `Camera.focusDistance`).
+    pub focus_distance: f32,
+    #[reflect(range(3, 11))]
+    pub blade_count: u32,
+    /// Aperture shape range (Unity `Camera.curvature`).
+    pub curvature: oxide_math::Vector2,
+    #[reflect(range(0, 1))]
+    pub barrel_clipping: f32,
+    #[reflect(range(-1, 1))]
+    pub anamorphism: f32,
+}
+
+impl Camera {
+    /// Unity `Camera.FocalLengthToFieldOfView`: vertical field of view (degrees).
+    pub fn focal_length_to_field_of_view(focal_length: f32, sensor_height: f32) -> f32 {
+        2.0 * (sensor_height / (2.0 * focal_length.max(1e-3)))
+            .atan()
+            .to_degrees()
+    }
+
+    /// Unity `Camera.FieldOfViewToFocalLength`.
+    pub fn field_of_view_to_focal_length(fov: f32, sensor_height: f32) -> f32 {
+        sensor_height / (2.0 * (fov.to_radians() * 0.5).tan().max(1e-6))
+    }
 }
 
 impl Default for Camera {
@@ -107,6 +181,22 @@ impl Default for Camera {
             taa_variance_clamp_scale: 0.9,
             target_texture: None,
             target_display: 0,
+            render_type: CameraRenderType::Base,
+            camera_stack: Vec::new(),
+            clear_depth: true,
+            use_physical_properties: false,
+            focal_length: 50.0,
+            sensor_size: oxide_math::Vector2::new(36.0, 24.0),
+            lens_shift: oxide_math::Vector2::ZERO,
+            gate_fit: GateFitMode::Horizontal,
+            iso: 200,
+            shutter_speed: 0.005,
+            aperture: 16.0,
+            focus_distance: 10.0,
+            blade_count: 5,
+            curvature: oxide_math::Vector2::new(2.0, 11.0),
+            barrel_clipping: 0.25,
+            anamorphism: 0.0,
         }
     }
 }

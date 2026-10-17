@@ -1221,11 +1221,64 @@ fn hide_inapplicable(
             }
             h
         }
-        "Camera" => match mode("projection").as_deref() {
-            Some("Perspective") => vec!["orthographic_size"],
-            Some("Orthographic") => vec!["field_of_view"],
-            _ => vec![],
-        },
+        "Camera" => {
+            let flag = |name: &str| {
+                values.iter().find_map(|(f, v, mixed)| match v {
+                    Value::Bool(b) if f.name == name && !mixed => Some(*b),
+                    _ => None,
+                })
+            };
+            const PHYSICAL: [&str; 13] = [
+                "focal_length",
+                "sensor_size",
+                "lens_shift",
+                "gate_fit",
+                "iso",
+                "shutter_speed",
+                "aperture",
+                "focus_distance",
+                "blade_count",
+                "curvature",
+                "barrel_clipping",
+                "anamorphism",
+                "use_physical_properties",
+            ];
+            let mut h = match mode("projection").as_deref() {
+                Some("Perspective") => vec!["orthographic_size"],
+                Some("Orthographic") => {
+                    let mut h = vec!["field_of_view"];
+                    h.extend(PHYSICAL);
+                    h
+                }
+                _ => vec![],
+            };
+            match flag("use_physical_properties") {
+                // The field of view comes from the lens.
+                Some(true) => h.push("field_of_view"),
+                Some(false) => h.extend(&PHYSICAL[..12]),
+                None => {}
+            }
+            // URP: an Overlay camera draws into its Base camera's output.
+            match mode("render_type").as_deref() {
+                Some("Overlay") => h.extend([
+                    "camera_stack",
+                    "clear_flags",
+                    "background_color",
+                    "viewport_rect",
+                    "target_texture",
+                    "target_display",
+                    "antialiasing",
+                    "allow_msaa",
+                    "taa_base_blend_factor",
+                    "taa_jitter_scale",
+                    "taa_variance_clamp_scale",
+                    "depth",
+                ]),
+                Some("Base") => h.push("clear_depth"),
+                _ => {}
+            }
+            h
+        }
         _ => vec![],
     };
     values
