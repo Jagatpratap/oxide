@@ -99,7 +99,7 @@ fn source_signature(scripts: &Path) -> u64 {
     h.finish()
 }
 
-fn run_cargo(root: PathBuf) -> BuildOutcome {
+fn run_cargo(root: PathBuf, lib_name: String) -> BuildOutcome {
     let started = Instant::now();
     let out = std::process::Command::new(crate::project_files::cargo_command())
         .args(["build", "-p", SCRIPTS_CRATE, "--message-format=json"])
@@ -136,7 +136,7 @@ fn run_cargo(root: PathBuf) -> BuildOutcome {
                         .push((level == "error", text.trim_end().to_owned()));
                 }
             }
-            Some("compiler-artifact") if v["target"]["name"] == SCRIPTS_CRATE => {
+            Some("compiler-artifact") if v["target"]["name"] == lib_name.as_str() => {
                 result.artifact = v["filenames"]
                     .as_array()
                     .into_iter()
@@ -208,8 +208,9 @@ impl ScriptHost {
         self.signature = source_signature(&self.scripts_dir());
         let (tx, rx) = channel();
         let root = self.root.clone();
+        let lib_name = crate::project_files::scripts_lib_name(&root);
         std::thread::spawn(move || {
-            let _ = tx.send(run_cargo(root));
+            let _ = tx.send(run_cargo(root, lib_name));
         });
         self.job = Some(rx);
         self.state = ScriptState::Compiling;
@@ -326,7 +327,8 @@ impl ScriptHost {
         let taken = w.take_components_for_reload(|t| old.iter().any(|o| o == t));
         w.registry
             .unregister_where(|r| old.iter().any(|o| o == r.info.name));
-        w.resources.remove_crate(SCRIPTS_CRATE);
+        w.resources
+            .remove_crate(&crate::project_files::scripts_lib_name(&self.root));
         let before: std::collections::HashSet<String> =
             w.registry.iter().map(|r| r.info.name.to_owned()).collect();
         register(&mut w.registry);

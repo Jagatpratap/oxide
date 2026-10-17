@@ -100,9 +100,9 @@ fn launch_project(create: bool, dir: &str, rest: Vec<String>) -> ExitCode {
     if create {
         println!("Created project {}", dir.display());
     }
-    if !dir.join("Library/Build/target").exists() {
+    if !oxide_editor::project_files::editor_exe(&dir).is_file() {
         println!(
-            "Building the project's editor (the first build compiles the engine and takes a few minutes)..."
+            "Building the project's editor (the first build on this machine compiles the engine and takes a few minutes)..."
         );
     }
     let status = std::process::Command::new(oxide_editor::project_files::cargo_command())

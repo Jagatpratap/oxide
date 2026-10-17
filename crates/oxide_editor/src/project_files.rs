@@ -5,10 +5,16 @@
 //!   Assets/                 scenes, prefabs, models, materials, audio...
 //!   Scripts/                the game's Rust code (a `dylib` crate named `scripts`)
 //!   Cargo.toml              Cargo workspace: Scripts + the editor build
-//!   .cargo/config.toml      build output goes to Library/Build/target
+//!   .cargo/config.toml      build output goes to the shared build folder
 //!   Library/                generated, safe to delete (Unity's Library folder)
 //!     Build/editor/         the project's editor executable
 //! ```
+//!
+//! Every project builds into one shared folder ([`shared_build_dir`]), so the engine is
+//! compiled once for all of them and a new project only compiles its own Scripts. Cargo
+//! keeps each project's crates apart by their paths; the Scripts library and the editor
+//! executable get per-project names ([`project_id`]) because Cargo doesn't add a hash to
+//! those file names.
 
 use std::path::{Path, PathBuf};
 
@@ -30,6 +36,114 @@ fn write_if_missing(path: &Path, text: &str) -> Result<(), String> {
 /// Path written into generated manifests (forward slashes, absolute).
 fn manifest_path(p: &Path) -> String {
     p.to_string_lossy().replace('\\', "/")
+}
+
+/// The folder every project's engine, editor and Scripts build into (Cargo's target
+/// directory). `$OXIDE_BUILD_DIR` overrides it.
+pub fn shared_build_dir() -> PathBuf {
+    if let Some(d) = std::env::var_os("OXIDE_BUILD_DIR") {
+        return d.into();
+    }
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let base = if cfg!(target_os = "macos") {
+        home.map(|h| h.join("Library/Caches/Oxide/Build"))
+    } else if cfg!(windows) {
+        std::env::var_os("LOCALAPPDATA").map(|a| PathBuf::from(a).join("Oxide/Build"))
+    } else {
+        std::env::var_os("XDG_CACHE_HOME")
+            .map(|x| PathBuf::from(x).join("oxide/build"))
+            .or_else(|| home.map(|h| h.join(".cache/oxide/build")))
+    };
+    base.unwrap_or_else(|| std::env::temp_dir().join("oxide-build"))
+}
+
+/// A short id for the project folder (a hash of its absolute path), used to give its
+/// Scripts library and editor executable names no other project shares. Moving the
+/// project changes it; the next open renames them and recompiles only the Scripts.
+pub fn project_id(dir: &Path) -> String {
+    let dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_owned());
+    // FNV-1a: stable across Rust versions, unlike `DefaultHasher`.
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in manifest_path(&dir).bytes() {
+        h = (h ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{:08x}", (h ^ (h >> 32)) as u32)
+}
+
+/// Name of the project's editor executable (the binary of `Library/Build/editor`).
+pub fn editor_bin_name(dir: &Path) -> String {
+    format!("oxide-editor-{}", project_id(dir))
+}
+
+/// The project's built editor executable in the shared build folder.
+pub fn editor_exe(dir: &Path) -> PathBuf {
+    shared_build_dir().join("debug").join(format!(
+        "{}{}",
+        editor_bin_name(dir),
+        std::env::consts::EXE_SUFFIX
+    ))
+}
+
+/// The library name of the project's Scripts crate (`[lib] name` in
+/// `Scripts/Cargo.toml`), which is also its crate name in Rust paths.
+pub fn scripts_lib_name(dir: &Path) -> String {
+    std::fs::read_to_string(dir.join("Scripts/Cargo.toml"))
+        .ok()
+        .and_then(|t| lib_name_in(&t))
+        .unwrap_or_else(|| "scripts".into())
+}
+
+/// `name = "..."` inside the manifest's `[lib]` table.
+fn lib_name_in(manifest: &str) -> Option<String> {
+    let mut in_lib = false;
+    for line in manifest.lines() {
+        let t = line.trim();
+        if t.starts_with('[') {
+            in_lib = t == "[lib]";
+        } else if in_lib
+            && let Some(v) = t.strip_prefix("name").map(str::trim_start)
+            && let Some(v) = v.strip_prefix('=')
+        {
+            return Some(v.trim().trim_matches('"').to_owned());
+        }
+    }
+    None
+}
+
+/// Sets `[lib] name` in a Scripts manifest, keeping everything else the user wrote.
+fn with_lib_name(manifest: &str, name: &str) -> String {
+    let entry = format!("name = \"{name}\"");
+    let mut out = Vec::new();
+    let (mut in_lib, mut seen_lib, mut done) = (false, false, false);
+    for line in manifest.lines() {
+        let t = line.trim();
+        if t.starts_with('[') {
+            if in_lib && !done {
+                out.push(entry.clone());
+                done = true;
+            }
+            in_lib = t == "[lib]";
+            seen_lib |= in_lib;
+            out.push(line.to_owned());
+            if in_lib {
+                out.push(entry.clone());
+                done = true;
+            }
+            continue;
+        }
+        if in_lib && t.starts_with("name") && t[4..].trim_start().starts_with('=') {
+            continue;
+        }
+        out.push(line.to_owned());
+    }
+    if !seen_lib {
+        out.push(String::new());
+        out.push("[lib]".into());
+        out.push(entry);
+    }
+    let mut s = out.join("\n");
+    s.push('\n');
+    s
 }
 
 /// The `cargo` to run: `$CARGO` (set when running under cargo), else `cargo` on the PATH,
@@ -183,10 +297,20 @@ opt-level = 2
 debug = "line-tables-only"
 "#,
     )?;
+    let target = shared_build_dir();
     write(
         &dir.join(".cargo/config.toml"),
-        "[build]\ntarget-dir = \"Library/Build/target\"\n",
+        &format!(
+            "# Generated by Oxide: every project shares one build folder, so the engine is\n# compiled once.\n[build]\ntarget-dir = \"{}\"\n",
+            manifest_path(&target)
+        ),
     )?;
+    // Projects made before the shared build folder had their own (about 3 GB).
+    let old_target = dir.join("Library/Build/target");
+    if old_target.is_dir() && old_target != target {
+        let _ = std::fs::remove_dir_all(&old_target);
+    }
+    let id = project_id(dir);
     // Player builds need the engine source too.
     write(
         &dir.join("Library/Build/EngineRoot.txt"),
@@ -201,6 +325,7 @@ version = "0.1.0"
 edition = "2024"
 
 [lib]
+name = "scripts_{id}"
 crate-type = ["dylib"]
 
 [dependencies]
@@ -208,6 +333,14 @@ oxide = {{ package = "oxide_dylib", path = "{engine}" }}
 "#
         ),
     )?;
+    // Scripts/Cargo.toml is the user's; only its library name is kept up to date.
+    let manifest = dir.join("Scripts/Cargo.toml");
+    if let Ok(text) = std::fs::read_to_string(&manifest) {
+        let name = format!("scripts_{id}");
+        if lib_name_in(&text).as_deref() != Some(name.as_str()) {
+            write(&manifest, &with_lib_name(&text, &name))?;
+        }
+    }
     write(
         &dir.join("Library/Build/editor/Cargo.toml"),
         &format!(
@@ -218,6 +351,10 @@ name = "oxide-project-editor"
 version = "0.1.0"
 edition = "2024"
 publish = false
+
+[[bin]]
+name = "oxide-editor-{id}"
+path = "src/main.rs"
 
 [dependencies]
 oxide = {{ package = "oxide_dylib", path = "{engine}" }}
@@ -329,6 +466,49 @@ mod tests {
         assert!(lib.contains("PlayerController => \"Scripts/PlayerController\","));
         assert!(lib.contains("Spinner => \"Scripts/Spinner\","));
         assert!(add_script(&dir.join("Scripts"), "PlayerController").is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn scripts_get_a_per_project_library_name() {
+        let dir = std::env::temp_dir().join(format!("oxide-libname-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        // A project from before the shared build folder, with the user's own additions.
+        std::fs::create_dir_all(dir.join("Scripts/src")).unwrap();
+        std::fs::create_dir_all(dir.join("Library/Build/target/debug")).unwrap();
+        let old = "[package]\nname = \"scripts\"\n\n[lib]\ncrate-type = [\"dylib\"]\n\n[dependencies]\nrand = \"0.8\"\n";
+        std::fs::write(dir.join("Scripts/Cargo.toml"), old).unwrap();
+        write_build_files(&dir, Path::new("/engine")).unwrap();
+
+        let id = project_id(&dir);
+        assert_eq!(scripts_lib_name(&dir), format!("scripts_{id}"));
+        let cargo = std::fs::read_to_string(dir.join("Scripts/Cargo.toml")).unwrap();
+        assert!(cargo.contains("rand = \"0.8\""), "{cargo}");
+        assert!(cargo.contains("crate-type = [\"dylib\"]"), "{cargo}");
+        assert!(!dir.join("Library/Build/target").exists());
+        let editor = std::fs::read_to_string(dir.join("Library/Build/editor/Cargo.toml")).unwrap();
+        assert!(editor.contains(&format!("name = \"oxide-editor-{id}\"")));
+        let config = std::fs::read_to_string(dir.join(".cargo/config.toml")).unwrap();
+        assert!(config.contains(&manifest_path(&shared_build_dir())));
+
+        // Unchanged on the next open (so the Scripts don't look edited and rebuild).
+        let before = std::fs::metadata(dir.join("Scripts/Cargo.toml"))
+            .unwrap()
+            .modified()
+            .unwrap();
+        write_build_files(&dir, Path::new("/engine")).unwrap();
+        let after = std::fs::metadata(dir.join("Scripts/Cargo.toml"))
+            .unwrap()
+            .modified()
+            .unwrap();
+        assert_eq!(before, after);
+
+        // Two folders never share an id.
+        assert_ne!(project_id(&dir), project_id(&dir.join("Other")));
+        assert_eq!(
+            with_lib_name("[package]\nname = \"x\"\n", "s"),
+            "[package]\nname = \"x\"\n\n[lib]\nname = \"s\"\n"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -364,6 +364,10 @@ impl OpenJob {
                     if t.starts_with("Compiling") {
                         self.compiled += 1;
                     }
+                    // Projects share one build folder; Cargo lets one build use it at a time.
+                    if t.starts_with("Blocking waiting for file lock") {
+                        self.status = "Waiting for another project's build to finish...".into();
+                    }
                     if [
                         "Compiling",
                         "Building",
@@ -405,8 +409,7 @@ fn start_editor(dir: &Path) -> Result<(), String> {
 
 /// Whether the project's editor has been built (so opening it is quick).
 fn editor_built(dir: &Path) -> bool {
-    let exe = format!("oxide-project-editor{}", std::env::consts::EXE_SUFFIX);
-    dir.join("Library/Build/target/debug").join(exe).is_file()
+    project_files::editor_exe(dir).is_file()
 }
 
 fn project_name(dir: &Path) -> String {
@@ -897,10 +900,42 @@ impl Hub {
                 });
             });
         ui.add_space(8.0);
+        ui.label(RichText::new("New projects use this engine.").color(DIM));
+        ui.add_space(16.0);
+        let build = project_files::shared_build_dir();
+        egui::Frame::new()
+            .fill(Color32::from_rgb(46, 46, 46))
+            .corner_radius(CornerRadius::same(6))
+            .inner_margin(egui::Margin::same(14))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label(
+                            RichText::new("Shared build folder")
+                                .size(15.0)
+                                .strong()
+                                .color(Color32::WHITE),
+                        );
+                        ui.label(RichText::new(build.display().to_string()).color(DIM));
+                    });
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui
+                            .add_enabled(build.is_dir(), egui::Button::new("Show in Finder"))
+                            .clicked()
+                            && let Err(e) = show_folder(&build)
+                        {
+                            self.notice = Some((e, true));
+                        }
+                    });
+                });
+            });
+        ui.add_space(8.0);
         ui.label(
             RichText::new(
-                "New projects use this engine. Each project builds its own editor from it the \
-                 first time it opens.",
+                "Every project builds into this folder, so the engine is compiled once and a \
+                 new project only compiles its own scripts. It's a cache: deleting it is safe \
+                 and the next open rebuilds it.",
             )
             .color(DIM),
         );
@@ -955,7 +990,7 @@ impl Hub {
             if job.compiled > 0 {
                 detail += &format!(" · {} crates compiled", job.compiled);
                 if !editor_built(&job.dir) {
-                    detail += " · the first build of a project takes a few minutes";
+                    detail += " · the first build on this machine compiles the engine and takes a few minutes";
                 }
             }
             ui.label(RichText::new(detail).size(11.5).color(DIM));

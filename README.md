@@ -17,14 +17,16 @@ cargo run -p oxide -- new ~/Games/MyRacer     # or from the command line: create
 cargo run -p oxide -- open ~/Games/MyRacer    # open it again later
 ```
 
-The first open compiles the engine for the project (a few minutes); after that it starts in
-seconds. A project looks like Unity's:
+Every project builds into one shared folder (`~/Library/Caches/Oxide/Build` on macOS,
+`$OXIDE_BUILD_DIR` to change it), so the engine is compiled once per machine: the very first
+project takes a few minutes, and every project after that opens in seconds and only compiles its
+own scripts. The folder is a cache (about 3 GB) and safe to delete. A project looks like Unity's:
 
 | Path | What |
 |---|---|
 | `Assets/` | Scenes (`.scene`), prefabs (`.prefab`), materials (`.mat`), models (`.glb`), textures, audio |
 | `Scripts/` | Your game code: a Rust crate of components (`#[derive(Reflect)]` + `impl Component`) |
-| `Library/` | Generated build output and editor state; safe to delete |
+| `Library/` | Generated build files and editor state; safe to delete |
 
 Save a script and the editor recompiles it in the background and reloads it, in Edit or Play
 mode, keeping every component's field values. Compile errors go to the Console with file and
