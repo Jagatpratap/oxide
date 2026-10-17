@@ -798,8 +798,7 @@ pub fn window_ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
             ui.weak("(no Director: bindings and preview unavailable)");
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui
-                .selectable_label(win.locked, "🔒")
+            if crate::theme::lock_button(ui, win.locked)
                 .on_hover_text("Lock: keep editing this Director when the selection changes")
                 .clicked()
             {
@@ -1067,8 +1066,7 @@ pub fn window_ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
             .selectable(false),
         );
         child.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui
-                .selectable_label(track.locked, "🔒")
+            if crate::theme::lock_button(ui, track.locked)
                 .on_hover_text("Lock")
                 .clicked()
             {

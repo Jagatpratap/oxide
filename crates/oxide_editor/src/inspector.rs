@@ -141,14 +141,12 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
     // Lock and Debug (Unity's padlock and ⋮ → Normal / Debug).
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let mut locked = st.inspector.locked.is_some();
-            let icon = if locked { "🔒" } else { "🔓" };
-            if ui
-                .toggle_value(&mut locked, icon)
+            let locked = st.inspector.locked.is_some();
+            if crate::theme::lock_button(ui, locked)
                 .on_hover_text("Lock: keep inspecting these objects when the selection changes")
-                .changed()
+                .clicked()
             {
-                st.inspector.locked = locked.then(|| st.selection.clone());
+                st.inspector.locked = (!locked).then(|| st.selection.clone());
             }
             ui.toggle_value(&mut st.inspector.debug, "Debug")
                 .on_hover_text("Debug mode: ids, lifecycle and raw values");
@@ -175,29 +173,38 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            // Narrow number boxes are allowed (egui's default minimum is 40 px).
-            ui.spacing_mut().interact_size.x = 24.0;
-            let w = &engine.world;
-            if targets.len() > 1 {
-                ui.weak(format!("{} objects selected", targets.len()));
-            }
-            if header(ui, w, &targets, &mut edits) {
-                st.actions.push(Action::OpenProjectSettings(
-                    crate::settings_window::Page::TagsAndLayers,
-                ));
-            }
-            if st.inspector.debug {
-                debug_info(ui, w, id);
-            }
-            if targets.len() == 1 {
-                prefab_header(ui, st, w, id);
-            }
-            ui.separator();
-            transform(ui, st, w, &targets, &mut edits);
-            components(ui, st, w, &targets, &mut edits);
-            ui.add_space(8.0);
-            add_component(ui, st, w);
-            ui.add_space(24.0);
+            egui::Frame::new()
+                .inner_margin(egui::Margin {
+                    left: 4,
+                    right: 0,
+                    top: 2,
+                    bottom: 0,
+                })
+                .show(ui, |ui| {
+                    // Narrow number boxes are allowed (egui's default minimum is 40 px).
+                    ui.spacing_mut().interact_size.x = 24.0;
+                    let w = &engine.world;
+                    if targets.len() > 1 {
+                        ui.weak(format!("{} objects selected", targets.len()));
+                    }
+                    if header(ui, w, &targets, &mut edits) {
+                        st.actions.push(Action::OpenProjectSettings(
+                            crate::settings_window::Page::TagsAndLayers,
+                        ));
+                    }
+                    if st.inspector.debug {
+                        debug_info(ui, w, id);
+                    }
+                    if targets.len() == 1 {
+                        prefab_header(ui, st, w, id);
+                    }
+                    ui.separator();
+                    transform(ui, st, w, &targets, &mut edits);
+                    components(ui, st, w, &targets, &mut edits);
+                    ui.add_space(8.0);
+                    add_component(ui, st, w);
+                    ui.add_space(24.0);
+                });
         });
     presets(st, engine, &mut edits);
     apply(st, &mut engine.world, &targets, edits);
@@ -676,11 +683,18 @@ fn vec3_row(
                 [letter, ROW_H],
                 egui::Label::new(RichText::new(*axis).color(crate::scene_view::AXIS_COLORS[i])),
             );
-            let mut d = egui::DragValue::new(&mut v[i]).speed(speed).max_decimals(4);
-            if mixed[i] {
-                d = d.custom_formatter(|_, _| "—".into());
-            }
-            changed[i] = ui.add_sized([wdt, ROW_H], d).changed();
+            let value = &mut v[i];
+            changed[i] = fixed(ui, wdt, |editing| {
+                let d = egui::DragValue::new(value).speed(speed).max_decimals(4);
+                if mixed[i] {
+                    d.custom_formatter(|_, _| "—".into())
+                } else if editing {
+                    d
+                } else {
+                    fit_decimals(d, wdt)
+                }
+            })
+            .changed();
         }
     });
     changed
@@ -878,6 +892,11 @@ fn components(
                 Some((*f, v, mixed))
             })
             .collect();
+        let values = if debug {
+            values
+        } else {
+            hide_inapplicable(type_name, values)
+        };
         ui.separator();
         let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
             ui.ctx(),
@@ -1143,6 +1162,45 @@ fn navmesh_surface_footer(
     });
 }
 
+/// Drops fields that don't apply in the component's current mode, as Unity's Light and
+/// Camera Inspectors do (a Directional light has no Range or Spot Angle). A mode that is
+/// mixed across a multi-selection keeps every field.
+fn hide_inapplicable(
+    type_name: &str,
+    values: Vec<(FieldInfo, Value, bool)>,
+) -> Vec<(FieldInfo, Value, bool)> {
+    let mode = |name: &str| {
+        values.iter().find_map(|(f, v, mixed)| match v {
+            Value::Enum(e) if f.name == name && !mixed => Some(e.clone()),
+            _ => None,
+        })
+    };
+    let hidden: Vec<&str> = match type_name {
+        "Light" => {
+            let mut h = Vec::new();
+            match mode("light_type").as_deref() {
+                Some("Directional") => h.extend(["range", "spot_angle", "inner_spot_angle"]),
+                Some("Point") => h.extend(["spot_angle", "inner_spot_angle"]),
+                _ => {}
+            }
+            if mode("shadows").as_deref() == Some("None") {
+                h.extend(["shadow_strength", "shadow_bias", "shadow_normal_bias"]);
+            }
+            h
+        }
+        "Camera" => match mode("projection").as_deref() {
+            Some("Perspective") => vec!["orthographic_size"],
+            Some("Orthographic") => vec!["field_of_view"],
+            _ => vec![],
+        },
+        _ => vec![],
+    };
+    values
+        .into_iter()
+        .filter(|(f, _, _)| !hidden.contains(&f.name))
+        .collect()
+}
+
 /// Agent type, area and mask fields of the navigation components, as named dropdowns.
 fn nav_field(
     ui: &mut egui::Ui,
@@ -1153,12 +1211,15 @@ fn nav_field(
     salt: &str,
 ) -> Option<bool> {
     use oxide_engine::nav::NavigationSettings;
-    if !type_name.starts_with("NavMesh") {
-        return None;
-    }
     let Value::Int(i) = v else {
         return None;
     };
+    // Any component's layer mask (Camera and Light Culling Mask, ...) is Unity's LayerMask
+    // dropdown rather than a raw number.
+    let layer_mask = matches!(field, "culling_mask" | "layer_mask");
+    if !type_name.starts_with("NavMesh") && !layer_mask {
+        return None;
+    }
     let settings = w
         .try_resource::<NavigationSettings>()
         .cloned()
@@ -1202,7 +1263,7 @@ fn nav_field(
                 });
             Some(changed)
         }
-        "area_mask" | "layer_mask" => {
+        "area_mask" | "layer_mask" | "culling_mask" => {
             let names: Vec<(usize, String)> = if field == "area_mask" {
                 settings
                     .areas
@@ -1841,14 +1902,50 @@ fn drag_array<const N: usize>(ui: &mut egui::Ui, a: &mut [f32; N]) -> bool {
     let gap = ui.spacing().item_spacing.x;
     let wdt = ((avail(ui) - (N - 1) as f32 * gap) / N as f32).max(24.0);
     for x in a.iter_mut() {
-        changed |= ui
-            .add_sized(
-                [wdt, ROW_H],
-                egui::DragValue::new(x).speed(0.02).max_decimals(4),
-            )
-            .changed();
+        changed |= fixed(ui, wdt, |editing| {
+            let d = egui::DragValue::new(x).speed(0.02).max_decimals(4);
+            if editing { d } else { fit_decimals(d, wdt) }
+        })
+        .changed();
     }
     changed
+}
+
+/// Adds a widget in a slot exactly `width` wide. `add_sized` only sets a minimum, so a long
+/// number ("14.0362") would widen its box and push the rest of the row off the panel.
+/// `make` is told whether the widget is being typed into (it has keyboard focus).
+fn fixed<W: egui::Widget>(
+    ui: &mut egui::Ui,
+    width: f32,
+    make: impl FnOnce(bool) -> W,
+) -> egui::Response {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, ROW_H), egui::Sense::hover());
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(
+        egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
+    ));
+    child.set_clip_rect(rect.intersect(ui.clip_rect()));
+    // A DragValue's id is the next auto id of the Ui it's added to.
+    let editing = child.memory(|m| m.has_focus(child.next_auto_id()));
+    child.add(make(editing))
+}
+
+/// Shows fewer decimals when a number would not fit in a box `width` wide, as Unity does
+/// in a narrow Inspector. Only for display: the edit text must keep the full value, or
+/// confirming an untouched field would round it.
+fn fit_decimals(d: egui::DragValue<'_>, width: f32) -> egui::DragValue<'_> {
+    // About 7 px per digit at the Inspector's 12.5 px font, plus the box's padding.
+    let max_chars = (((width - 10.0) / 7.0).floor() as usize).max(3);
+    d.custom_formatter(move |v, decimals| {
+        let lo = *decimals.start();
+        let mut hi = *decimals.end();
+        loop {
+            let s = egui::emath::format_with_decimals_in_range(v, lo.min(hi)..=hi);
+            if s.chars().count() <= max_chars || hi == 0 {
+                return s;
+            }
+            hi -= 1;
+        }
+    })
 }
 
 pub(crate) fn asset_field(

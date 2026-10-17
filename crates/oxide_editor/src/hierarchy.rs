@@ -164,6 +164,16 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
+            // The toggle column runs the full height of the panel, not just past the rows.
+            let view = ui.clip_rect();
+            ui.painter().rect_filled(
+                egui::Rect::from_min_size(
+                    pos2(ui.max_rect().left(), view.top()),
+                    vec2(GUTTER, view.height()),
+                ),
+                0.0,
+                Color32::from_gray(46),
+            );
             // Scene header rows.
             let header = |ui: &mut egui::Ui, text: String| {
                 let (r, _) =

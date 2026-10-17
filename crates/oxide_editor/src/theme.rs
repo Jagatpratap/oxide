@@ -25,6 +25,11 @@ pub fn apply(ctx: &egui::Context) {
     v.widgets.inactive.weak_bg_fill = Color32::from_rgb(70, 70, 70);
     v.widgets.inactive.fg_stroke = Stroke::new(1.0, TEXT);
     v.widgets.inactive.corner_radius = r;
+    // Unity's fields and buttons have a thin dark outline.
+    v.widgets.inactive.bg_stroke = Stroke::new(1.0, Color32::from_rgb(33, 33, 33));
+    v.widgets.hovered.bg_stroke = Stroke::new(1.0, Color32::from_rgb(33, 33, 33));
+    // No guide line down the left of indented content (component fields, foldouts).
+    v.indent_has_left_vline = false;
     v.widgets.hovered.weak_bg_fill = Color32::from_rgb(90, 90, 90);
     v.widgets.hovered.bg_fill = Color32::from_rgb(103, 103, 103);
     v.widgets.hovered.corner_radius = r;
@@ -34,6 +39,9 @@ pub fn apply(ctx: &egui::Context) {
     v.widgets.open.weak_bg_fill = Color32::from_rgb(70, 96, 124);
     ctx.set_visuals(v);
     ctx.global_style_mut(|s| {
+        // Unity's labels aren't text: dragging across them must not select their words.
+        s.interaction.selectable_labels = false;
+        s.interaction.multi_widget_text_select = false;
         s.spacing.item_spacing = egui::vec2(6.0, 3.0);
         s.spacing.interact_size.y = 18.0;
         s.spacing.button_padding = egui::vec2(6.0, 2.0);
@@ -64,6 +72,8 @@ pub fn dock_style(style: &egui::Style) -> egui_dock::Style {
     s.tab_bar.bg_fill = BAR;
     s.tab_bar.height = 22.0;
     s.tab_bar.corner_radius = CornerRadius::ZERO;
+    // The overflow scroll bar is drawn over the window's first row; scroll tabs with the wheel.
+    s.tab_bar.show_scroll_bar_on_overflow = false;
     s.tab.tab_body.bg_fill = PANEL;
     s.tab.tab_body.inner_margin = Margin::same(2);
     s.tab.hline_below_active_tab_name = false;
@@ -93,4 +103,48 @@ pub fn dock_style(style: &egui::Style) -> egui_dock::Style {
     s.separator.color_idle = Color32::from_rgb(25, 25, 25);
     s.separator.width = 2.0;
     s
+}
+
+/// Unity's padlock button, drawn rather than taken from the font (the emoji font's padlock
+/// is unreadable at Inspector size). Highlighted when `locked`; toggle on `clicked()`.
+pub fn lock_button(ui: &mut egui::Ui, locked: bool) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::click());
+    let p = ui.painter();
+    if locked {
+        p.rect_filled(rect, CornerRadius::same(2), SELECTION_BG);
+    } else if resp.hovered() {
+        p.rect_filled(rect, CornerRadius::same(2), Color32::from_gray(80));
+    }
+    let col = if locked || resp.hovered() {
+        Color32::WHITE
+    } else {
+        Color32::from_gray(190)
+    };
+    let c = rect.center();
+    // Body.
+    let body = egui::Rect::from_center_size(c + egui::vec2(0.0, 2.5), egui::vec2(9.0, 6.5));
+    p.rect_filled(body, CornerRadius::same(1), col);
+    // Shackle: closed when locked, swung open (raised on the right) when not.
+    let lift = if locked { 0.0 } else { 2.0 };
+    let (l, r, top) = (body.left() + 2.0, body.right() - 2.0, body.top() - 4.5);
+    let s = Stroke::new(1.4, col);
+    p.line_segment([egui::pos2(l, body.top()), egui::pos2(l, top + 1.5)], s);
+    p.line_segment(
+        [
+            egui::pos2(r, body.top() - lift),
+            egui::pos2(r, top + 1.5 - lift),
+        ],
+        s,
+    );
+    let arc: Vec<egui::Pos2> = (0..=8)
+        .map(|i| {
+            let a = std::f32::consts::PI * (1.0 + i as f32 / 8.0);
+            let cx = (l + r) * 0.5;
+            let rad = (r - l) * 0.5;
+            let t = i as f32 / 8.0;
+            egui::pos2(cx + rad * a.cos(), top + 1.5 + rad * a.sin() - lift * t)
+        })
+        .collect();
+    p.add(egui::Shape::line(arc, s));
+    resp
 }
