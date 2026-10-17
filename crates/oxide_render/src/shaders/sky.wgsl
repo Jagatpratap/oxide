@@ -1,7 +1,7 @@
 // Skybox / clear pass: a full-screen triangle drawn behind everything (reversed-Z depth 0).
 
 struct VsOut {
-    @builtin(position) clip: vec4f,
+    @builtin(position) @invariant clip: vec4f,
     @location(0) ndc: vec2f,
 };
 

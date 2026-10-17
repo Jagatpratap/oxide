@@ -59,6 +59,8 @@ pub struct ScriptHost {
     pub script_behaviour_types: Vec<String>,
     /// Timeline PlayableBehaviour types the loaded library registered.
     pub script_playable_types: Vec<String>,
+    /// Render pipeline types from the loaded library (removed on reload).
+    pub script_pipeline_types: Vec<String>,
     libraries: Vec<libloading::Library>,
     generation: u32,
     pub last_build_seconds: f32,
@@ -178,6 +180,7 @@ impl ScriptHost {
             script_asset_types: Vec::new(),
             script_behaviour_types: Vec::new(),
             script_playable_types: Vec::new(),
+            script_pipeline_types: Vec::new(),
             libraries: Vec::new(),
             generation: 0,
             last_build_seconds: 0.0,
@@ -318,6 +321,9 @@ impl ScriptHost {
         let register_playables: Option<
             libloading::Symbol<fn(&mut oxide_engine::timeline::PlayableBehaviours)>,
         > = unsafe { lib.get(b"oxide_register_playables") }.ok();
+        let register_pipelines: Option<
+            libloading::Symbol<fn(&mut oxide_engine::render_pipeline::RenderPipelines)>,
+        > = unsafe { lib.get(b"oxide_register_pipelines") }.ok();
 
         let w = &mut engine.world;
         let old = std::mem::take(&mut self.script_types);
@@ -368,6 +374,24 @@ impl ScriptHost {
                 let before = b.names();
                 f(b);
                 self.script_playable_types = b
+                    .names()
+                    .into_iter()
+                    .filter(|n| !before.contains(n))
+                    .collect();
+            }
+        }
+        // Custom render pipelines, the same way.
+        {
+            use oxide_engine::render_pipeline::RenderPipelines;
+            if !w.resources.contains::<RenderPipelines>() {
+                w.resources.insert(RenderPipelines::default());
+            }
+            let p = w.resource_mut::<RenderPipelines>();
+            p.remove(&std::mem::take(&mut self.script_pipeline_types));
+            if let Some(f) = &register_pipelines {
+                let before = p.names();
+                f(p);
+                self.script_pipeline_types = p
                     .names()
                     .into_iter()
                     .filter(|n| !before.contains(n))

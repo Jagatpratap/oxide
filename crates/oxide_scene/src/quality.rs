@@ -36,6 +36,10 @@ pub struct QualityLevel {
     pub vsync: bool,
     /// Realtime reflection probes update; when off they keep their last capture.
     pub realtime_reflection_probes: bool,
+    /// Overrides Graphics Settings' default render pipeline at this level (Unity's
+    /// per-level "Render Pipeline Asset").
+    pub render_pipeline:
+        Option<oxide_assets::Handle<crate::render_pipeline::UniversalRenderPipelineAsset>>,
 }
 
 impl QualityLevel {
@@ -55,6 +59,7 @@ impl QualityLevel {
             msaa,
             vsync: true,
             realtime_reflection_probes: true,
+            render_pipeline: None,
         }
     }
 }

@@ -38,7 +38,8 @@ pub fn loaded_build_id() -> &'static str {
 /// optionally `; editors: Type, ...` for components with a custom Inspector,
 /// `; assets: Type => ("ext", "Create/Menu")` for data asset types (ScriptableObjects), and
 /// `; behaviours: Type, ...` for StateMachineBehaviours (Add Behaviour on Animator states),
-/// and `; playables: Type, ...` for Timeline `PlayableBehaviour`s (Playable track clips).
+/// `; playables: Type, ...` for Timeline `PlayableBehaviour`s (Playable track clips), and
+/// `; pipelines: Type, ...` for custom render pipelines (`RenderPipeline`).
 /// Expands to the entry points the editor calls after loading the library.
 #[macro_export]
 macro_rules! scripts {
@@ -46,7 +47,8 @@ macro_rules! scripts {
      $(; editors: $($ed:ty),* $(,)?)?
      $(; assets: $($at:ty => ($ext:expr, $amenu:expr)),* $(,)?)?
      $(; behaviours: $($bt:ty),* $(,)?)?
-     $(; playables: $($pt:ty),* $(,)?)?) => {
+     $(; playables: $($pt:ty),* $(,)?)?
+     $(; pipelines: $($rpt:ty),* $(,)?)?) => {
         /// Engine build these scripts were compiled against.
         #[unsafe(no_mangle)]
         pub fn oxide_scripts_build_id() -> &'static str {
@@ -86,6 +88,13 @@ macro_rules! scripts {
         pub fn oxide_register_playables(p: &mut $crate::timeline::PlayableBehaviours) {
             let _ = &p;
             $($( p.register::<$pt>(); )*)?
+        }
+
+        /// Registers the custom render pipelines (`pipelines:`, Unity SRP `RenderPipeline`s).
+        #[unsafe(no_mangle)]
+        pub fn oxide_register_pipelines(p: &mut $crate::render_pipeline::RenderPipelines) {
+            let _ = &p;
+            $($( p.register::<$rpt>(); )*)?
         }
     };
 }

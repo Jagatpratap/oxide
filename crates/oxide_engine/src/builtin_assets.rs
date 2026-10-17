@@ -63,6 +63,15 @@ pub fn register(assets: &mut AssetServer) {
             .menu("Rendering/Lens Flare (SRP)", "New Lens Flare", 64)
             .color(250, 200, 110),
     );
+    assets.register_data_asset::<oxide_scene::UniversalRenderPipelineAsset>(
+        AssetTypeInfo::new("UniversalRenderPipelineAsset", &["renderpipeline"])
+            .menu(
+                "Rendering/URP Asset (with Universal Renderer)",
+                "New Universal Render Pipeline Asset",
+                60,
+            )
+            .color(120, 200, 250),
+    );
     assets.register_data_asset::<oxide_scene::LightingSettings>(
         AssetTypeInfo::new("LightingSettings", &["lighting"])
             .menu("Rendering/Lighting Settings", "New Lighting Settings", 62)

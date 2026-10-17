@@ -248,6 +248,44 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
         }
     }
     frame.sun = sun.map(|(_, s)| s);
+    // The active Render Pipeline Asset (Graphics Settings, or the Quality level's).
+    if let Some(p) =
+        oxide_scene::GraphicsSettings::current(world).and_then(|h| assets.data.get(&h).cloned())
+    {
+        use oxide_scene::{PipelineMsaa, RenderingPath as P};
+        frame.rendering_path = match p.rendering_path {
+            P::Forward => oxide_render::RenderingPath::Forward,
+            P::ForwardPlus => oxide_render::RenderingPath::ForwardPlus,
+            P::Deferred => oxide_render::RenderingPath::Deferred,
+        };
+        match p.msaa {
+            PipelineMsaa::QualityLevel => {}
+            PipelineMsaa::Disabled => frame.environment.msaa_samples = 1,
+            PipelineMsaa::Msaa2x => frame.environment.msaa_samples = 2,
+            PipelineMsaa::Msaa4x => frame.environment.msaa_samples = 4,
+            PipelineMsaa::Msaa8x => frame.environment.msaa_samples = 8,
+        }
+        frame.opaque_layer_mask = (p.opaque_layer_mask != u32::MAX).then_some(p.opaque_layer_mask);
+        frame.transparent_layer_mask =
+            (p.transparent_layer_mask != u32::MAX).then_some(p.transparent_layer_mask);
+        if !p.post_processing {
+            frame.environment.post = oxide_render::PostSettings::neutral();
+        }
+        // A custom render pipeline from the scripts (Unity SRP).
+        if !p.custom_pipeline.is_empty() {
+            match world
+                .try_resource::<crate::render_pipeline::RenderPipelines>()
+                .and_then(|rp| rp.run(&p.custom_pipeline, world, &frame.cameras))
+            {
+                Some(steps) => frame.custom_steps = Some(steps),
+                None => warn_once(&format!(
+                    "no render pipeline `{}` is registered (scripts! {{ ...; pipelines: {} }}); \
+                     using the Universal Render Pipeline",
+                    p.custom_pipeline, p.custom_pipeline
+                )),
+            }
+        }
+    }
     // Volumes are evaluated at the first camera (Unity's default volume trigger).
     let trigger = frame
         .cameras
@@ -580,6 +618,16 @@ fn lod_hidden(
         }
     }
     hidden
+}
+
+/// Logs a warning once per message (extraction runs every frame).
+fn warn_once(msg: &str) {
+    static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    if !seen.iter().any(|m| m == msg) {
+        seen.push(msg.to_owned());
+        oxide_core::debug_log_warning!("{msg}");
+    }
 }
 
 #[cfg(test)]

@@ -725,6 +725,58 @@ pub struct LineVertex {
     pub color: [f32; 4],
 }
 
+/// Which render queues `DrawRenderers` draws (Unity `RenderQueueRange`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RenderQueue {
+    /// Opaque and alpha-tested, front to back.
+    #[default]
+    Opaque,
+    /// Alpha-blended, back to front.
+    Transparent,
+    /// Both (opaque first).
+    All,
+}
+
+/// One command of a custom render pipeline (Unity's `ScriptableRenderContext` calls), run
+/// in order for each camera instead of URP's own sequence.
+#[derive(Clone, Debug, PartialEq)]
+pub enum RenderStep {
+    /// Clears to the camera's background (sky or colour) and/or depth.
+    ClearRenderTarget {
+        color: bool,
+        depth: bool,
+    },
+    /// The sky where nothing has been drawn yet.
+    DrawSkybox,
+    /// Renderers in `queue` on `layer_mask`, optionally with another material.
+    DrawRenderers {
+        queue: RenderQueue,
+        layer_mask: u32,
+        override_material: Option<AssetId>,
+    },
+    DrawTerrain,
+    /// Particle Systems and Visual Effects.
+    DrawEffects,
+    /// Sprites and 3D text.
+    DrawSprites,
+    /// Gizmo and debug lines.
+    DrawGizmos,
+}
+
+/// URP's rendering paths (Universal Renderer "Rendering Path").
+/// <https://docs.unity3d.com/Manual/urp/rendering-paths-introduction.html>
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum RenderingPath {
+    /// Every object lit in its own draw (Oxide's forward is clustered either way).
+    Forward,
+    /// Forward with clustered lights (no per-object light limit).
+    #[default]
+    ForwardPlus,
+    /// Opaque objects write a G-buffer; one full-screen pass lights them. Transparent,
+    /// terrain and other forward-only objects are drawn afterwards. No MSAA (as in URP).
+    Deferred,
+}
+
 /// Unity's Scene view draw modes: shading modes and debug views.
 /// <https://docs.unity3d.com/Manual/ViewModes.html>
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -825,6 +877,14 @@ pub struct RenderFrame {
     pub lightmaps: Vec<AssetId>,
     /// Scene view draw mode (shaded, wireframe or a debug view of one input).
     pub debug_view: DebugView,
+    /// From the Render Pipeline Asset (Graphics / Quality settings).
+    pub rendering_path: RenderingPath,
+    /// A custom render pipeline's commands; `None` = the Universal Render Pipeline.
+    pub custom_steps: Option<Vec<RenderStep>>,
+    /// Universal Renderer filtering: layers drawn in the opaque and transparent queues
+    /// (on top of each camera's culling mask). `None` = every layer.
+    pub opaque_layer_mask: Option<u32>,
+    pub transparent_layer_mask: Option<u32>,
 
     /// World-space skinning matrices (bone local-to-world × bind pose).
     pub joints: Vec<Matrix4x4>,

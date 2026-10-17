@@ -304,6 +304,7 @@ scripts = {{ path = "../scripts" }}
 #![windows_subsystem = "windows"]
 
 fn main() -> std::process::ExitCode {
+    oxide::set_render_pipelines(scripts::oxide_register_pipelines);
     oxide::run_scripts_full(
         scripts::oxide_register_scripts,
         scripts::oxide_register_assets,

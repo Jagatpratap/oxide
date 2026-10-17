@@ -24,9 +24,11 @@ pub enum Page {
     Player,
     Localization,
     PresetManager,
+    Graphics,
 }
 
-pub const PAGES: [(Page, &str); 8] = [
+pub const PAGES: [(Page, &str); 9] = [
+    (Page::Graphics, "Graphics"),
     (Page::Input, "Input Manager"),
     (Page::Localization, "Localization"),
     (Page::Physics, "Physics"),
@@ -119,6 +121,7 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
         Page::Player => player(ui, &mut s, build),
         Page::Localization => crate::localization_window::settings_page(ui, &mut s.localization),
         Page::PresetManager => preset_manager(ui, w, &mut s.preset_manager),
+        Page::Graphics => graphics(ui, w, &mut s.graphics),
     });
     ss.page = page;
     if *build != build_before
@@ -827,4 +830,62 @@ fn preset_manager(
             ..Default::default()
         });
     }
+}
+
+/// Unity's Graphics settings: the default Render Pipeline Asset (Quality levels can override
+/// it on the Quality page).
+fn graphics(ui: &mut egui::Ui, w: &oxide_scene::World, g: &mut oxide_scene::GraphicsSettings) {
+    let assets = w.resource::<oxide_assets::AssetServer>();
+    let pipelines = assets.paths_of_type("UniversalRenderPipelineAsset");
+    ui.horizontal(|ui| {
+        ui.label("Default Render Pipeline");
+        let shown = g
+            .default_render_pipeline
+            .as_ref()
+            .map_or("None (Universal defaults)".to_owned(), |h| {
+                h.path().rsplit('/').next().unwrap_or(h.path()).to_owned()
+            });
+        egui::ComboBox::from_id_salt("default-render-pipeline")
+            .selected_text(shown)
+            .width(240.0)
+            .show_ui(ui, |ui| {
+                if ui
+                    .selectable_label(
+                        g.default_render_pipeline.is_none(),
+                        "None (Universal defaults)",
+                    )
+                    .clicked()
+                {
+                    g.default_render_pipeline = None;
+                }
+                for p in pipelines {
+                    let on = g
+                        .default_render_pipeline
+                        .as_ref()
+                        .is_some_and(|h| h.path() == p);
+                    let label = p.rsplit('/').next().unwrap_or(&p).to_owned();
+                    if ui.selectable_label(on, label).clicked() {
+                        g.default_render_pipeline =
+                            Some(oxide_assets::Handle::from_path(p.as_str()));
+                    }
+                }
+            });
+    });
+    ui.add_space(4.0);
+    let current = oxide_scene::GraphicsSettings::current(w);
+    let active = current.as_ref().and_then(|h| assets.data.get(h));
+    ui.weak(match active {
+        Some(p) => format!(
+            "In use: {} — {:?} rendering path{}",
+            current.as_ref().map_or("", |h| h.path()),
+            p.rendering_path,
+            if p.custom_pipeline.is_empty() {
+                String::new()
+            } else {
+                format!(", custom pipeline \"{}\"", p.custom_pipeline)
+            }
+        ),
+        None => "In use: Universal defaults (Forward+, the Quality level's MSAA)".into(),
+    });
+    ui.weak("Create one with Assets > Create > Rendering > URP Asset (with Universal Renderer).");
 }

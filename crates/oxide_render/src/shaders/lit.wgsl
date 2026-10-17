@@ -284,6 +284,47 @@ fn fs_main(in: VertexOut, @builtin(front_facing) front: bool) -> FragOut {
     return out;
 }
 
+// Deferred rendering path (URP Deferred): the G-buffer. Indirect light and emission are
+// computed here, per object (lightmaps, light probes, reflection probes); the lighting pass
+// adds the sun and the punctual lights. Unlit materials store their colour as "indirect"
+// and are flagged so the lighting pass adds nothing.
+struct GBufferOut {
+    @location(0) albedo_metallic: vec4f,
+    @location(1) normal_rough: vec4f,
+    @location(2) geo_flags: vec4f,     // geometric normal, w = 0 no shadows, 1 shadows, 2 unlit
+    @location(3) indirect: vec4f,
+};
+
+@fragment
+fn fs_gbuffer(in: VertexOut, @builtin(front_facing) front: bool) -> GBufferOut {
+    let si = surface_input(in, front);
+    let s = surface(si);
+    if (s.alpha < s.alpha_clip) {
+        discard;
+    }
+    var out: GBufferOut;
+    let geo = normalize(in.normal) * select(-1.0, 1.0, front);
+    if (material.flags.y > 0.5) {
+        out.albedo_metallic = vec4f(0.0);
+        out.normal_rough = vec4f(geo, 1.0);
+        out.geo_flags = vec4f(geo, 2.0);
+        out.indirect = vec4f(s.base_color + s.emission, 1.0);
+        return out;
+    }
+    let tn = s.normal_ts;
+    let n = normalize(si.world_tangent * tn.x + si.world_bitangent * tn.y + si.world_normal * max(tn.z, 1e-3));
+    let metallic = clamp(s.metallic, 0.0, 1.0);
+    let rough = clamp(1.0 - s.smoothness, 0.045, 1.0);
+    let ao = clamp(s.occlusion, 0.0, 1.0);
+    let albedo = max(s.base_color, vec3f(0.0));
+    out.albedo_metallic = vec4f(albedo, metallic);
+    out.normal_rough = vec4f(n, rough);
+    out.geo_flags = vec4f(geo, select(0.0, 1.0, in.receive_shadows != 0u));
+    let indirect = indirect_light(in.world_pos, n, geo, albedo, metallic, rough, ao, in.probes, in.clip.xy, in.gi, in.lm_uv);
+    out.indirect = vec4f(indirect + s.emission, 1.0);
+    return out;
+}
+
 // Wireframe draw modes: mesh edges.
 @fragment
 fn fs_wire(in: VertexOut) -> FragOut {

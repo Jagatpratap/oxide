@@ -20,7 +20,8 @@ macro_rules! scripts {
      $(; editors: $($ed:ty),* $(,)?)?
      $(; assets: $($at:ty => ($ext:expr, $amenu:expr)),* $(,)?)?
      $(; behaviours: $($bt:ty),* $(,)?)?
-     $(; playables: $($pt:ty),* $(,)?)?) => {
+     $(; playables: $($pt:ty),* $(,)?)?
+     $(; pipelines: $($rpt:ty),* $(,)?)?) => {
         pub fn oxide_scripts_build_id() -> &'static str {
             $crate::BUILD_ID
         }
@@ -43,6 +44,12 @@ macro_rules! scripts {
         pub fn oxide_register_playables(p: &mut $crate::timeline::PlayableBehaviours) {
             let _ = &p;
             $($( p.register::<$pt>(); )*)?
+        }
+
+        /// Registers the custom render pipelines (`pipelines:`, Unity SRP `RenderPipeline`s).
+        pub fn oxide_register_pipelines(p: &mut $crate::render_pipeline::RenderPipelines) {
+            let _ = &p;
+            $($( p.register::<$rpt>(); )*)?
         }
     };
 }
@@ -125,7 +132,14 @@ pub fn run_scripts_full(
     run_scripts_with_behaviours(register, register_assets, register_behaviours)
 }
 
+/// Registers the Scripts' custom render pipelines (call before `run_scripts_full`).
+pub fn set_render_pipelines(f: fn(&mut render_pipeline::RenderPipelines)) {
+    PIPELINES.with(|p| p.set(Some(f)));
+}
+
 thread_local! {
+    static PIPELINES: std::cell::Cell<Option<fn(&mut render_pipeline::RenderPipelines)>> =
+        const { std::cell::Cell::new(None) };
     static PLAYABLES: std::cell::Cell<Option<fn(&mut timeline::PlayableBehaviours)>> =
         const { std::cell::Cell::new(None) };
     static BEHAVIOURS: std::cell::Cell<Option<fn(&mut animation::StateMachineBehaviours)>> =
@@ -188,6 +202,14 @@ pub fn run_scripts(
                 .insert(animation::StateMachineBehaviours::default());
         }
         f(w.resource_mut::<animation::StateMachineBehaviours>());
+    }
+    if let Some(f) = PIPELINES.with(std::cell::Cell::get) {
+        let w = app.world_mut();
+        if !w.resources.contains::<render_pipeline::RenderPipelines>() {
+            w.resources
+                .insert(render_pipeline::RenderPipelines::default());
+        }
+        f(w.resource_mut::<render_pipeline::RenderPipelines>());
     }
     if let Some(f) = PLAYABLES.with(std::cell::Cell::get) {
         let w = app.world_mut();

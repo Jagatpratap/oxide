@@ -18,6 +18,7 @@ pub mod player_input;
 pub mod prefab;
 pub mod presets;
 pub mod quality;
+pub mod render_pipeline;
 pub mod resources;
 pub mod scene_manager;
 pub mod serialize;
@@ -46,6 +47,9 @@ pub use player_input::PlayerInput;
 pub use prefab::{ObjectProperty, PrefabOverride, is_prefab_path};
 pub use presets::{CurvePreset, CurvePresetLibrary, GradientPreset, GradientPresetLibrary};
 pub use quality::{QualityLevel, QualitySettings, ShadowQuality};
+pub use render_pipeline::{
+    GraphicsSettings, PipelineMsaa, RenderingPath, UniversalRenderPipelineAsset,
+};
 pub use resources::Resources;
 pub use scene_manager::{AsyncOperation, PumpResult, SceneOpStatus, SceneOperations};
 pub use serialize::{ComponentData, ObjectData, SceneFile};

@@ -143,6 +143,10 @@ struct ShadowBatch {
 struct FixedPipelines {
     sky: wgpu::RenderPipeline,
     solid: wgpu::RenderPipeline,
+    /// Sky and solid clear that only fill pixels nothing drew (depth still 0) and keep depth:
+    /// the background behind a deferred G-buffer.
+    sky_behind: wgpu::RenderPipeline,
+    solid_behind: wgpu::RenderPipeline,
     depth_clear: wgpu::RenderPipeline,
     line: wgpu::RenderPipeline,
     terrain: wgpu::RenderPipeline,
@@ -184,10 +188,26 @@ struct Targets {
     ssao: Option<crate::ssao::SsaoTargets>,
     bloom: Vec<(wgpu::TextureView, u32, u32)>,
     msaa: Option<wgpu::TextureView>,
+    /// Deferred G-buffer, made on first use.
+    gbuffer: Option<GBuffer>,
     resolve_tex: wgpu::Texture,
     resolve: wgpu::TextureView,
     depth: wgpu::TextureView,
 }
+
+/// The deferred G-buffer: albedo + metallic, normal + roughness, geometric normal + flags,
+/// indirect light + emission (HDR); with the depth target, read by the lighting pass.
+struct GBuffer {
+    views: [wgpu::TextureView; 4],
+    group: wgpu::BindGroup,
+}
+
+const GBUFFER_FORMATS: [wgpu::TextureFormat; 4] = [
+    wgpu::TextureFormat::Rgba8Unorm,
+    wgpu::TextureFormat::Rgba16Float,
+    wgpu::TextureFormat::Rgba16Float,
+    HDR_FORMAT,
+];
 
 fn grow_buffer(
     device: &wgpu::Device,
@@ -231,6 +251,11 @@ pub struct SceneRenderer {
     /// Compiled Shader Graphs by their asset id.
     graph_modules: HashMap<AssetId, GraphModule>,
     main_pipelines: HashMap<MainKey, wgpu::RenderPipeline>,
+    /// Deferred: G-buffer variants of the Lit pipelines, the G-buffer textures' layout and
+    /// the lighting pass.
+    gbuffer_pipelines: HashMap<MainKey, wgpu::RenderPipeline>,
+    gbuffer_layout: wgpu::BindGroupLayout,
+    deferred_lighting: wgpu::RenderPipeline,
     shadow_pipelines: HashMap<ShadowKey, wgpu::RenderPipeline>,
     sky_module: wgpu::ShaderModule,
     lines_module: wgpu::ShaderModule,
@@ -345,6 +370,15 @@ pub fn lit_source(hooks: &str) -> String {
     format!(
         "{}\n{}",
         include_str!("shaders/lit.wgsl").replace("//#SURFACE", hooks),
+        include_str!("shaders/lighting.wgsl")
+    )
+}
+
+/// The deferred lighting pass (without the common header).
+pub fn deferred_source() -> String {
+    format!(
+        "{}\n{}",
+        include_str!("shaders/deferred.wgsl"),
         include_str!("shaders/lighting.wgsl")
     )
 }
@@ -705,6 +739,63 @@ impl SceneRenderer {
         let sprite_module = shader(device, "sprites.wgsl", include_str!("shaders/sprites.wgsl"));
         let sprites =
             crate::sprites::SpriteGpu::new(device, &gpu.queue, &frame_layout, sprite_module);
+        // Deferred lighting: frame, G-buffer, screen (SSAO) groups.
+        let tex_entry = |binding: u32, sample_type| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type,
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        };
+        let unfilterable = wgpu::TextureSampleType::Float { filterable: false };
+        let gbuffer_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("gbuffer layout"),
+            entries: &[
+                tex_entry(0, unfilterable),
+                tex_entry(1, unfilterable),
+                tex_entry(2, unfilterable),
+                tex_entry(3, unfilterable),
+                tex_entry(4, wgpu::TextureSampleType::Depth),
+            ],
+        });
+        let deferred_module = shader(device, "deferred.wgsl", &deferred_source());
+        let deferred_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("deferred lighting layout"),
+            bind_group_layouts: &[
+                Some(&frame_layout),
+                Some(&gbuffer_layout),
+                Some(&ssao.screen_layout),
+            ],
+            immediate_size: 0,
+        });
+        let deferred_lighting = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("deferred lighting"),
+            layout: Some(&deferred_layout),
+            vertex: wgpu::VertexState {
+                module: &deferred_module,
+                entry_point: Some("vs_full"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &deferred_module,
+                entry_point: Some("fs_light"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: HDR_FORMAT,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         Self {
             wire_supported: device
                 .features()
@@ -726,6 +817,9 @@ impl SceneRenderer {
             shadow_module,
             graph_modules: HashMap::new(),
             main_pipelines: HashMap::new(),
+            gbuffer_pipelines: HashMap::new(),
+            gbuffer_layout,
+            deferred_lighting,
             shadow_pipelines: HashMap::new(),
             sky_module,
             lines_module,
@@ -836,7 +930,11 @@ impl SceneRenderer {
             ..Default::default()
         };
         let (sky_module, frame_only) = (&self.sky_module, &self.frame_only_layout);
-        let fullscreen = |entry: &str, write_color: bool, label: &str| {
+        let fullscreen_with = |entry: &str,
+                               write_color: bool,
+                               label: &str,
+                               compare: wgpu::CompareFunction,
+                               write_depth: bool| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(frame_only),
@@ -850,8 +948,8 @@ impl SceneRenderer {
                 // Writes depth 0 (reversed-Z far plane): this also clears depth in the viewport.
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: DEPTH_FORMAT,
-                    depth_write_enabled: Some(true),
-                    depth_compare: Some(wgpu::CompareFunction::Always),
+                    depth_write_enabled: Some(write_depth),
+                    depth_compare: Some(compare),
                     stencil: Default::default(),
                     bias: Default::default(),
                 }),
@@ -874,6 +972,20 @@ impl SceneRenderer {
                 cache: None,
             })
         };
+        let fullscreen = |entry: &str, write_color: bool, label: &str| {
+            fullscreen_with(
+                entry,
+                write_color,
+                label,
+                wgpu::CompareFunction::Always,
+                true,
+            )
+        };
+        let behind = |entry: &str, label: &str| {
+            fullscreen_with(entry, true, label, wgpu::CompareFunction::Equal, false)
+        };
+        let sky_behind = behind("fs_main", "sky behind pipeline");
+        let solid_behind = behind("fs_solid", "solid behind pipeline");
         let sky = fullscreen("fs_main", true, "sky pipeline");
         let solid = fullscreen("fs_solid", true, "solid clear pipeline");
         let depth_clear = fullscreen("fs_solid", false, "depth clear pipeline");
@@ -956,6 +1068,8 @@ impl SceneRenderer {
             FixedPipelines {
                 sky,
                 solid,
+                sky_behind,
+                solid_behind,
                 depth_clear,
                 line,
                 terrain,
@@ -1088,6 +1202,117 @@ impl SceneRenderer {
                 cache: None,
             })
         })
+    }
+
+    /// The G-buffer variant of a Lit pipeline (single sample, four targets).
+    fn gbuffer_pipeline(&mut self, device: &wgpu::Device, key: MainKey) {
+        let module = key
+            .shader
+            .and_then(|id| self.graph_modules.get(&id))
+            .map_or(&self.lit_module, |g| &g.lit);
+        let layout = &self.main_layout;
+        self.gbuffer_pipelines.entry(key).or_insert_with(|| {
+            let buffers = vertex_layouts(key.skinned);
+            let targets: Vec<Option<wgpu::ColorTargetState>> = GBUFFER_FORMATS
+                .iter()
+                .map(|&format| {
+                    Some(wgpu::ColorTargetState {
+                        format,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })
+                })
+                .collect();
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(&format!("gbuffer {key:?}")),
+                layout: Some(layout),
+                vertex: wgpu::VertexState {
+                    module,
+                    entry_point: Some(if key.skinned { "vs_skinned" } else { "vs_main" }),
+                    compilation_options: Default::default(),
+                    buffers: &buffers,
+                },
+                primitive: wgpu::PrimitiveState {
+                    front_face: wgpu::FrontFace::Cw,
+                    cull_mode: if key.double_sided {
+                        None
+                    } else {
+                        Some(wgpu::Face::Back)
+                    },
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::Greater),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module,
+                    entry_point: Some("fs_gbuffer"),
+                    compilation_options: Default::default(),
+                    targets: &targets,
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        });
+    }
+
+    /// Makes the G-buffer textures (and the lighting pass's bind group) for a target size.
+    fn ensure_gbuffer(&mut self, device: &wgpu::Device, w: u32, h: u32) {
+        let t = self.targets.get_mut(&(w, h, 1)).expect("targets");
+        if t.gbuffer.is_some() {
+            return;
+        }
+        let views = GBUFFER_FORMATS.map(|format| {
+            device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("gbuffer"),
+                    size: wgpu::Extent3d {
+                        width: w,
+                        height: h,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                })
+                .create_view(&Default::default())
+        });
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("gbuffer group"),
+            layout: &self.gbuffer_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&views[0]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&views[1]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&views[2]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&views[3]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(&t.depth),
+                },
+            ],
+        });
+        t.gbuffer = Some(GBuffer { views, group });
     }
 
     fn prepass_pipeline(
@@ -1253,6 +1478,7 @@ impl SceneRenderer {
                 ssao: None,
                 bloom,
                 msaa,
+                gbuffer: None,
                 resolve_tex,
                 resolve,
                 depth,
@@ -1920,7 +2146,12 @@ impl SceneRenderer {
             .environment
             .ssao
             .filter(|_| capture.is_none() && frame.cameras.len() == 1);
-        let samples = if taa || !aa.allow_msaa {
+        // Deferred (one camera, shaded): G-buffer + lighting pass; it has no MSAA, like URP.
+        let deferred = frame.rendering_path == crate::RenderingPath::Deferred
+            && frame.custom_steps.is_none()
+            && frame.cameras.len() == 1
+            && frame.debug_view == crate::DebugView::Shaded;
+        let samples = if taa || deferred || !aa.allow_msaa {
             1
         } else {
             self.sample_count_for(frame.environment.msaa_samples)
@@ -2389,12 +2620,31 @@ impl SceneRenderer {
         // ---- per-camera culling and batching -------------------------------------------
         let mut camera_batches: Vec<(Vec<Batch>, Vec<Batch>)> = Vec::new();
         let mut camera_features: Vec<Vec<(RenderPassEvent, Vec<Batch>)>> = Vec::new();
+        // Custom render pipeline: a draw list per DrawRenderers step, per camera.
+        let mut camera_steps: Vec<Vec<Vec<Batch>>> = Vec::new();
         // Override materials of Render Objects features: (id, transparent, double sided).
         let feature_materials: Vec<Option<(AssetId, bool, bool)>> = frame
             .renderer_features
             .iter()
             .map(|f| match f {
                 RendererFeature::RenderObjects {
+                    override_material: Some(m),
+                    ..
+                } => {
+                    let id = self.gpu_assets.ensure_material(device, queue, assets, *m);
+                    let gm = &self.gpu_assets.materials[&id];
+                    Some((id, gm.transparent, gm.double_sided))
+                }
+                _ => None,
+            })
+            .collect();
+        // Override materials of a custom pipeline's DrawRenderers steps, by step.
+        let step_materials: Vec<Option<(AssetId, bool, bool)>> = frame
+            .custom_steps
+            .iter()
+            .flatten()
+            .map(|step| match step {
+                RenderStep::DrawRenderers {
                     override_material: Some(m),
                     ..
                 } => {
@@ -2528,6 +2778,15 @@ impl SceneRenderer {
                     && !occ.is_visible(&r.item.model, r.bounds.center, r.bounds.extents)
                 {
                     stats.occlusion_culled += 1;
+                    continue;
+                }
+                // Universal Renderer filtering by queue.
+                let queue_mask = if r.transparent {
+                    frame.transparent_layer_mask
+                } else {
+                    frame.opaque_layer_mask
+                };
+                if queue_mask.is_some_and(|m| m & (1u32 << (r.item.layer & 31)) == 0) {
                     continue;
                 }
                 if r.transparent {
@@ -2697,6 +2956,71 @@ impl SceneRenderer {
                 fb.push((RenderPassEvent::AfterRenderingTransparents, list));
             }
             camera_features.push(fb);
+            let mut step_lists = Vec::new();
+            for (si, step) in frame.custom_steps.iter().flatten().enumerate() {
+                let RenderStep::DrawRenderers {
+                    queue, layer_mask, ..
+                } = step
+                else {
+                    step_lists.push(Vec::new());
+                    continue;
+                };
+                let override_mat = step_materials[si];
+                let mut picked: Vec<(f32, &Resolved)> = resolved
+                    .iter()
+                    .filter(|r| {
+                        let bit = 1u32 << (r.item.layer & 31);
+                        !r.item.shadows_only
+                            && cam.culling_mask & layer_mask & bit != 0
+                            && match queue {
+                                RenderQueue::Opaque => !r.transparent,
+                                RenderQueue::Transparent => r.transparent,
+                                RenderQueue::All => true,
+                            }
+                            && (!r.radius.is_finite()
+                                || sphere_visible(&planes, r.center, r.radius))
+                    })
+                    .map(|r| ((r.center - cam.position).length_squared(), r))
+                    .collect();
+                // Opaque front to back, transparent back to front (Unity's sorting criteria).
+                picked.sort_by(|a, b| match (a.1.transparent, b.1.transparent) {
+                    (false, true) => std::cmp::Ordering::Less,
+                    (true, false) => std::cmp::Ordering::Greater,
+                    (false, false) => a.0.total_cmp(&b.0),
+                    (true, true) => b.0.total_cmp(&a.0),
+                });
+                let mut list = Vec::new();
+                for (_, r) in picked {
+                    let (material, transparent, double_sided) = match override_mat {
+                        Some((m, t, d)) => (m, t, d),
+                        None => (r.material, r.transparent, r.double_sided),
+                    };
+                    let idx = instances.len() as u32;
+                    instances.push(make_instance(r));
+                    list.push(Batch {
+                        key: MainKey {
+                            samples,
+                            transparent,
+                            double_sided,
+                            skinned: r.item.joint_offset.is_some(),
+                            depth_test: DepthTest::LessEqual,
+                            depth_write: true,
+                            wire: false,
+                            shader: if override_mat.is_some() {
+                                None
+                            } else {
+                                r.shader
+                            },
+                        },
+                        material,
+                        mesh: r.item.mesh,
+                        submesh: r.item.submesh,
+                        instances: idx..idx + 1,
+                    });
+                }
+                step_lists.push(list);
+            }
+            camera_steps.push(step_lists);
             let mut tl = Vec::new();
             for (t, c, r, b) in &terrain_items {
                 let probes = self.reflections.select(*c, exclude);
@@ -2851,6 +3175,9 @@ impl SceneRenderer {
         for b in camera_features.iter().flatten().flat_map(|(_, list)| list) {
             self.main_pipeline(device, b.key);
         }
+        for b in camera_steps.iter().flatten().flatten() {
+            self.main_pipeline(device, b.key);
+        }
         for list in shadow_batches
             .iter()
             .chain(tile_batches.iter().map(|(_, l)| l))
@@ -2921,6 +3248,12 @@ impl SceneRenderer {
             if t.ssao.is_none() {
                 t.ssao = Some(self.ssao.targets(device, w, h));
             }
+        }
+        if deferred {
+            for b in &camera_batches[0].0 {
+                self.gbuffer_pipeline(device, b.key);
+            }
+            self.ensure_gbuffer(device, w, h);
         }
         let stats_cell = std::cell::RefCell::new(stats);
         let mut pool = std::mem::take(&mut self.graph_pool);
@@ -3146,11 +3479,122 @@ impl SceneRenderer {
                 },
             );
         }
+        // ---- deferred: G-buffer, then the lighting pass --------------------------------
+        let gbuffer = targets.gbuffer.as_ref().filter(|_| deferred);
+        if let (Some(gb), Some(cam)) = (gbuffer, frame.cameras.first()) {
+            let gb_tex = gb.views.each_ref().map(|v| graph.import(v));
+            let [vx, vy, vw, vh] = cam.viewport;
+            let px = (vx * w as f32).clamp(0.0, w as f32);
+            let pw = (vw * w as f32).clamp(1.0, w as f32 - px);
+            let ph = (vh * h as f32).clamp(1.0, h as f32);
+            let py = (h as f32 - (vy * h as f32) - ph).clamp(0.0, h as f32 - ph);
+            let stats_cell = &stats_cell;
+            let opaque = &camera_batches[0].0;
+            graph.add_pass(
+                "GBuffer",
+                |b| {
+                    for t in gb_tex {
+                        b.write(t);
+                    }
+                    b.write(depth_tex);
+                },
+                move |ctx| {
+                    let mut st = stats_cell.borrow_mut();
+                    let clear = wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    };
+                    let attachments: Vec<Option<wgpu::RenderPassColorAttachment>> = gb
+                        .views
+                        .iter()
+                        .map(|view| {
+                            Some(wgpu::RenderPassColorAttachment {
+                                view,
+                                depth_slice: None,
+                                resolve_target: None,
+                                ops: clear,
+                            })
+                        })
+                        .collect();
+                    let mut pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("gbuffer"),
+                        color_attachments: &attachments,
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: &targets.depth,
+                            depth_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(0.0),
+                                store: wgpu::StoreOp::Store,
+                            }),
+                            stencil_ops: None,
+                        }),
+                        ..Default::default()
+                    });
+                    pass.set_viewport(px, py, pw, ph, 0.0, 1.0);
+                    pass.set_bind_group(0, &this.frame_groups[0], &[]);
+                    pass.set_bind_group(2, screen_group, &[]);
+                    pass.set_vertex_buffer(1, this.instance_buffer.slice(..));
+                    for b in opaque {
+                        let mesh = &this.gpu_assets.meshes[&b.mesh];
+                        let mat = &this.gpu_assets.materials[&b.material];
+                        pass.set_pipeline(&this.gbuffer_pipelines[&b.key]);
+                        pass.set_bind_group(1, &mat.bind_group, &[]);
+                        pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                        if b.key.skinned {
+                            let Some(skin) = &mesh.skin else { continue };
+                            pass.set_vertex_buffer(2, skin.slice(..));
+                        }
+                        pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                        let range = mesh.submeshes[b.submesh as usize].clone();
+                        let n = b.instances.end - b.instances.start;
+                        st.triangles += ((range.end - range.start) / 3) as u64 * n as u64;
+                        st.instances += n;
+                        st.draw_calls += 1;
+                        pass.draw_indexed(range, 0, b.instances.clone());
+                    }
+                },
+            );
+            graph.add_pass(
+                "Deferred Lighting",
+                |b| {
+                    for t in gb_tex {
+                        b.read(t);
+                    }
+                    b.read(depth_tex);
+                    for t in [shadow_tex, Some(atlas_tex), ao_tex].into_iter().flatten() {
+                        b.read(t);
+                    }
+                    b.write(color_tex);
+                },
+                move |ctx| {
+                    let mut pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("deferred lighting"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: color_view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        ..Default::default()
+                    });
+                    pass.set_viewport(px, py, pw, ph, 0.0, 1.0);
+                    pass.set_pipeline(&this.deferred_lighting);
+                    pass.set_bind_group(0, &this.frame_groups[0], &[]);
+                    pass.set_bind_group(1, &gb.group, &[]);
+                    pass.set_bind_group(2, screen_group, &[]);
+                    pass.draw(0..3, 0..1);
+                },
+            );
+        }
+        let deferred = gbuffer.is_some();
         {
             let stats_cell = &stats_cell;
             let camera_batches = &camera_batches;
             let camera_terrain = &camera_terrain;
             let camera_features = &camera_features;
+            let camera_steps = &camera_steps;
             let grass_ranges = &grass_ranges;
             let particle_ranges = &particle_ranges;
             let sprite_ranges = &sprite_ranges;
@@ -3173,7 +3617,12 @@ impl SceneRenderer {
                                 depth_slice: None,
                                 resolve_target: resolve,
                                 ops: wgpu::Operations {
-                                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                    // Deferred: the lighting pass already wrote the opaque pixels.
+                                    load: if deferred {
+                                        wgpu::LoadOp::Load
+                                    } else {
+                                        wgpu::LoadOp::Clear(wgpu::Color::BLACK)
+                                    },
                                     store: wgpu::StoreOp::Store,
                                 },
                             })],
@@ -3181,7 +3630,11 @@ impl SceneRenderer {
                                 wgpu::RenderPassDepthStencilAttachment {
                                     view: &targets.depth,
                                     depth_ops: Some(wgpu::Operations {
-                                        load: wgpu::LoadOp::Clear(0.0),
+                                        load: if deferred {
+                                            wgpu::LoadOp::Load
+                                        } else {
+                                            wgpu::LoadOp::Clear(0.0)
+                                        },
                                         // TAA, depth-based post effects and lens flare occlusion read
                                         // depth afterwards.
                                         store: if taa || fx || flare_depth {
@@ -3210,41 +3663,6 @@ impl SceneRenderer {
                             );
                             pass.set_bind_group(0, &this.frame_groups[ci], &[]);
                             pass.set_bind_group(2, screen_group, &[]);
-                            match cam.clear {
-                                ClearMode::Sky => pass.set_pipeline(&fixed.sky),
-                                ClearMode::Color(_) => pass.set_pipeline(&fixed.solid),
-                                ClearMode::DepthOnly => pass.set_pipeline(&fixed.depth_clear),
-                                ClearMode::Nothing => {}
-                            }
-                            if cam.clear != ClearMode::Nothing {
-                                pass.draw(0..3, 0..1);
-                            }
-                            pass.set_vertex_buffer(1, this.instance_buffer.slice(..));
-                            if !camera_terrain[ci].is_empty() {
-                                pass.set_pipeline(&fixed.terrain);
-                                for &(data, mesh_id, idx) in &camera_terrain[ci] {
-                                    let (Some(bg), Some(mesh)) = (
-                                        this.terrain.bind_group(data),
-                                        this.gpu_assets.meshes.get(&mesh_id),
-                                    ) else {
-                                        continue;
-                                    };
-                                    pass.set_bind_group(1, bg, &[]);
-                                    pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-                                    pass.set_index_buffer(
-                                        mesh.indices.slice(..),
-                                        wgpu::IndexFormat::Uint32,
-                                    );
-                                    let range = mesh.submeshes[0].clone();
-                                    st.triangles += ((range.end - range.start) / 3) as u64;
-                                    st.draw_calls += 1;
-                                    pass.draw_indexed(range, 0, idx..idx + 1);
-                                }
-                            }
-                            if ci == 0 && !grass_ranges.is_empty() {
-                                st.draw_calls += this.grass.draw(&mut pass, grass_ranges, samples);
-                                pass.set_vertex_buffer(1, this.instance_buffer.slice(..));
-                            }
                             let draw_batches =
                                 |pass: &mut wgpu::RenderPass,
                                  list: &[Batch],
@@ -3272,6 +3690,114 @@ impl SceneRenderer {
                                         pass.draw_indexed(range, 0, b.instances.clone());
                                     }
                                 };
+                            let draw_terrain =
+                                |pass: &mut wgpu::RenderPass, stats: &mut RenderStats| {
+                                    if !camera_terrain[ci].is_empty() {
+                                        pass.set_pipeline(&fixed.terrain);
+                                        for &(data, mesh_id, idx) in &camera_terrain[ci] {
+                                            let (Some(bg), Some(mesh)) = (
+                                                this.terrain.bind_group(data),
+                                                this.gpu_assets.meshes.get(&mesh_id),
+                                            ) else {
+                                                continue;
+                                            };
+                                            pass.set_bind_group(1, bg, &[]);
+                                            pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                                            pass.set_index_buffer(
+                                                mesh.indices.slice(..),
+                                                wgpu::IndexFormat::Uint32,
+                                            );
+                                            let range = mesh.submeshes[0].clone();
+                                            stats.triangles +=
+                                                ((range.end - range.start) / 3) as u64;
+                                            stats.draw_calls += 1;
+                                            pass.draw_indexed(range, 0, idx..idx + 1);
+                                        }
+                                    }
+                                    if ci == 0 && !grass_ranges.is_empty() {
+                                        stats.draw_calls +=
+                                            this.grass.draw(pass, grass_ranges, samples);
+                                        pass.set_vertex_buffer(1, this.instance_buffer.slice(..));
+                                    }
+                                };
+                            let draw_effects =
+                                |pass: &mut wgpu::RenderPass, stats: &mut RenderStats| {
+                                    if !particle_ranges.is_empty() {
+                                        stats.draw_calls +=
+                                            this.particles.draw(pass, particle_ranges, samples);
+                                    }
+                                    if !frame.vfx.is_empty() {
+                                        stats.draw_calls += this.vfx.draw(pass, frame, samples);
+                                    }
+                                    pass.set_vertex_buffer(1, this.instance_buffer.slice(..));
+                                };
+                            let draw_sprites =
+                                |pass: &mut wgpu::RenderPass, stats: &mut RenderStats| {
+                                    if !sprite_ranges.is_empty() {
+                                        stats.draw_calls +=
+                                            this.sprites.draw(pass, sprite_ranges, samples);
+                                    }
+                                    if !text_ranges.is_empty() {
+                                        stats.draw_calls +=
+                                            this.text.draw(pass, text_ranges, samples);
+                                    }
+                                    pass.set_vertex_buffer(1, this.instance_buffer.slice(..));
+                                };
+                            let draw_gizmos = |pass: &mut wgpu::RenderPass| {
+                                if !frame.lines.is_empty() {
+                                    pass.set_pipeline(&fixed.line);
+                                    pass.set_vertex_buffer(0, this.line_buffer.slice(..));
+                                    pass.draw(0..frame.lines.len() as u32, 0..1);
+                                }
+                            };
+                            pass.set_vertex_buffer(1, this.instance_buffer.slice(..));
+                            if let Some(steps) = &frame.custom_steps {
+                                // A custom render pipeline: its commands, in order.
+                                for (si, step) in steps.iter().enumerate() {
+                                    match step {
+                                        RenderStep::ClearRenderTarget { color, depth } => {
+                                            let p = match (color, depth, cam.clear) {
+                                                (true, _, ClearMode::Sky) => Some(&fixed.sky),
+                                                (true, _, _) => Some(&fixed.solid),
+                                                (false, true, _) => Some(&fixed.depth_clear),
+                                                (false, false, _) => None,
+                                            };
+                                            if let Some(p) = p {
+                                                pass.set_pipeline(p);
+                                                pass.draw(0..3, 0..1);
+                                            }
+                                        }
+                                        RenderStep::DrawSkybox => {
+                                            pass.set_pipeline(&fixed.sky_behind);
+                                            pass.draw(0..3, 0..1);
+                                        }
+                                        RenderStep::DrawRenderers { .. } => {
+                                            draw_batches(&mut pass, &camera_steps[ci][si], &mut st);
+                                        }
+                                        RenderStep::DrawTerrain => draw_terrain(&mut pass, &mut st),
+                                        RenderStep::DrawEffects => draw_effects(&mut pass, &mut st),
+                                        RenderStep::DrawSprites => draw_sprites(&mut pass, &mut st),
+                                        RenderStep::DrawGizmos => draw_gizmos(&mut pass),
+                                    }
+                                }
+                                continue;
+                            }
+                            // The Universal Render Pipeline's order.
+                            // Deferred: only fill the background behind the G-buffer.
+                            let clear_pipeline = match (cam.clear, deferred) {
+                                (ClearMode::Sky, false) => Some(&fixed.sky),
+                                (ClearMode::Color(_), false) => Some(&fixed.solid),
+                                (ClearMode::DepthOnly, false) => Some(&fixed.depth_clear),
+                                (ClearMode::Sky, true) => Some(&fixed.sky_behind),
+                                (ClearMode::Color(_), true) => Some(&fixed.solid_behind),
+                                _ => None,
+                            };
+                            if let Some(p) = clear_pipeline {
+                                pass.set_pipeline(p);
+                                pass.draw(0..3, 0..1);
+                            }
+                            pass.set_vertex_buffer(1, this.instance_buffer.slice(..));
+                            draw_terrain(&mut pass, &mut st);
                             let features_at = |event: RenderPassEvent| {
                                 camera_features[ci]
                                     .iter()
@@ -3279,33 +3805,20 @@ impl SceneRenderer {
                                     .map(|(_, l)| l)
                             };
                             let (ob, tb) = &camera_batches[ci];
-                            draw_batches(&mut pass, ob, &mut st);
+                            // Deferred drew the opaque objects into the G-buffer.
+                            if !deferred {
+                                draw_batches(&mut pass, ob, &mut st);
+                            }
                             for list in features_at(RenderPassEvent::AfterRenderingOpaques) {
                                 draw_batches(&mut pass, list, &mut st);
                             }
                             draw_batches(&mut pass, tb, &mut st);
-                            if !particle_ranges.is_empty() {
-                                st.draw_calls +=
-                                    this.particles.draw(&mut pass, particle_ranges, samples);
-                            }
-                            if !frame.vfx.is_empty() {
-                                st.draw_calls += this.vfx.draw(&mut pass, frame, samples);
-                            }
-                            if !sprite_ranges.is_empty() {
-                                st.draw_calls +=
-                                    this.sprites.draw(&mut pass, sprite_ranges, samples);
-                            }
-                            if !text_ranges.is_empty() {
-                                st.draw_calls += this.text.draw(&mut pass, text_ranges, samples);
-                            }
+                            draw_effects(&mut pass, &mut st);
+                            draw_sprites(&mut pass, &mut st);
                             for list in features_at(RenderPassEvent::AfterRenderingTransparents) {
                                 draw_batches(&mut pass, list, &mut st);
                             }
-                            if !frame.lines.is_empty() {
-                                pass.set_pipeline(&fixed.line);
-                                pass.set_vertex_buffer(0, this.line_buffer.slice(..));
-                                pass.draw(0..frame.lines.len() as u32, 0..1);
-                            }
+                            draw_gizmos(&mut pass);
                         }
                     }
                 },
@@ -3880,6 +4393,9 @@ mod shader_tests {
         let shadow = shadow_source(include_str!("shaders/shadow_surface.wgsl"));
         if let Err(e) = validate_wgsl(&shadow) {
             panic!("shadow.wgsl:\n{e}");
+        }
+        if let Err(e) = validate_wgsl(&format!("{common}\n{}", deferred_source())) {
+            panic!("deferred.wgsl:\n{e}");
         }
     }
 }

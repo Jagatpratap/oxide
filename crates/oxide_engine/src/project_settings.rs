@@ -168,10 +168,12 @@ pub struct ProjectSettings {
     pub localization: oxide_localization::LocalizationSettings,
     /// Default presets (Unity's Preset Manager).
     pub preset_manager: oxide_assets::preset::PresetManager,
+    /// Default render pipeline (Unity's Graphics Settings).
+    pub graphics: oxide_scene::GraphicsSettings,
 }
 
 /// The pages and their files, for MCP and error messages.
-pub const SECTIONS: [(&str, &str); 9] = [
+pub const SECTIONS: [(&str, &str); 10] = [
     ("tags_and_layers", "TagManager.yaml"),
     ("time", "TimeManager.yaml"),
     ("physics", "DynamicsManager.yaml"),
@@ -181,6 +183,7 @@ pub const SECTIONS: [(&str, &str); 9] = [
     ("navigation", "NavMeshAreas.yaml"),
     ("localization", "LocalizationSettings.yaml"),
     ("preset_manager", "PresetManager.yaml"),
+    ("graphics", "GraphicsSettings.yaml"),
 ];
 
 fn read<T: DeserializeOwned + Default>(dir: &Path, file: &str, warnings: &mut Vec<String>) -> T {
@@ -210,6 +213,7 @@ impl ProjectSettings {
             navigation: read(&dir, SECTIONS[6].1, &mut w),
             localization: read(&dir, SECTIONS[7].1, &mut w),
             preset_manager: read(&dir, SECTIONS[8].1, &mut w),
+            graphics: read(&dir, SECTIONS[9].1, &mut w),
         };
         (s, w)
     }
@@ -228,6 +232,7 @@ impl ProjectSettings {
             serde_yaml_ng::to_string(&self.navigation),
             serde_yaml_ng::to_string(&self.localization),
             serde_yaml_ng::to_string(&self.preset_manager),
+            serde_yaml_ng::to_string(&self.graphics),
         ];
         for ((_, file), text) in SECTIONS.iter().zip(texts) {
             let text = text.map_err(|e| e.to_string())?;
@@ -289,6 +294,10 @@ impl ProjectSettings {
                 .unwrap_or_default(),
             preset_manager: world
                 .try_resource::<oxide_assets::preset::PresetManager>()
+                .cloned()
+                .unwrap_or_default(),
+            graphics: world
+                .try_resource::<oxide_scene::GraphicsSettings>()
                 .cloned()
                 .unwrap_or_default(),
         }
@@ -359,6 +368,29 @@ impl ProjectSettings {
         }
         world.resources.insert(loc);
         world.resources.insert(self.preset_manager.clone());
+        world.resources.insert(self.graphics.clone());
+        // The pipeline assets in use are loaded now so rendering can read them.
+        let pipelines: Vec<_> = self
+            .graphics
+            .default_render_pipeline
+            .iter()
+            .chain(
+                self.quality
+                    .levels
+                    .iter()
+                    .filter_map(|l| l.render_pipeline.as_ref()),
+            )
+            .cloned()
+            .collect();
+        if let Some(assets) = world.try_resource_mut::<oxide_assets::AssetServer>() {
+            for h in pipelines {
+                if assets.data.get(&h).is_none()
+                    && let Err(e) = assets.load_data(h.path())
+                {
+                    oxide_core::debug_log_warning!("{e}");
+                }
+            }
+        }
     }
 
     /// One page as JSON (MCP).
@@ -374,6 +406,7 @@ impl ProjectSettings {
                 "navigation" => serde_json::to_value(&self.navigation),
                 "localization" => serde_json::to_value(&self.localization),
                 "preset_manager" => serde_json::to_value(&self.preset_manager),
+                "graphics" => serde_json::to_value(&self.graphics),
                 _ => return None,
             }
             .unwrap_or_default(),
@@ -406,6 +439,7 @@ impl ProjectSettings {
             "navigation" => self.navigation = parse(current)?,
             "localization" => self.localization = parse(current)?,
             "preset_manager" => self.preset_manager = parse(current)?,
+            "graphics" => self.graphics = parse(current)?,
             _ => self.player = parse(current)?,
         }
         Ok(())

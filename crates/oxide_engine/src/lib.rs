@@ -32,6 +32,7 @@ mod mcp_vfx;
 pub mod navigation;
 pub mod objects;
 pub mod project_settings;
+pub mod render_pipeline;
 pub mod sprites2d;
 pub mod streaming;
 pub mod volumes;
@@ -50,7 +51,6 @@ pub use oxide_navigation as nav;
 pub use oxide_network as network;
 pub use oxide_particles as particles;
 pub use oxide_physics as physics;
-pub use oxide_render as render;
 pub use oxide_scene as scene;
 pub use oxide_standard as standard;
 pub use oxide_terrain as terrain;
@@ -276,6 +276,9 @@ pub mod prelude {
     };
     pub use oxide_vfx::{VisualEffect, VisualEffectAsset};
 
+    pub use crate::render_pipeline::{
+        FilteringSettings, RenderPipeline, RenderPipelines, ScriptableRenderContext,
+    };
     pub use oxide_core::{
         AnimationCurve, Gradient, MinMaxCurve, MinMaxGradient, Reflect, Time, debug_log,
         debug_log_error, debug_log_warning,
@@ -292,6 +295,7 @@ pub mod prelude {
         Rigidbody, RigidbodyInterpolation, SphereCollider, TerrainCollider, WheelCollider,
         WheelFrictionCurve,
     };
+    pub use oxide_render::{CameraView, RenderQueue};
     pub use oxide_scene::{
         AimConstraint, ConstraintAxes, ConstraintSource, LookAtConstraint, ParentConstraint,
         PositionConstraint, RotationConstraint, ScaleConstraint, WorldUpType,

@@ -262,15 +262,12 @@ fn env_specular(r: vec3f, pos: vec3f, rough: f32, sel: vec2u) -> vec3f {
     return mix(cb, sample_probe(a, r, pos, mip), w);
 }
 
-// Full surface shading: sun (with shadows), punctual lights, sky ambient and reflections.
-fn shade(world_pos: vec3f, n: vec3f, geo_n: vec3f, albedo: vec3f, metallic: f32, rough: f32, ao_in: f32, receive_shadows: bool, probe_sel: vec2u, frag_xy: vec2f, gi: u32, lm_uv: vec2f) -> vec3f {
+// Direct light: the sun (with cascaded shadows) and the clustered point/spot lights.
+fn direct_light(world_pos: vec3f, n: vec3f, geo_n: vec3f, albedo: vec3f, metallic: f32, rough: f32, receive_shadows: bool, frag_xy: vec2f) -> vec3f {
     let f0 = mix(vec3f(0.04), albedo, metallic);
-    let ssao = screen_ao(frag_xy);
-    let ao = min(ao_in, ssao);
     // URP: AO also darkens direct light by "Direct Lighting Strength".
-    let direct_ao = mix(1.0, ssao, frame.ssao.y);
+    let direct_ao = mix(1.0, screen_ao(frag_xy), frame.ssao.y);
     let v = normalize(frame.camera_pos.xyz - world_pos);
-    let nv = max(dot(n, v), 1e-4);
     var color = vec3f(0.0);
     if (frame.sun_dir.w > 0.5) {
         let view_depth = (frame.view * vec4f(world_pos, 1.0)).z;
@@ -305,13 +302,27 @@ fn shade(world_pos: vec3f, n: vec3f, geo_n: vec3f, albedo: vec3f, metallic: f32,
         }
         color += brdf(n, v, l, albedo, f0, rough, metallic) * L.color.rgb * atten * direct_ao;
     }
-    // Environment: SH diffuse ambient + prefiltered reflection probes / sky.
+    return color;
+}
+
+// Indirect light: baked or ambient diffuse (lightmaps, light probes, sky SH) and reflections
+// (probes / sky), with material and screen-space AO.
+fn indirect_light(world_pos: vec3f, n: vec3f, geo_n: vec3f, albedo: vec3f, metallic: f32, rough: f32, ao_in: f32, probe_sel: vec2u, frag_xy: vec2f, gi: u32, lm_uv: vec2f) -> vec3f {
+    let f0 = mix(vec3f(0.04), albedo, metallic);
+    let ao = min(ao_in, screen_ao(frag_xy));
+    let v = normalize(frame.camera_pos.xyz - world_pos);
+    let nv = max(dot(n, v), 1e-4);
     let diffuse_amb = diffuse_light(n, gi, lm_uv) * albedo * (1.0 - metallic);
     let r = reflect(-v, n);
     let spec_env = env_specular(r, world_pos, rough, probe_sel);
     let horizon_occ = clamp(1.0 + dot(r, geo_n), 0.0, 1.0);
-    color += (diffuse_amb + spec_env * env_brdf_approx(f0, rough, nv) * frame.fog_params.w * horizon_occ * horizon_occ) * ao;
-    return color;
+    return (diffuse_amb + spec_env * env_brdf_approx(f0, rough, nv) * frame.fog_params.w * horizon_occ * horizon_occ) * ao;
+}
+
+// Full surface shading (forward): direct + indirect.
+fn shade(world_pos: vec3f, n: vec3f, geo_n: vec3f, albedo: vec3f, metallic: f32, rough: f32, ao_in: f32, receive_shadows: bool, probe_sel: vec2u, frag_xy: vec2f, gi: u32, lm_uv: vec2f) -> vec3f {
+    return direct_light(world_pos, n, geo_n, albedo, metallic, rough, receive_shadows, frag_xy)
+        + indirect_light(world_pos, n, geo_n, albedo, metallic, rough, ao_in, probe_sel, frag_xy, gi, lm_uv);
 }
 
 // Scene view debug views (frame.misc.y): 1 albedo, 2 normals, 3 lighting only,

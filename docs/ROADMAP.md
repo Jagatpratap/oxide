@@ -308,14 +308,18 @@ from the fixed edge and each object along its matching local axis).
   aliased by lifetime (wgpu handles barriers). The scene runs on it (Shadow Cascades, Shadow Atlas,
   Depth Prepass, SSAO, Draw Objects; the TAA resolve follows) and so does post-processing; the passes
   that ran each frame are recorded for the Frame Debugger ([SRP fundamentals](https://docs.unity3d.com/Manual/scriptable-render-pipeline-introduction.html))
-- ◐ Extending the pipeline: URP renderer features — Full Screen Pass (user WGSL, validated, hot
+- ☑ Extending the pipeline: URP renderer features — Full Screen Pass (user WGSL, validated, hot
   reloaded) and Render Objects (layer redraw with override material / depth test) at
-  After Opaques / After Transparents / Before / After Post-processing. A whole custom
-  `RenderPipeline` (Rust trait + pipeline asset) ☐
+  After Opaques / After Transparents / Before / After Post-processing. Universal Render Pipeline
+  Asset (`.renderpipeline`: rendering path, MSAA, opaque/transparent layer masks, post-processing) picked in
+  Project Settings > Graphics and overridable per Quality level; custom render pipelines from scripts
+  (`RenderPipeline` trait, `ScriptableRenderContext`: clear, skybox, draw renderers with filtering and override
+  material, terrain, effects, sprites, gizmos; `scripts! { ...; pipelines: T }`, hot reloaded) ☑
   ([Render pipelines](https://docs.unity3d.com/Manual/render-pipelines.html),
   [Custom rendering in URP](https://docs.unity3d.com/Manual/urp/customizing-urp.html))
-- ◐ Universal pipeline: Forward+ (clustered lights: 16×9×24 clusters, up to 1024 lights) ☑;
-  Deferred ☐
+- ☑ Universal pipeline: Forward+ (clustered lights: 16×9×24 clusters, up to 1024 lights);
+  Deferred (G-buffer with per-object indirect light, full-screen lighting pass, forward-only objects after;
+  one camera, no MSAA, like URP)
   ([URP](https://docs.unity3d.com/Manual/universal-render-pipeline.html),
   [Rendering paths](https://docs.unity3d.com/Manual/rendering-paths-introduction.html))
 - ◐ MeshFilter / MeshRenderer / SkinnedMeshRenderer, submeshes, GPU instancing, SRP-batcher-style persistent buffers, frustum culling, LOD groups
