@@ -16,6 +16,8 @@ pub struct MenuItem {
     /// Shown next to the item (from the [`Keymap`]).
     pub shortcut: String,
     pub action: Option<Action>,
+    /// Greyed out (an extension's validate function said no).
+    pub enabled: bool,
 }
 
 fn item(path: &str, action: Action) -> MenuItem {
@@ -23,6 +25,7 @@ fn item(path: &str, action: Action) -> MenuItem {
         path: path.to_owned(),
         shortcut: String::new(),
         action: Some(action),
+        enabled: true,
     }
 }
 
@@ -31,6 +34,7 @@ fn sep(menu: &str) -> MenuItem {
         path: format!("{menu}/-"),
         shortcut: String::new(),
         action: None,
+        enabled: true,
     }
 }
 
@@ -233,6 +237,7 @@ pub fn menu_items(world: &World, keymap: &Keymap) -> Vec<MenuItem> {
             path: format!("Component/{menu}"),
             shortcut: String::new(),
             action: Some(Action::AddComponent(name)),
+            enabled: true,
         });
     }
     for t in Tab::ALL {
@@ -327,7 +332,43 @@ pub fn menu_items(world: &World, keymap: &Keymap) -> Vec<MenuItem> {
     ));
     v.push(sep("Window"));
     v.push(item("Window/Layouts/Default", Action::ResetLayout));
-    with_shortcuts(v, keymap)
+    let mut v = with_shortcuts(v, keymap);
+    // Script editor extensions: custom windows and `[MenuItem]`s.
+    for (path, action, shortcut) in crate::extensions::menu_items(world) {
+        v.retain(|m| m.path != path);
+        v.push(MenuItem {
+            path,
+            shortcut: shortcut.unwrap_or_default(),
+            action: Some(action),
+            enabled: true,
+        });
+    }
+    v
+}
+
+/// The menu bar's top-level menus: the built-in ones, then any new ones extensions add.
+pub fn top_level_menus(items: &[MenuItem]) -> Vec<String> {
+    let mut tops: Vec<String> = [
+        "File",
+        "Edit",
+        "Assets",
+        "GameObject",
+        "Component",
+        "Tools",
+        "Window",
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    for m in items {
+        if let Some((top, _)) = m.path.split_once('/')
+            && !tops.iter().any(|t| t == top)
+        {
+            // Before Window, like Unity's custom menus.
+            let at = tops.len() - 1;
+            tops.insert(at, top.to_owned());
+        }
+    }
+    tops
 }
 
 fn with_shortcuts(mut v: Vec<MenuItem>, keymap: &Keymap) -> Vec<MenuItem> {
@@ -340,20 +381,16 @@ fn with_shortcuts(mut v: Vec<MenuItem>, keymap: &Keymap) -> Vec<MenuItem> {
 }
 
 /// Shows `items` (paths relative to this level), nesting submenus by path segment.
-fn show_level(
-    ui: &mut egui::Ui,
-    out: &mut Vec<Action>,
-    items: &[(Vec<String>, String, Option<Action>)],
-) {
+fn show_level(ui: &mut egui::Ui, out: &mut Vec<Action>, items: &[Level]) {
     let mut i = 0;
     while i < items.len() {
-        let (segs, shortcut, action) = &items[i];
+        let (segs, shortcut, action, enabled) = &items[i];
         if segs.len() == 1 {
             if segs[0] == "-" {
                 ui.separator();
             } else if let Some(a) = action {
                 let b = egui::Button::new(&segs[0]).shortcut_text(shortcut.as_str());
-                if ui.add(b).clicked() {
+                if ui.add_enabled(*enabled, b).clicked() {
                     out.push(a.clone());
                     ui.close();
                 }
@@ -368,6 +405,7 @@ fn show_level(
                 items[i].0[1..].to_vec(),
                 items[i].1.clone(),
                 items[i].2.clone(),
+                items[i].3,
             ));
             i += 1;
         }
@@ -375,7 +413,10 @@ fn show_level(
     }
 }
 
-fn split(items: Vec<MenuItem>, prefix: &str) -> Vec<(Vec<String>, String, Option<Action>)> {
+/// A menu entry relative to its level: path segments, shortcut, action, enabled.
+type Level = (Vec<String>, String, Option<Action>, bool);
+
+fn split(items: Vec<MenuItem>, prefix: &str) -> Vec<Level> {
     items
         .into_iter()
         .filter_map(|m| {
@@ -384,6 +425,7 @@ fn split(items: Vec<MenuItem>, prefix: &str) -> Vec<(Vec<String>, String, Option
                 rest.split('/').map(str::to_owned).collect(),
                 m.shortcut,
                 m.action,
+                m.enabled,
             ))
         })
         .collect()
@@ -396,17 +438,18 @@ pub fn create_menu(st: &mut EditorState, ui: &mut egui::Ui) {
 }
 
 pub fn menu_bar(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
-    let items = menu_items(&engine.world, &st.keymap);
+    let mut items = menu_items(&engine.world, &st.keymap);
+    let tops = top_level_menus(&items);
+    // Extension items' validate functions (only while a menu is open: they run script code).
+    if egui::Popup::is_any_open(ui.ctx()) {
+        for m in &mut items {
+            if let Some(Action::ExtensionMenu(p)) = &m.action {
+                m.enabled = crate::extensions::validate(st, &mut engine.world, p);
+            }
+        }
+    }
     egui::MenuBar::new().ui(ui, |ui| {
-        for top in [
-            "File",
-            "Edit",
-            "Assets",
-            "GameObject",
-            "Component",
-            "Tools",
-            "Window",
-        ] {
+        for top in &tops {
             let prefix = format!("{top}/");
             let level: Vec<_> = split(
                 items
@@ -416,6 +459,7 @@ pub fn menu_bar(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
                         path: m.path.clone(),
                         shortcut: m.shortcut.clone(),
                         action: m.action.clone(),
+                        enabled: m.enabled,
                     })
                     .collect(),
                 &prefix,

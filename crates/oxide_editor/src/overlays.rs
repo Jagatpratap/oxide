@@ -175,7 +175,30 @@ fn layout(st: &EditorState, id: &str) -> OverlayLayout {
         .find(|l| l.id == id)
         .cloned()
         .or_else(|| OverlayKind::from_id(id).map(OverlayKind::default_layout))
-        .expect("known overlay")
+        // A script's overlay starts floating, like Unity's custom overlays.
+        .unwrap_or(OverlayLayout {
+            id: id.to_owned(),
+            visible: true,
+            collapsed: false,
+            dock: Dock::Floating,
+            pos: [0.1, 0.1],
+        })
+}
+
+/// A built-in overlay or one from a script's editor extensions.
+#[derive(Clone, Debug, PartialEq)]
+enum Entry {
+    Builtin(OverlayKind),
+    Custom(String),
+}
+
+impl Entry {
+    fn id(&self) -> &str {
+        match self {
+            Entry::Builtin(k) => k.id(),
+            Entry::Custom(id) => id,
+        }
+    }
 }
 
 /// The Camera component shown in the Cameras overlay.
@@ -212,10 +235,28 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, rect: Re
         };
     }
 
-    let kinds: Vec<OverlayKind> = OverlayKind::ALL
+    let mut kinds: Vec<Entry> = OverlayKind::ALL
         .into_iter()
         .filter(|k| layout(st, k.id()).visible && k.applies(st, engine))
+        .map(Entry::Builtin)
         .collect();
+    let custom: Vec<String> = crate::extensions::all_overlay_ids(&engine.world);
+    if !custom.is_empty() {
+        let visible: Vec<String> = custom
+            .iter()
+            .filter(|id| layout(st, id).visible)
+            .cloned()
+            .collect();
+        if !visible.is_empty() {
+            let applies = crate::extensions::overlay_ids(st, &mut engine.world);
+            kinds.extend(
+                visible
+                    .into_iter()
+                    .filter(|id| applies.contains(id))
+                    .map(Entry::Custom),
+            );
+        }
+    }
     // Docked overlays flow along their edge: top/bottom left to right, left/right top down
     // (below the top toolbar).
     // The top toolbar wraps onto more rows when it doesn't fit; side docks start below it
@@ -230,7 +271,8 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, rect: Re
         ("Right", rect.right_top() + vec2(-MARGIN, top_h + GAP)),
     ]);
     for kind in kinds {
-        let id = kind.id();
+        let id = kind.id().to_owned();
+        let id = id.as_str();
         let l = layout(st, id);
         let size = st
             .overlays
@@ -323,10 +365,15 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, rect: Re
                                     st.prefs_changed = true;
                                 }
                             } else {
-                                if !horizontal && kind != OverlayKind::Orientation {
+                                if !horizontal && kind != Entry::Builtin(OverlayKind::Orientation) {
                                     ui.label(egui::RichText::new(id).small().weak());
                                 }
-                                content(kind, st, engine, ui, horizontal);
+                                match &kind {
+                                    Entry::Builtin(k) => content(*k, st, engine, ui, horizontal),
+                                    Entry::Custom(c) => {
+                                        crate::extensions::overlay_ui(st, engine, ui, c)
+                                    }
+                                }
                             }
                         };
                         if horizontal {
@@ -414,7 +461,7 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, rect: Re
     if st.overlays.drag.is_some() && !ctx.input(|i| i.pointer.any_down()) {
         st.overlays.drag = None;
     }
-    overlay_menu(st, &ctx, rect);
+    overlay_menu(st, &ctx, rect, &custom);
 }
 
 fn overlay_frame(ui: &egui::Ui) -> egui::Frame {
@@ -433,7 +480,7 @@ fn overlay_frame(ui: &egui::Ui) -> egui::Frame {
 }
 
 /// Unity's Overlay menu: show or hide each overlay, and overlay presets.
-fn overlay_menu(st: &mut EditorState, ctx: &egui::Context, rect: Rect) {
+fn overlay_menu(st: &mut EditorState, ctx: &egui::Context, rect: Rect, custom: &[String]) {
     let Some(at) = st.overlays.menu_at else {
         return;
     };
@@ -454,23 +501,28 @@ fn overlay_menu(st: &mut EditorState, ctx: &egui::Context, rect: Rect) {
                     });
                 });
                 ui.separator();
-                for k in OverlayKind::ALL {
-                    let mut v = layout(st, k.id()).visible;
-                    if ui.checkbox(&mut v, k.id()).changed() {
-                        layout_mut(st, k.id()).visible = v;
+                let ids: Vec<String> = OverlayKind::ALL
+                    .iter()
+                    .map(|k| k.id().to_owned())
+                    .chain(custom.iter().cloned())
+                    .collect();
+                for id in &ids {
+                    let mut v = layout(st, id).visible;
+                    if ui.checkbox(&mut v, id.as_str()).changed() {
+                        layout_mut(st, id).visible = v;
                         st.prefs_changed = true;
                     }
                 }
                 ui.horizontal(|ui| {
                     if ui.button("Show All").clicked() {
-                        for k in OverlayKind::ALL {
-                            layout_mut(st, k.id()).visible = true;
+                        for id in &ids {
+                            layout_mut(st, id).visible = true;
                         }
                         st.prefs_changed = true;
                     }
                     if ui.button("Hide All").clicked() {
-                        for k in OverlayKind::ALL {
-                            layout_mut(st, k.id()).visible = false;
+                        for id in &ids {
+                            layout_mut(st, id).visible = false;
                         }
                         st.prefs_changed = true;
                     }
@@ -556,16 +608,37 @@ fn content(
                 (Tool::Rect, "▭", "Rect Tool (T)"),
                 (Tool::Transform, "⊕", "Transform Tool (Y)"),
             ] {
+                let on = st.tool == t && st.custom_tool.is_none();
                 if ui
-                    .add(egui::Button::selectable(st.tool == t, label).min_size(vec2(24.0, 22.0)))
+                    .add(egui::Button::selectable(on, label).min_size(vec2(24.0, 22.0)))
                     .on_hover_text(tip)
                     .clicked()
                 {
+                    crate::extensions::set_custom_tool(st, &mut engine.world, None);
                     st.tool = t;
+                }
+            }
+            // Script tools (Unity `[EditorTool]`), after the built-in ones.
+            for (name, icon, available) in crate::extensions::tools(st, &mut engine.world) {
+                let on = st.custom_tool.as_deref() == Some(name.as_str());
+                let label = if icon.is_empty() { name.clone() } else { icon };
+                if ui
+                    .add_enabled(
+                        available,
+                        egui::Button::selectable(on, label).min_size(vec2(24.0, 22.0)),
+                    )
+                    .on_hover_text(&name)
+                    .clicked()
+                {
+                    let next = (!on).then_some(name);
+                    crate::extensions::set_custom_tool(st, &mut engine.world, next);
                 }
             }
         }),
         OverlayKind::ToolSettings => flow(ui, &mut |ui| {
+            if crate::extensions::tool_settings_ui(st, engine, ui) {
+                return;
+            }
             let pivot = if st.center_handles { "Center" } else { "Pivot" };
             if ui
                 .button(pivot)

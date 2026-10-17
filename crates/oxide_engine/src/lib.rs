@@ -5,6 +5,7 @@ pub mod app;
 pub mod builtin_assets;
 pub mod bus;
 pub mod custom_editor;
+pub mod editor_ext;
 pub mod engine;
 pub mod extract;
 pub mod gui;
@@ -46,6 +47,9 @@ pub mod volumes;
 
 pub use app::{App, AppControl, EngineConfig, McpToolsFn};
 pub use custom_editor::{CustomEditor, CustomEditors, InspectorGui, MessageType};
+pub use editor_ext::{
+    EditorContext, EditorExtensions, EditorTool, EditorWindow, Overlay, PropertyGui, SceneGui,
+};
 pub use engine::{Engine, GameViewport, Plugin, Shell, init_world};
 
 pub use oxide_animation as animation;
@@ -234,7 +238,10 @@ pub mod prelude {
         color_material, create_camera, create_directional_light, create_point_light,
         create_primitive, instantiate_model, set_material,
     };
-    pub use crate::{App, AppControl, CustomEditor, InspectorGui, MessageType};
+    pub use crate::{
+        App, AppControl, CustomEditor, EditorContext, EditorExtensions, EditorTool, EditorWindow,
+        InspectorGui, MessageType, Overlay, PropertyGui, SceneGui,
+    };
     pub use oxide_animation::{
         Animation, Animator, AnimatorStateInfo, AnimatorUpdateMode, AvatarIKGoal, AvatarIKHint,
         HumanBodyBones, StateMachineBehaviour, StateMachineBehaviours,

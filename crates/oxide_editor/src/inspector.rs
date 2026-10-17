@@ -1001,7 +1001,11 @@ fn components(
                 };
                 let is_override = overridden.iter().any(|x| x == f.name);
                 let block = is_block(&f, f.kind, f.type_name, &v2);
-                let changed = if block {
+                // A script's property drawer draws the whole row.
+                let drawn = w
+                    .try_resource::<oxide_engine::EditorExtensions>()
+                    .is_some_and(|x| x.drawer_for(&f).is_some());
+                let changed = if block || drawn {
                     field_row(ui, w, &f, label.clone(), &mut v2, mixed, &format!("{}{}", cid.0, f.name))
                 } else {
                     ui
@@ -1782,6 +1786,42 @@ fn is_block(f: &FieldInfo, kind: ValueKind, type_name: Option<&str>, v: &Value) 
 /// Returns whether the value changed.
 #[allow(clippy::too_many_arguments)]
 pub fn field_row(
+    ui: &mut egui::Ui,
+    w: &World,
+    f: &FieldInfo,
+    label: impl Into<egui::WidgetText>,
+    v: &mut Value,
+    mixed: bool,
+    salt: &str,
+) -> bool {
+    // A script's property drawer for this field's type or `drawer` attribute (Unity
+    // `[CustomPropertyDrawer]`).
+    if let Some(draw) = w
+        .try_resource::<oxide_engine::EditorExtensions>()
+        .and_then(|x| x.drawer_for(f))
+    {
+        let label: egui::WidgetText = label.into();
+        let default = |ui: &mut egui::Ui, v: &mut Value, l: &str| {
+            field_row_default(ui, w, f, l.to_owned(), v, mixed, salt)
+        };
+        let prefix = |ui: &mut egui::Ui, text: &str| prop_label(ui, text);
+        let mut gui = oxide_engine::PropertyGui::new(
+            ui,
+            w,
+            f,
+            label.text().to_owned(),
+            salt.to_owned(),
+            &default,
+            &prefix,
+        );
+        return draw(&mut gui, v);
+    }
+    field_row_default(ui, w, f, label, v, mixed, salt)
+}
+
+/// [`field_row`] without property drawers.
+#[allow(clippy::too_many_arguments)]
+fn field_row_default(
     ui: &mut egui::Ui,
     w: &World,
     f: &FieldInfo,

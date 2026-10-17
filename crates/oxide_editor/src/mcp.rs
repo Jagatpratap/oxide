@@ -40,7 +40,15 @@ fn state_json(ed: &Editor, e: &Engine) -> Json {
         },
         "scene": { "name": w.scene_name, "path": w.scene_path, "dirty": st.dirty, "objects": w.len() },
         "selection": st.selection.iter().map(|&id| json!({ "id": id.to_bits(), "path": w.path_of(id) })).collect::<Vec<_>>(),
-        "tool": st.tool.name(),
+        "tool": st.custom_tool.clone().unwrap_or_else(|| st.tool.name().to_owned()),
+        "extensions": e.world.try_resource::<oxide_engine::EditorExtensions>().map(|x| json!({
+            "windows": x.windows().iter().map(|w| json!({ "title": w.title, "menu": w.menu })).collect::<Vec<_>>(),
+            "open_windows": x.open_window_titles(),
+            "menu_items": x.menu_items().iter().map(|m| json!({ "path": m.path, "shortcut": m.shortcut, "priority": m.priority })).collect::<Vec<_>>(),
+            "property_drawers": x.drawer_names(),
+            "overlays": x.overlay_ids(),
+            "tools": x.tool_names().into_iter().map(|(n, _)| n).collect::<Vec<_>>(),
+        })),
         "handles": if st.local_handles { "local" } else { "global" },
         "handle_position": if st.center_handles { "center" } else { "pivot" },
         "game_view_focused": st.game_focused,
@@ -263,10 +271,10 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
         ToolDef::new(
             "editor_set_tool",
             "Set transform tool",
-            "Selects the Scene view tool (hand, move, rotate, scale, rect, transform), handle orientation \
-             (global/local) and handle position (pivot/center).",
+            "Selects the Scene view tool (hand, move, rotate, scale, rect, transform, or a script's custom \
+             tool by name), handle orientation (global/local) and handle position (pivot/center).",
             schema(
-                json!({ "tool": { "type": "string", "enum": ["hand", "move", "rotate", "scale", "rect", "transform"] },
+                json!({ "tool": { "type": "string", "description": "hand, move, rotate, scale, rect, transform, or a custom tool name" },
                        "handles": { "type": "string", "enum": ["global", "local"] },
                        "position": { "type": "string", "enum": ["pivot", "center"] } }),
                 &[],
@@ -275,9 +283,23 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
         |args, e| {
             with_editor(e, |ed, e| {
                 if let Some(t) = args.get("tool").and_then(Json::as_str) {
-                    match Tool::parse(t) {
-                        Some(t) => ed.st.tool = t,
-                        None => return ToolResult::error(format!("unknown tool `{t}`")),
+                    let custom = e
+                        .world
+                        .try_resource::<oxide_engine::EditorExtensions>()
+                        .and_then(|x| {
+                            x.tool_names()
+                                .into_iter()
+                                .find(|(n, _)| n.eq_ignore_ascii_case(t))
+                        });
+                    match (Tool::parse(t), custom) {
+                        (Some(t), _) => {
+                            crate::extensions::set_custom_tool(&mut ed.st, &mut e.world, None);
+                            ed.st.tool = t;
+                        }
+                        (None, Some((n, _))) => {
+                            crate::extensions::set_custom_tool(&mut ed.st, &mut e.world, Some(n))
+                        }
+                        (None, None) => return ToolResult::error(format!("unknown tool `{t}`")),
                     }
                 }
                 if let Some(h) = args.get("handles").and_then(Json::as_str) {
@@ -292,33 +314,8 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
     );
 
     let windows: Vec<&str> = crate::Tab::ALL
-        .iter()
-        .chain(&[
-            crate::Tab::ProjectSettings,
-            crate::Tab::Preferences,
-            crate::Tab::Shortcuts,
-            crate::Tab::InputActions,
-            crate::Tab::Animator,
-            crate::Tab::Animation,
-            crate::Tab::AudioMixer,
-            crate::Tab::SpriteEditor,
-            crate::Tab::TilePalette,
-            crate::Tab::Navigation,
-            crate::Tab::Timeline,
-            crate::Tab::ShaderGraph,
-            crate::Tab::VfxGraph,
-            crate::Tab::UiBuilder,
-            crate::Tab::LocalizationTables,
-            crate::Tab::ProBuilder,
-            crate::Tab::Lighting,
-            crate::Tab::LightExplorer,
-            crate::Tab::TestRunner,
-            crate::Tab::FontAssetCreator,
-            crate::Tab::TerrainToolbox,
-            crate::Tab::PackageManager,
-            crate::Tab::Profiler,
-            crate::Tab::FrameDebugger,
-        ])
+        .into_iter()
+        .chain(extra_windows())
         .map(|t| t.title())
         .collect();
     tool(
@@ -332,42 +329,27 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
              \"Console\", \"Scene View\", \"Colors\", \"External Tools\"). For Input Actions, `asset` is the \
              .inputactions file to edit.",
             schema(
-                json!({ "window": { "type": "string", "enum": windows }, "page": { "type": "string" }, "asset": { "type": "string" } }),
+                json!({ "window": { "type": "string", "description": format!("{}, or a script's custom window title", windows.join(", ")) }, "page": { "type": "string" }, "asset": { "type": "string" } }),
                 &["window"],
             ),
         ),
         |args, e| {
             with_editor(e, |ed, e| {
                 let name = args.get("window").and_then(Json::as_str).unwrap_or("");
-                let all = crate::Tab::ALL.into_iter().chain([
-                    crate::Tab::ProjectSettings,
-                    crate::Tab::Preferences,
-                    crate::Tab::Shortcuts,
-                    crate::Tab::InputActions,
-                    crate::Tab::Animator,
-                    crate::Tab::Animation,
-                    crate::Tab::AudioMixer,
-                    crate::Tab::SpriteEditor,
-                    crate::Tab::TilePalette,
-                    crate::Tab::Navigation,
-                    crate::Tab::Timeline,
-                    crate::Tab::ShaderGraph,
-                    crate::Tab::VfxGraph,
-                    crate::Tab::UiBuilder,
-                    crate::Tab::LocalizationTables,
-                    crate::Tab::ProBuilder,
-                    crate::Tab::Lighting,
-                    crate::Tab::LightExplorer,
-                    crate::Tab::TestRunner,
-                    crate::Tab::FontAssetCreator,
-                    crate::Tab::TerrainToolbox,
-                    crate::Tab::PackageManager,
-                    crate::Tab::Profiler,
-                    crate::Tab::FrameDebugger,
-                ]);
+                let all = crate::Tab::ALL.into_iter().chain(extra_windows());
+                let custom = e
+                    .world
+                    .try_resource::<oxide_engine::EditorExtensions>()
+                    .and_then(|x| {
+                        x.windows()
+                            .iter()
+                            .find(|w| w.title.eq_ignore_ascii_case(name))
+                            .map(|w| crate::extensions::tab(&w.title))
+                    });
                 let Some(tab) = all
                     .into_iter()
                     .find(|t| t.title().eq_ignore_ascii_case(name))
+                    .or(custom)
                 else {
                     return ToolResult::error(format!("unknown window `{name}`"));
                 };
@@ -1997,4 +1979,34 @@ fn register_test_runner_tool(s: &mut McpServer, bus: &Arc<Bus>) {
             })
         },
     );
+}
+
+/// Windows outside Window > General that `editor_open_window` can open.
+pub(crate) fn extra_windows() -> Vec<crate::Tab> {
+    vec![
+        crate::Tab::ProjectSettings,
+        crate::Tab::Preferences,
+        crate::Tab::Shortcuts,
+        crate::Tab::InputActions,
+        crate::Tab::Animator,
+        crate::Tab::Animation,
+        crate::Tab::AudioMixer,
+        crate::Tab::SpriteEditor,
+        crate::Tab::TilePalette,
+        crate::Tab::Navigation,
+        crate::Tab::Timeline,
+        crate::Tab::ShaderGraph,
+        crate::Tab::VfxGraph,
+        crate::Tab::UiBuilder,
+        crate::Tab::LocalizationTables,
+        crate::Tab::ProBuilder,
+        crate::Tab::Lighting,
+        crate::Tab::LightExplorer,
+        crate::Tab::TestRunner,
+        crate::Tab::FontAssetCreator,
+        crate::Tab::TerrainToolbox,
+        crate::Tab::PackageManager,
+        crate::Tab::Profiler,
+        crate::Tab::FrameDebugger,
+    ]
 }

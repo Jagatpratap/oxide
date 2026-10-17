@@ -340,6 +340,10 @@ pub struct FieldUi {
     /// Shown name instead of the field's (`[InspectorName]`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<&'static str>,
+    /// A property drawer by name (`#[reflect(drawer = "Name")]`, Unity's `PropertyAttribute`
+    /// with a `CustomPropertyDrawer`), drawn by an editor extension.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drawer: Option<&'static str>,
 }
 
 fn is_zero(v: &f32) -> bool {
@@ -375,6 +379,7 @@ impl FieldInfo {
                 hdr: false,
                 delayed: false,
                 label: None,
+                drawer: None,
             },
         }
     }
@@ -453,6 +458,7 @@ macro_rules! reflect_struct {
                             hdr: false,
                             delayed: false,
                             label: None,
+                            drawer: None,
                         },
                     }),*],
                 }

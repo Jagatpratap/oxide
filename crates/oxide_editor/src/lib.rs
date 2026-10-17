@@ -17,6 +17,7 @@ mod asset_ops;
 mod audio_mixer_window;
 mod console;
 mod curve_editor;
+mod extensions;
 mod font_asset_creator;
 pub(crate) mod game_view;
 mod hierarchy;
@@ -105,6 +106,8 @@ pub enum Tab {
     PackageManager,
     Profiler,
     FrameDebugger,
+    /// A window from a script's editor extensions (Unity `EditorWindow`), by title hash.
+    Custom(u32),
 }
 
 impl Tab {
@@ -152,6 +155,7 @@ impl Tab {
             Tab::UiBuilder => "UI Builder",
             Tab::LocalizationTables => "Localization Tables",
             Tab::ProBuilder => "ProBuilder",
+            Tab::Custom(id) => extensions::title(id),
         }
     }
 }
@@ -273,6 +277,8 @@ impl Create {
 pub enum Action {
     /// File > New Project / Open Project: brings up the Oxide Hub.
     OpenHub,
+    /// A menu item from a script's editor extensions (Unity `[MenuItem]`), by path.
+    ExtensionMenu(String),
     NewScene,
     OpenScene(String),
     SaveScene,
@@ -462,6 +468,10 @@ pub struct EditorState {
     title: String,
     /// Status messages from actions (shown in the status bar).
     pub status: String,
+    /// Commands from editor extensions, run after the frame's UI.
+    pub(crate) ext_commands: Vec<oxide_engine::editor_ext::EditorCommand>,
+    /// The active Scene view tool from an editor extension (replaces the built-in one).
+    pub custom_tool: Option<String>,
     /// The project has a Scripts crate (Create > Rust Script is available).
     pub scripts_available: bool,
     pub builder: player_build::PlayerBuilder,
@@ -540,6 +550,8 @@ impl EditorState {
             modal: None,
             title: String::new(),
             status: String::new(),
+            ext_commands: Vec::new(),
+            custom_tool: None,
             scripts_available: false,
             builder: Default::default(),
             prefs: Default::default(),
@@ -777,6 +789,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::TestRunner => test_runner::window_ui(self.st, self.engine, ui),
             Tab::FontAssetCreator => font_asset_creator::window_ui(self.st, self.engine, ui),
             Tab::TerrainToolbox => terrain_toolbox::window_ui(self.st, self.engine, ui),
+            Tab::Custom(id) => extensions::window_ui(self.st, self.engine, ui, *id),
             Tab::PackageManager => package_manager::window_ui(self.st, self.engine, ui),
             Tab::Profiler => profiler_window::window_ui(self.st, self.engine, ui),
             Tab::FrameDebugger => profiler_window::frame_debugger_ui(self.st, self.engine, ui),
@@ -787,6 +800,13 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::LocalizationTables => localization_window::window_ui(self.st, self.engine, ui),
             Tab::ProBuilder => probuilder_window::window_ui(self.st, self.engine, ui),
         }
+    }
+
+    fn on_close(&mut self, tab: &mut Tab) -> egui_dock::tab_viewer::OnCloseResponse {
+        if let Tab::Custom(id) = tab {
+            extensions::closed(self.engine, *id);
+        }
+        egui_dock::tab_viewer::OnCloseResponse::Close
     }
 
     fn scroll_bars(&self, _: &Tab) -> [bool; 2] {
@@ -927,9 +947,10 @@ impl Editor {
                 | Tab::FontAssetCreator
                 | Tab::TerrainToolbox
                 | Tab::PackageManager
+                | Tab::Custom(_)
         ) {
-            // Unity opens its settings (and the Input Actions editor, the Light Explorer) in
-            // their own window.
+            // Unity opens its settings (and the Input Actions editor, the Light Explorer, a
+            // script's EditorWindow from GetWindow) in their own window.
             let surface = self.dock.add_window(vec![tab]);
             let size = if matches!(tab, Tab::InputActions | Tab::SpriteEditor) {
                 egui::vec2(980.0, 560.0)
@@ -941,6 +962,8 @@ impl Editor {
                 egui::vec2(620.0, 520.0)
             } else if tab == Tab::PackageManager {
                 egui::vec2(820.0, 520.0)
+            } else if matches!(tab, Tab::Custom(_)) {
+                egui::vec2(420.0, 420.0)
             } else {
                 egui::vec2(760.0, 560.0)
             };
@@ -1448,9 +1471,11 @@ impl Editor {
                 format!("Added {name}")
             }
             Action::SetTool(t) => {
+                extensions::set_custom_tool(st, &mut engine.world, None);
                 st.tool = t;
                 String::new()
             }
+            Action::ExtensionMenu(path) => extensions::run_menu(st, engine, &path)?,
             Action::OpenTab(tab) => {
                 self.focus_tab(tab);
                 return Ok(format!("Opened {}", tab.title()));
@@ -2344,10 +2369,21 @@ impl Shell for Editor {
         search_window::ui(&mut self.st, engine, &ctx);
         packages_window::ui(&mut self.st, engine, &ctx);
 
-        for a in std::mem::take(&mut self.st.actions) {
-            if let Err(e) = self.apply(engine, a) {
-                debug_log_warning!("{e}");
-                self.st.status = e;
+        for p in extensions::pressed_shortcuts(&ctx, &engine.world) {
+            self.st.actions.push(Action::ExtensionMenu(p));
+        }
+        // Extension commands can queue more (a menu item opening a window): a few rounds.
+        for _ in 0..4 {
+            let mut actions = std::mem::take(&mut self.st.actions);
+            actions.extend(extensions::take_actions(&mut self.st, engine));
+            if actions.is_empty() {
+                break;
+            }
+            for a in actions {
+                if let Err(e) = self.apply(engine, a) {
+                    debug_log_warning!("{e}");
+                    self.st.status = e;
+                }
             }
         }
         self.st.track_selection(&engine.world);

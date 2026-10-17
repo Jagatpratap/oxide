@@ -326,6 +326,9 @@ impl ScriptHost {
         > = unsafe { lib.get(b"oxide_register_pipelines") }.ok();
         let register_tests: Option<libloading::Symbol<fn(&mut oxide_scene::PlayModeTests)>> =
             unsafe { lib.get(b"oxide_register_tests") }.ok();
+        let register_extensions: Option<
+            libloading::Symbol<fn(&mut oxide_engine::EditorExtensions)>,
+        > = unsafe { lib.get(b"oxide_register_editor_extensions") }.ok();
 
         let w = &mut engine.world;
         let old = std::mem::take(&mut self.script_types);
@@ -394,6 +397,15 @@ impl ScriptHost {
                 f(&mut tests);
             }
             w.resources.insert(tests);
+        }
+        // Editor extensions: windows, overlays and tools are objects from the old library;
+        // drop them all (while it is still loaded) and register the new ones.
+        {
+            let mut x = oxide_engine::EditorExtensions::default();
+            if let Some(f) = &register_extensions {
+                f(&mut x);
+            }
+            w.resources.insert(x);
         }
         // Custom render pipelines, the same way.
         {

@@ -39,7 +39,10 @@ pub fn loaded_build_id() -> &'static str {
 /// `; assets: Type => ("ext", "Create/Menu")` for data asset types (ScriptableObjects), and
 /// `; behaviours: Type, ...` for StateMachineBehaviours (Add Behaviour on Animator states),
 /// `; playables: Type, ...` for Timeline `PlayableBehaviour`s (Playable track clips), and
-/// `; pipelines: Type, ...` for custom render pipelines (`RenderPipeline`).
+/// `; pipelines: Type, ...` for custom render pipelines (`RenderPipeline`),
+/// `; tests: async_fn, ...` for play-mode tests, and `; extensions: register_fn, ...` for
+/// editor extensions (`fn(&mut EditorExtensions)`: windows, menu items, property drawers,
+/// overlays, Scene view tools).
 /// Expands to the entry points the editor calls after loading the library.
 #[macro_export]
 macro_rules! scripts {
@@ -49,7 +52,8 @@ macro_rules! scripts {
      $(; behaviours: $($bt:ty),* $(,)?)?
      $(; playables: $($pt:ty),* $(,)?)?
      $(; pipelines: $($rpt:ty),* $(,)?)?
-     $(; tests: $($tf:path),* $(,)?)?) => {
+     $(; tests: $($tf:path),* $(,)?)?
+     $(; extensions: $($xf:path),* $(,)?)?) => {
         /// Engine build these scripts were compiled against.
         #[unsafe(no_mangle)]
         pub fn oxide_scripts_build_id() -> &'static str {
@@ -104,6 +108,14 @@ macro_rules! scripts {
         pub fn oxide_register_tests(t: &mut $crate::scene::PlayModeTests) {
             let _ = &t;
             $($( t.register(stringify!($tf), |co| ::std::boxed::Box::pin($tf(co))); )*)?
+        }
+
+        /// Registers the editor extensions (`extensions:` — custom windows, menu items,
+        /// property drawers, overlays and tools).
+        #[unsafe(no_mangle)]
+        pub fn oxide_register_editor_extensions(x: &mut $crate::EditorExtensions) {
+            let _ = &x;
+            $($( $xf(x); )*)?
         }
     };
 }

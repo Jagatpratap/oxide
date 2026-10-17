@@ -204,7 +204,14 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
     if crate::probuilder_window::scene_edit(st, engine, ui, &resp, &proj, &painter) {
         return;
     }
-    let over_handle = handles(st, engine, ui, &resp, &proj, &painter);
+    let over_handle = if st.custom_tool.is_some() {
+        // A script's EditorTool replaces the transform handles (Unity `OnToolGUI`).
+        let mut tool_ui = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+        tool_ui.set_clip_rect(rect);
+        crate::extensions::tool_scene_gui(st, engine, &mut tool_ui, &proj)
+    } else {
+        handles(st, engine, ui, &resp, &proj, &painter)
+    };
 
     // Click to select (Shift/Cmd adds or removes).
     if resp.clicked()

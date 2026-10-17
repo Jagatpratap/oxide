@@ -62,6 +62,7 @@ struct FieldAttrs {
     hdr: bool,
     delayed: bool,
     label: Option<String>,
+    drawer: Option<String>,
     formerly: Vec<String>,
 }
 
@@ -91,6 +92,10 @@ fn parse_attrs(attrs: &[syn::Attribute]) -> syn::Result<FieldAttrs> {
             } else if meta.path.is_ident("label") {
                 let s: LitStr = meta.value()?.parse()?;
                 out.label = Some(s.value());
+                Ok(())
+            } else if meta.path.is_ident("drawer") {
+                let s: LitStr = meta.value()?.parse()?;
+                out.drawer = Some(s.value());
                 Ok(())
             } else if meta.path.is_ident("formerly") {
                 let s: LitStr = meta.value()?.parse()?;
@@ -128,7 +133,7 @@ fn parse_attrs(attrs: &[syn::Attribute]) -> syn::Result<FieldAttrs> {
             } else {
                 Err(meta.error(
                     "expected `skip`, `range(min, max)`, `tooltip`, `header`, `hide`, `min`, \
-                     `space`, `multiline`, `hdr`, `delayed`, `label` or `formerly`",
+                     `space`, `multiline`, `hdr`, `delayed`, `label`, `drawer` or `formerly`",
                 ))
             }
         })?;
@@ -241,6 +246,7 @@ fn derive_struct(input: &DeriveInput, fields: &Fields) -> syn::Result<TokenStrea
         };
         let header = opt_str(&attrs.header);
         let label = opt_str(&attrs.label);
+        let drawer = opt_str(&attrs.drawer);
         let min = match attrs.min {
             Some(m) => quote!(Some(#m)),
             None => quote!(None),
@@ -272,6 +278,7 @@ fn derive_struct(input: &DeriveInput, fields: &Fields) -> syn::Result<TokenStrea
                     hdr: #hdr,
                     delayed: #delayed,
                     label: #label,
+                    drawer: #drawer,
                 },
             }
         });

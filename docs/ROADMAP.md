@@ -609,8 +609,15 @@ project's editor and its Scripts both link.
   `probuilder` MCP tool. Not yet: UV Editor (manual UVs), Poly Shape / Bezier Shape, Boolean, edge loops and
   rings, rotate/scale handles for elements, Lightmap UV generation
   ([ProBuilder](https://docs.unity3d.com/Packages/com.unity.probuilder@6.0/manual/index.html))
-- ◐ Editor extension API: custom inspectors ☑ (`CustomEditor` + `InspectorGui`); custom windows, property drawers,
-  overlays, tools, menu items ☐
+- ☑ Editor extension API: custom inspectors (`CustomEditor` + `InspectorGui`); `scripts! { ...; extensions: register }`
+  with `EditorExtensions`: custom windows (`EditorWindow`: dockable tabs, own window like `GetWindow`, `on_enable`,
+  `on_selection_change`, state kept until closed), menu items (`[MenuItem]` paths incl. new top-level menus,
+  validate functions grey items out, priorities, `Ctrl+Shift+K` shortcuts), property drawers (`[CustomPropertyDrawer]`
+  by nested type or `#[reflect(drawer = "...")]`, `PropertyGui` with the Inspector's label column), Scene view overlays
+  (draggable/dockable/hideable, contextual `applies`), Scene view tools (`EditorTool` in the Tools overlay, Tool
+  Settings contents, `SceneGui` handles: position/slider/free-move/button, lines, discs, labels); `EditorContext`
+  (selection, Undo with drag coalescing, open windows, run menus, status); hot reload swaps them;
+  `editor_get_state` lists them, `editor_set_tool` / `editor_open_window` / `editor_execute_menu` use them
   ([Extending the Editor](https://docs.unity3d.com/Manual/extending-the-editor.html),
   [Custom overlay](https://docs.unity3d.com/Manual/overlays-custom.html),
   [Custom tools](https://docs.unity3d.com/Manual/UsingCustomEditorTools.html))

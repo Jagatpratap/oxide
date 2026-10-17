@@ -111,12 +111,12 @@ only when the editor is running (not with `--player`).
 | `audio_mixer` | An Audio Mixer at runtime (Unity AudioMixer): `set` {"MusicVol": -10} sets exposed parameters (dB for volumes), `clear` removes script values, `snapshot` + `seconds` transitions to a snapshot | yes |
 | `tilemap` | Edits a Tilemap (Unity Tilemap API): `set` [{x, y, tile}] sets cells (tile = a .tile/.ruletile/.animatedtile path, or null to erase), `box_fill` {from, to, tile}, `flood_fill` {x, y, tile}, `clear` | yes |
 | `quit` | Closes the window and exits | yes (destructive) |
-| `editor_get_state` | Editor mode (edit/playing/paused), open scene and unsaved flag, selection, active tool, open windows, undo/redo history and the Scene view camera | no |
+| `editor_get_state` | Editor mode (edit/playing/paused), open scene and unsaved flag, selection, active tool, open windows, undo/redo history, the Scene view camera and script editor extensions (windows, menu items, property drawers, overlays, tools) | no |
 | `editor_select` | Sets the editor selection (what the Inspector shows and the handles move) | yes |
 | `editor_play` | Unity's Play/Pause/Step buttons | yes |
 | `editor_undo` | Undoes (or with `redo: true`, redoes) the last `steps` editor edits (default 1) | yes |
 | `editor_execute_menu` | Runs a main-menu item by path, like Unity's EditorApplication.ExecuteMenuItem: e.g | yes |
-| `editor_set_tool` | Selects the Scene view tool (hand, move, rotate, scale, rect, transform), handle orientation (global/local) and handle position (pivot/center) | yes |
+| `editor_set_tool` | Selects the Scene view tool (hand, move, rotate, scale, rect, transform, or a script's custom tool), handle orientation (global/local) and handle position (pivot/center) | yes |
 | `editor_scene_camera` | Positions the Scene view camera: `position` + `look_at`, or `pivot`/`yaw`/`pitch`/`distance`, or `frame` (an object to frame, like pressing F); also `draw_mode`, `mode_2d`, `lighting` and `effects` | yes |
 | `editor_scene_visibility` | The Hierarchy's eye and hand toggles: hide/show objects in the Scene view, disable/enable picking, `show_all`, or turn scene visibility off | yes |
 | `editor_project` | Project window: list a folder, search (`car t:Prefab l:Vehicle`), select, create folders, rename, move, duplicate, delete, read/set Asset Labels, icon zoom. Moves rewrite references | yes |
