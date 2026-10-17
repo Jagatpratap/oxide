@@ -17,6 +17,7 @@ use std::collections::HashMap;
 
 pub use egui;
 
+pub mod layout;
 pub mod tmp;
 pub use tmp::{TextMeshProUGUI, UiTargetFormat};
 
@@ -350,6 +351,12 @@ impl System for UiSystem {
         if screen.x < 1.0 || screen.y < 1.0 {
             return;
         }
+        // RectTransform layout: content sizes, then rects.
+        let intrinsic = intrinsic_sizes(world, &ctx);
+        let ui_layout = layout::compute(world, &intrinsic, |id| {
+            let k = canvas_scale(world, id, screen);
+            layout::UiRect::new(0.0, 0.0, screen.x / k, screen.y / k)
+        });
         let mut clicks = Vec::new();
         let mut requests = Vec::new();
         let order = world.hierarchy_order();
@@ -358,19 +365,30 @@ impl System for UiSystem {
                 continue;
             }
             let k = canvas_scale(world, id, screen);
+            // The object's rect on screen when a RectTransform tree places it.
+            let placed = ui_layout.rect(id).map(|r| {
+                egui::Rect::from_min_size(
+                    screen_rect.min + egui::vec2(r.x * k, r.y * k),
+                    egui::vec2(r.w * k, r.h * k),
+                )
+            });
             let area = |n: u64, anchor: Anchor, pos: Vector2| {
-                egui::Area::new(egui::Id::new(("oxide-ui", id.to_bits(), n)))
-                    .pivot(anchor.align())
-                    .fixed_pos(
-                        screen_rect.min
-                            + egui::vec2(
-                                screen.x * anchor.align().x().to_factor(),
-                                screen.y * anchor.align().y().to_factor(),
-                            )
-                            + egui::vec2(pos.x * k, -pos.y * k),
-                    )
-                    .constrain_to(screen_rect)
-                    .order(egui::Order::Middle)
+                let a = egui::Area::new(egui::Id::new(("oxide-ui", id.to_bits(), n)))
+                    .order(egui::Order::Middle);
+                match placed {
+                    Some(r) => a.pivot(egui::Align2::LEFT_TOP).fixed_pos(r.min),
+                    None => a
+                        .pivot(anchor.align())
+                        .fixed_pos(
+                            screen_rect.min
+                                + egui::vec2(
+                                    screen.x * anchor.align().x().to_factor(),
+                                    screen.y * anchor.align().y().to_factor(),
+                                )
+                                + egui::vec2(pos.x * k, -pos.y * k),
+                        )
+                        .constrain_to(screen_rect),
+                }
             };
             if let Some(img) = world.get_component::<UIImage>(id).cloned() {
                 let tex = img
@@ -385,7 +403,8 @@ impl System for UiSystem {
                 area(1, img.anchor, img.position)
                     .interactable(false)
                     .show(&ctx, |ui| {
-                        let size = egui::vec2(img.size.x * k, img.size.y * k);
+                        let size =
+                            placed.map_or(egui::vec2(img.size.x * k, img.size.y * k), |r| r.size());
                         let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
                         let r = img.corner_radius * k;
                         ui.painter().rect_filled(rect, r, c32(img.background));
@@ -430,7 +449,9 @@ impl System for UiSystem {
                             )
                         };
                         let galley = galley_job(ui, c32(t.color));
-                        let size = if t.size.x > 0.0 {
+                        let size = if let Some(r) = placed {
+                            r.size()
+                        } else if t.size.x > 0.0 {
                             egui::vec2(t.size.x * k, galley.size().y.max(t.size.y * k))
                         } else {
                             galley.size()
@@ -455,7 +476,7 @@ impl System for UiSystem {
                     });
             }
             if world.get_component::<TextMeshProUGUI>(id).is_some() {
-                tmp::draw(world, id, &ctx, screen_rect);
+                tmp::draw(world, id, &ctx, screen_rect, placed);
             }
             if let Some(b) = world.get_component::<UIButton>(id).cloned() {
                 let mut clicked = false;
@@ -463,9 +484,9 @@ impl System for UiSystem {
                     let text = egui::RichText::new(&b.text)
                         .size(b.font_size * k)
                         .color(c32(b.text_color));
-                    let btn = egui::Button::new(text)
-                        .fill(c32(b.color))
-                        .min_size(egui::vec2(b.size.x * k, b.size.y * k));
+                    let btn = egui::Button::new(text).fill(c32(b.color)).min_size(
+                        placed.map_or(egui::vec2(b.size.x * k, b.size.y * k), |r| r.size()),
+                    );
                     clicked = ui.add_enabled(b.interactable, btn).clicked();
                 });
                 if let Some(bm) = world.get_component_mut::<UIButton>(id) {
@@ -478,7 +499,14 @@ impl System for UiSystem {
             if let Some(s) = world.get_component::<UISlider>(id).cloned() {
                 let mut v = s.value;
                 area(4, s.anchor, s.position).show(&ctx, |ui| {
-                    ui.spacing_mut().slider_width = s.width * k;
+                    ui.spacing_mut().slider_width = match placed {
+                        // The rect holds the slider and its label.
+                        Some(r) => {
+                            let label = intrinsic.get(&id).map_or(0.0, |v| v.x);
+                            (r.width() - label * k).max(8.0)
+                        }
+                        None => s.width * k,
+                    };
                     let mut sl = egui::Slider::new(&mut v, s.min_value..=s.max_value);
                     if !s.label.is_empty() {
                         sl = sl.text(&s.label);
@@ -502,10 +530,48 @@ impl System for UiSystem {
         if let Some(g) = world.try_resource_mut::<Gui>() {
             g.texture_requests.extend(requests);
         }
+        world.resources.insert(ui_layout);
         for id in clicks {
             world.send_message(id, "OnClick", oxide_core::reflect::Value::Null);
         }
     }
+}
+
+/// Content sizes (canvas units) of text-bearing UI components: what layout groups and
+/// Content Size Fitters see as their preferred size.
+fn intrinsic_sizes(world: &mut World, ctx: &egui::Context) -> HashMap<GameObjectId, Vector2> {
+    let measure = |text: &str, size: f32| {
+        let s = ctx.fonts_mut(|f| {
+            f.layout_no_wrap(
+                text.to_owned(),
+                egui::FontId::proportional(size.max(1.0)),
+                egui::Color32::WHITE,
+            )
+            .size()
+        });
+        Vector2::new(s.x, s.y)
+    };
+    let mut out = HashMap::new();
+    for (id, t) in world.query::<UIText>() {
+        out.insert(id, measure(&t.text, t.font_size));
+    }
+    for (id, t) in world.query::<UIToggle>() {
+        let m = measure(&t.text, t.font_size);
+        out.insert(id, Vector2::new(m.x + 24.0, m.y.max(18.0)));
+    }
+    for (id, s) in world.query::<UISlider>() {
+        if !s.label.is_empty() {
+            out.insert(id, Vector2::new(measure(&s.label, 14.0).x + 8.0, 0.0));
+        }
+    }
+    let tmps: Vec<(GameObjectId, TextMeshProUGUI)> = world
+        .query::<TextMeshProUGUI>()
+        .map(|(id, t)| (id, t.clone()))
+        .collect();
+    for (id, t) in tmps {
+        out.insert(id, tmp::measure(world, id, &t));
+    }
+    out
 }
 
 /// Installs UI components (the engine inserts the `Gui` resource); returns the system.
@@ -518,5 +584,11 @@ pub fn install(world: &mut World) -> Box<dyn System> {
     r.register::<UIButton>("UI/Button");
     r.register::<UISlider>("UI/Slider");
     r.register::<UIToggle>("UI/Toggle");
+    r.register::<layout::RectTransform>("Layout/Rect Transform");
+    r.register::<layout::HorizontalLayoutGroup>("Layout/Horizontal Layout Group");
+    r.register::<layout::VerticalLayoutGroup>("Layout/Vertical Layout Group");
+    r.register::<layout::GridLayoutGroup>("Layout/Grid Layout Group");
+    r.register::<layout::LayoutElement>("Layout/Layout Element");
+    r.register::<layout::ContentSizeFitter>("Layout/Content Size Fitter");
     Box::new(UiSystem)
 }

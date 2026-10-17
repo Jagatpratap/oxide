@@ -739,6 +739,20 @@ impl AssetServer {
 
     /// Loads (or reloads) a `.mat` material file (Unity's material asset).
     pub fn load_material(&mut self, path: &str) -> Result<Handle<Material>, String> {
+        thread_local! {
+            static LOADING: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+        }
+        // A material that (through its fields) refers back to itself would recurse forever.
+        if LOADING.with(|l| l.borrow().iter().any(|p| p == path)) {
+            return Err(format!("{path} refers to itself"));
+        }
+        LOADING.with(|l| l.borrow_mut().push(path.to_owned()));
+        let r = self.load_material_file(path);
+        LOADING.with(|l| l.borrow_mut().retain(|p| p != path));
+        r
+    }
+
+    fn load_material_file(&mut self, path: &str) -> Result<Handle<Material>, String> {
         let bytes = self.read(path)?;
         let text = String::from_utf8(bytes).map_err(|e| format!("{path}: {e}"))?;
         let file: MaterialFile =
@@ -1277,6 +1291,22 @@ mod background_tests {
         assert_eq!(swapped, vec!["Assets/t.png".to_owned()]);
         assert_eq!(a.textures.get(&h).unwrap().width, 16);
         assert_eq!(a.background_imports(), 0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn self_referencing_material_loads() {
+        let dir = std::env::temp_dir().join(format!("oxide-mat-cycle-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("Assets")).unwrap();
+        std::fs::write(
+            dir.join("Assets/Loop.mat"),
+            "shader: Oxide/Lit\nfields:\n  base_map: !Asset Assets/Loop.mat\n",
+        )
+        .unwrap();
+        let mut a = AssetServer::new(&dir);
+        // Used to overflow the stack; the bad reference is just skipped (with a warning).
+        assert!(a.load_material("Assets/Loop.mat").is_ok());
         let _ = std::fs::remove_dir_all(dir);
     }
 }

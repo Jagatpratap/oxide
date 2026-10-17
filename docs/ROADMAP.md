@@ -552,7 +552,7 @@ project's editor and its Scripts both link.
   CJK/Indic scripts in egui, `localization` MCP tool. Not yet: pseudo-localization, per-locale Font Assets
   switching, metadata, Google Sheets sync, plural rules beyond English-style
   ([Localization](https://docs.unity3d.com/Packages/com.unity.localization@1.5/manual/index.html))
-- ◐ Canvas UI (uGUI equivalent): Canvas, RectTransform, anchors, Image, Text, Button, Slider, ScrollRect, layout groups, EventSystem
+- ◐ Canvas UI (uGUI equivalent): Canvas + Canvas Scaler, Image, Text, Button, Slider, Toggle ☑; RectTransform (anchors, pivot, size delta, nesting) and auto layout (Horizontal / Vertical / Grid Layout Groups with padding, spacing, alignment, control child size, force expand, reverse; Layout Element; Content Size Fitter) ☑; ScrollRect, EventSystem ☐
   ([uGUI](https://docs.unity3d.com/Manual/com.unity.ugui.html),
   [UI comparison](https://docs.unity3d.com/Manual/UI-system-compare.html))
 - ◐ Text rendering (TextMeshPro): `.fontasset` Font Assets from `.ttf`/`.otf` (SDF atlas, Dynamic/Static population, multi-page atlases, fallback fonts, bold/italic/tab settings) ☑, rich text (`b i u s color alpha size cspace mark sub sup uppercase lowercase smallcaps br noparse`) ☑, layout (wrapping, alignment incl. Justified/Flush, Overflow/Ellipsis/Truncate, spacing, auto size, kerning) ☑, SDF material (face dilate, softness, centred outline, underlay) ☑, TextMeshPro (3D) and TextMeshPro - Text (UI) components ☑, GameObject menu entries, Create Font Asset from font files, Font Asset previews ☑; sprite assets (`<sprite>`), links, vertical/horizontal mapping gradients, material presets as assets, Font Asset Creator window ☐

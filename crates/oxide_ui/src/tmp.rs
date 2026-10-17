@@ -107,13 +107,32 @@ impl TextMeshProUGUI {
 /// Layouts of every TextMeshProUGUI, rebuilt when its settings, scale or font change.
 #[derive(Default)]
 pub struct UiTextCache {
-    entries: HashMap<GameObjectId, (TextMeshProUGUI, f32, u64, TextMesh)>,
+    /// By object and slot (0 = drawn, 1 = measured for layout).
+    entries: HashMap<(GameObjectId, u8), (TextMeshProUGUI, f32, u64, TextMesh)>,
 }
 
 /// The text's layout for canvas scale `k` (cached).
 pub fn layout_ui_text(
     world: &mut World,
     id: GameObjectId,
+    t: &TextMeshProUGUI,
+    k: f32,
+) -> TextMesh {
+    layout_ui_text_slot(world, id, 0, t, k)
+}
+
+/// The text's unwrapped size in canvas units (its preferred size for auto layout).
+pub fn measure(world: &mut World, id: GameObjectId, t: &TextMeshProUGUI) -> Vector2 {
+    let mut free = t.clone();
+    free.size = Vector2::ZERO;
+    let b = layout_ui_text_slot(world, id, 1, &free, 1.0).bounds;
+    Vector2::new((b[2] - b[0]).max(0.0), (b[3] - b[1]).max(0.0))
+}
+
+fn layout_ui_text_slot(
+    world: &mut World,
+    id: GameObjectId,
+    slot: u8,
     t: &TextMeshProUGUI,
     k: f32,
 ) -> TextMesh {
@@ -130,7 +149,7 @@ pub fn layout_ui_text(
             .and_then(|h| assets.data.version(h.path()))
             .unwrap_or(0)
     };
-    if let Some((old, ok, v, mesh)) = world.resource::<UiTextCache>().entries.get(&id)
+    if let Some((old, ok, v, mesh)) = world.resource::<UiTextCache>().entries.get(&(id, slot))
         && old == t
         && *ok == k
         && *v == version
@@ -143,7 +162,7 @@ pub fn layout_ui_text(
     world
         .resource_mut::<UiTextCache>()
         .entries
-        .insert(id, (t.clone(), k, version, mesh.clone()));
+        .insert((id, slot), (t.clone(), k, version, mesh.clone()));
     mesh
 }
 
@@ -536,12 +555,17 @@ pub(crate) fn draw(
     id: GameObjectId,
     ctx: &egui::Context,
     screen_rect: egui::Rect,
+    placed: Option<egui::Rect>,
 ) {
-    let Some(t) = world.get_component::<TextMeshProUGUI>(id).cloned() else {
+    let Some(mut t) = world.get_component::<TextMeshProUGUI>(id).cloned() else {
         return;
     };
     let screen = screen_rect.size();
     let k = canvas_scale(world, id, screen);
+    // A RectTransform tree sets the text box.
+    if let Some(r) = placed {
+        t.size = Vector2::new(r.width() / k, r.height() / k);
+    }
     let mesh = layout_ui_text(world, id, &t, k);
     let Some(lib) = world.try_resource::<FontLibrary>() else {
         return;
@@ -568,7 +592,7 @@ pub(crate) fn draw(
             if t.size.y > 0.0 { 0.0 } else { b[3] },
         ),
     );
-    let top_left = anchor_point - egui::vec2(w * fx, h * fy);
+    let top_left = placed.map_or(anchor_point - egui::vec2(w * fx, h * fy), |r| r.min);
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Middle,
         egui::Id::new(("oxide-tmp", id.to_bits())),
