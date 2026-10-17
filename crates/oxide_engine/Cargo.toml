@@ -26,6 +26,7 @@ oxide_navigation.workspace = true
 oxide_timeline.workspace = true
 oxide_shadergraph.workspace = true
 oxide_vfx.workspace = true
+oxide_uitk.workspace = true
 oxide_network.workspace = true
 
 

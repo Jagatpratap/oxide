@@ -41,6 +41,7 @@ mod terrain_tools;
 mod theme;
 mod tile_palette;
 mod timeline_window;
+mod ui_builder_window;
 mod undo;
 mod vfx_graph_window;
 mod view;
@@ -81,6 +82,7 @@ pub enum Tab {
     Timeline,
     ShaderGraph,
     VfxGraph,
+    UiBuilder,
 }
 
 impl Tab {
@@ -117,6 +119,7 @@ impl Tab {
             Tab::Timeline => "Timeline",
             Tab::ShaderGraph => "Shader Graph",
             Tab::VfxGraph => "VFX Graph",
+            Tab::UiBuilder => "UI Builder",
         }
     }
 }
@@ -192,6 +195,8 @@ pub enum Create {
     TextUI,
     /// GameObject → Visual Effects → Visual Effect.
     VisualEffect,
+    /// GameObject → UI Toolkit → UI Document (with a Panel Settings asset, made if needed).
+    UIDocument,
     /// GameObject → Effects → Particle System.
     ParticleSystem,
 }
@@ -220,6 +225,7 @@ impl Create {
             Create::Text3D => "Text (TMP)",
             Create::TextUI => "Text (TMP)",
             Create::VisualEffect => "Visual Effect",
+            Create::UIDocument => "UIDocument",
             Create::ParticleSystem => "Particle System",
         }
     }
@@ -359,6 +365,7 @@ pub struct EditorState {
     pub(crate) timeline: timeline_window::TimelineWindow,
     pub(crate) shader_graph: shader_graph_window::ShaderGraphWindow,
     pub(crate) vfx_graph: vfx_graph_window::VfxGraphWindow,
+    pub(crate) ui_builder: ui_builder_window::UiBuilderWindow,
     mask: anim_inspectors::MaskState,
     audio_mixer: audio_mixer_window::AudioMixerWindow,
     sprite_editor: sprite_editor::SpriteEditorWindow,
@@ -424,6 +431,7 @@ impl EditorState {
             timeline: Default::default(),
             shader_graph: Default::default(),
             vfx_graph: Default::default(),
+            ui_builder: Default::default(),
             mask: Default::default(),
             audio_mixer: Default::default(),
             sprite_editor: Default::default(),
@@ -633,6 +641,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::Timeline => timeline_window::window_ui(self.st, self.engine, ui),
             Tab::ShaderGraph => shader_graph_window::window_ui(self.st, self.engine, ui),
             Tab::VfxGraph => vfx_graph_window::window_ui(self.st, self.engine, ui),
+            Tab::UiBuilder => ui_builder_window::window_ui(self.st, self.engine, ui),
         }
     }
 
@@ -1640,6 +1649,25 @@ fn create(w: &mut World, kind: Create, active: Option<GameObjectId>) -> GameObje
         Create::NavMeshModifierVolume => {
             let id = w.create("NavMesh Modifier Volume");
             w.add_component(id, oxide_engine::nav::NavMeshModifierVolume::default());
+            id
+        }
+        Create::UIDocument => {
+            // Unity makes `Assets/UI Toolkit/PanelSettings.asset` the first time.
+            let ps = "Assets/UI Toolkit/PanelSettings.panelsettings";
+            let assets = w.resource_mut::<oxide_assets::AssetServer>();
+            if !assets.full_path(ps).exists()
+                && let Err(e) = assets.save_data(ps, Box::new(oxide_uitk::PanelSettings::default()))
+            {
+                oxide_core::debug_log_warning!("{e}");
+            }
+            let id = w.create("UIDocument");
+            w.add_component(
+                id,
+                oxide_uitk::UIDocument {
+                    panel_settings: Some(oxide_assets::Handle::from_path(ps.to_owned())),
+                    ..Default::default()
+                },
+            );
             id
         }
         Create::VisualEffect => {

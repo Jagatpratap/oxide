@@ -403,7 +403,17 @@ runner, native plugins.
   ([Audio](https://docs.unity3d.com/Manual/Audio.html),
   [Audio Mixer](https://docs.unity3d.com/Manual/audio-mixer-landing.html),
   [Audio reference](https://docs.unity3d.com/Manual/AudioReference.html))
-- ☐ Runtime UI (UI Toolkit equivalent): UXML-like layout files, USS-like styling, flexbox layout (`taffy`), events, data binding, UI Builder
+- ◐ Runtime UI (UI Toolkit): `oxide_uitk` — `.uxml` documents (Unity's `ui:` elements, `<Style src>`), `.uss`
+  style sheets (type/`#name`/`.class`/pseudo-class selectors with descendant and child combinators,
+  specificity, `--variables`/`var()`, ~60 USS properties, inheritance, Default Runtime Theme), flexbox layout
+  (`taffy`), Panel Settings (constant pixel size / scale with screen size), UI Document component (plays in the
+  Game view in Edit mode, hot reload), controls (VisualElement, Label, Button, Toggle, RadioButton, Slider,
+  SliderInt, ProgressBar, DropdownField, TextField, IntegerField, FloatField, Foldout, ScrollView, GroupBox,
+  Image) with hover/active/focus/checked states, click/change/submit events and a script API (clicked, changed,
+  value, set_text, classes, display, inline styles), UI Builder window (StyleSheets, Hierarchy, Library,
+  Viewport with Preview, Inspector), `ui_toolkit` and `editor_ui_builder` MCP tools. Not yet: data binding,
+  templates (`<Template>`/`<Instance>`), ListView/TreeView/MultiColumnListView, transitions, USS transforms on
+  painting (rotate/scale), world-space panels, rich text in labels
   ([UI Toolkit](https://docs.unity3d.com/Manual/UIElements.html))
 - ◐ Canvas UI (uGUI equivalent): Canvas, RectTransform, anchors, Image, Text, Button, Slider, ScrollRect, layout groups, EventSystem
   ([uGUI](https://docs.unity3d.com/Manual/com.unity.ugui.html),
@@ -522,7 +532,7 @@ needs, and where the engine is:
 | Big worlds (8×8 km) | | ✔ | ◐ LOD Groups (+ `_LODn` model import, LOD bias); occlusion culling ✔; world streaming ✔ (scene cells; assets still load on the main thread); floating origin ☐ |
 | Weapons, hits, ragdolls | | ✔ | ◐ raycasts, CharacterJoint, Ragdoll Wizard (from the humanoid map), animated ↔ limp switch; hit boxes ☐ |
 | Game scripts in the editor | ✔ | ✔ | ☑ project Scripts crate, hot reload in Edit and Play mode |
-| HUD, menus | ✔ | ✔ | ◐ Canvas UI + immediate GUI; UI Toolkit-style layout ☐ |
+| HUD, menus | ✔ | ✔ | ◐ Canvas UI + immediate GUI + UI Toolkit (UXML/USS, flexbox, controls, UI Builder) |
 | Audio (engine, 3D, mixer) | ✔ | ✔ | ◐ 3D sources, car audio; mixer ☐ |
 | AI (opponents, bots) | ✔ | ✔ | ☑ WaypointCircuit + CarAIControl racing AI; NavMesh baking over terrain, NavMeshAgent with avoidance, obstacles with carving, links (50 agents at 60 FPS in a debug build); behaviour trees / perception ☐ |
 | Multiplayer | ◐ | ✔ | ◐ UDP netcode: spawning, NetworkTransform with interpolation, NetworkRigidbody, RPCs; prediction, lag compensation, interest management, dedicated server ☐ |

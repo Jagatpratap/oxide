@@ -23,6 +23,7 @@ pub mod mcp_streaming;
 pub mod mcp_terrain;
 mod mcp_timeline;
 pub mod mcp_tools;
+mod mcp_uitk;
 mod mcp_vfx;
 pub mod navigation;
 pub mod objects;
@@ -102,6 +103,7 @@ impl Plugin for UiPlugin {
         systems: &mut Vec<Box<dyn oxide_scene::System>>,
     ) {
         systems.push(oxide_ui::install(world));
+        systems.push(oxide_uitk::install(world));
         oxide_text::install(world);
     }
 }
@@ -244,6 +246,9 @@ pub mod prelude {
     pub use oxide_ui::{
         Anchor, Canvas, Gui, GuiExt, TextAlign, TextMeshProUGUI, UIButton, UIImage, UISlider,
         UIText, UIToggle, egui,
+    };
+    pub use oxide_uitk::{
+        PanelSettings, UIDocument, UiDocumentExt, UiEvent, UiEventKind, Value as UiValue,
     };
     pub use oxide_vfx::{VisualEffect, VisualEffectAsset};
 

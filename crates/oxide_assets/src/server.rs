@@ -788,6 +788,12 @@ impl AssetServer {
                     self.load_data(file)?;
                 }
             }
+            // Text formats read by their own systems (UXML, USS): the file must exist.
+            _ if self.types.for_path(file).is_some() => {
+                if !self.full_path(file).exists() {
+                    return Err(format!("{file} not found"));
+                }
+            }
             _ => return Err(format!("unsupported asset type: {path}")),
         }
         Ok(())

@@ -1299,6 +1299,14 @@ pub fn new_asset(
         "Shader" => {
             std::fs::write(root.join(&path), FULL_SCREEN_SHADER).map_err(|e| e.to_string())?;
         }
+        "VisualTreeAsset" => {
+            std::fs::write(root.join(&path), oxide_uitk::uxml::TEMPLATE)
+                .map_err(|e| e.to_string())?;
+        }
+        "StyleSheet" => {
+            std::fs::write(root.join(&path), oxide_uitk::USS_TEMPLATE)
+                .map_err(|e| e.to_string())?;
+        }
         "TextAsset" => {
             std::fs::write(root.join(&path), "").map_err(|e| e.to_string())?;
         }
@@ -1434,6 +1442,11 @@ pub fn open(
         "TimelineAsset" => {
             st.timeline.open_asset(&engine.world, path);
             st.actions.push(Action::OpenTab(crate::Tab::Timeline));
+        }
+        "VisualTreeAsset" => {
+            st.ui_builder
+                .open(engine.world.resource::<AssetServer>(), path)?;
+            st.actions.push(Action::OpenTab(crate::Tab::UiBuilder));
         }
         "VisualEffectAsset" => {
             st.vfx_graph

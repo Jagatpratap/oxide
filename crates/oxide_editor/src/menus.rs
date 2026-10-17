@@ -130,6 +130,10 @@ fn create_items(prefix: &str) -> Vec<MenuItem> {
         Action::Create(Create::VisualEffect),
     ));
     v.push(item(
+        &format!("{prefix}UI Toolkit/UI Document"),
+        Action::Create(Create::UIDocument),
+    ));
+    v.push(item(
         &format!("{prefix}Camera"),
         Action::Create(Create::Camera),
     ));
@@ -247,6 +251,10 @@ pub fn menu_items(world: &World, keymap: &Keymap) -> Vec<MenuItem> {
     v.push(item(
         "Window/AI/Navigation",
         Action::OpenTab(Tab::Navigation),
+    ));
+    v.push(item(
+        "Window/UI Toolkit/UI Builder",
+        Action::OpenTab(Tab::UiBuilder),
     ));
     v.push(item(
         "Window/Rendering/Lighting/Generate Lighting",

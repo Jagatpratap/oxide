@@ -302,6 +302,7 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
             crate::Tab::Timeline,
             crate::Tab::ShaderGraph,
             crate::Tab::VfxGraph,
+            crate::Tab::UiBuilder,
         ])
         .map(|t| t.title())
         .collect();
@@ -337,6 +338,7 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
                     crate::Tab::Timeline,
                     crate::Tab::ShaderGraph,
                     crate::Tab::VfxGraph,
+                    crate::Tab::UiBuilder,
                 ]);
                 let Some(tab) = all
                     .into_iter()
@@ -609,6 +611,39 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
             }
             with_editor(e, |ed, e| {
                 match crate::vfx_graph_window::mcp(&mut ed.st, e, args) {
+                    Ok(j) => ToolResult::json(j),
+                    Err(err) => ToolResult::error(err),
+                }
+            })
+        },
+    );
+
+    tool(
+        s,
+        bus,
+        ToolDef::new(
+            "editor_ui_builder",
+            "UI Builder",
+            "Edits a UI Toolkit document (.uxml) and its style sheets in the UI Builder, like Unity's UI Builder. \
+             `open` a .uxml; returns every element (path, type, name, classes, attributes, inline style) and the \
+             style sheets' rules. Edits: `add` [{type (VisualElement, ScrollView, GroupBox, Foldout, Label, Button, \
+             Toggle, RadioButton, Slider, SliderInt, ProgressBar, DropdownField, Image, TextField, IntegerField, \
+             FloatField), parent? (path or name), root?, name?, classes?, attributes?, style?}]; `set` {element, \
+             name?, classes?, attributes? (null removes), style? (\"\" removes)}; `delete` (path or name); `rule` \
+             {selector, styles: {property: value}} adds or edits a USS rule in the first style sheet (made next to the \
+             .uxml if none); `select`; `undo`; `save: true` writes the files (UI Documents using them reload).",
+            schema(
+                json!({
+                    "open": { "type": "string" }, "add": { "type": "array" }, "set": { "type": "object" },
+                    "delete": {}, "rule": { "type": "object" }, "select": {},
+                    "undo": { "type": "boolean" }, "save": { "type": "boolean" }
+                }),
+                &[],
+            ),
+        ),
+        |args, e| {
+            with_editor(e, |ed, e| {
+                match crate::ui_builder_window::mcp(&mut ed.st, e, args) {
                     Ok(j) => ToolResult::json(j),
                     Err(err) => ToolResult::error(err),
                 }
