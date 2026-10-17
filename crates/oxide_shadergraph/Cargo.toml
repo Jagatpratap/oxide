@@ -1,0 +1,18 @@
+[package]
+name = "oxide_shadergraph"
+description = "Oxide Shader Graph: .shadergraph/.shadersubgraph assets, Unity's node library, WGSL compiler for the Lit pipeline"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+oxide_math.workspace = true
+oxide_core.workspace = true
+oxide_assets.workspace = true
+
+[dev-dependencies]
+oxide_render.workspace = true
+pollster.workspace = true
+
+[lints]
+workspace = true

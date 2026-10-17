@@ -24,6 +24,7 @@ pub mod launch;
 pub mod mcp;
 mod menus;
 mod navigation_window;
+mod node_canvas;
 pub mod player_build;
 pub mod prefs;
 mod previews;
@@ -33,6 +34,7 @@ mod scene_view;
 pub mod scripting;
 mod search_window;
 pub mod settings_window;
+mod shader_graph_window;
 pub mod shortcuts;
 mod sprite_editor;
 mod terrain_tools;
@@ -76,6 +78,7 @@ pub enum Tab {
     TilePalette,
     Navigation,
     Timeline,
+    ShaderGraph,
 }
 
 impl Tab {
@@ -110,6 +113,7 @@ impl Tab {
             Tab::TilePalette => "Tile Palette",
             Tab::Navigation => "Navigation",
             Tab::Timeline => "Timeline",
+            Tab::ShaderGraph => "Shader Graph",
         }
     }
 }
@@ -340,6 +344,7 @@ pub struct EditorState {
     animator: animator_window::AnimatorWindow,
     animation: animation_window::AnimationWindow,
     pub(crate) timeline: timeline_window::TimelineWindow,
+    pub(crate) shader_graph: shader_graph_window::ShaderGraphWindow,
     mask: anim_inspectors::MaskState,
     audio_mixer: audio_mixer_window::AudioMixerWindow,
     sprite_editor: sprite_editor::SpriteEditorWindow,
@@ -403,6 +408,7 @@ impl EditorState {
             animator: Default::default(),
             animation: Default::default(),
             timeline: Default::default(),
+            shader_graph: Default::default(),
             mask: Default::default(),
             audio_mixer: Default::default(),
             sprite_editor: Default::default(),
@@ -610,6 +616,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::TilePalette => tile_palette::window_ui(self.st, self.engine, ui),
             Tab::Navigation => navigation_window::window_ui(self.st, self.engine, ui),
             Tab::Timeline => timeline_window::window_ui(self.st, self.engine, ui),
+            Tab::ShaderGraph => shader_graph_window::window_ui(self.st, self.engine, ui),
         }
     }
 
@@ -714,7 +721,7 @@ impl Editor {
         if let Some(path) = found
             && matches!(
                 tab,
-                Tab::Animator | Tab::Animation | Tab::AudioMixer | Tab::Timeline
+                Tab::Animator | Tab::Animation | Tab::AudioMixer | Tab::Timeline | Tab::ShaderGraph
             )
             && self.dock.iter_all_tabs().any(|(p, t)| {
                 p.node_path() == path.node_path()
@@ -757,7 +764,7 @@ impl Editor {
             // not into whichever small panel had focus.
             if matches!(
                 tab,
-                Tab::Animator | Tab::Animation | Tab::AudioMixer | Tab::Timeline
+                Tab::Animator | Tab::Animation | Tab::AudioMixer | Tab::Timeline | Tab::ShaderGraph
             ) && let Some(p) = self
                 .dock
                 .find_tab(&Tab::Scene)
@@ -1730,6 +1737,7 @@ impl Shell for Editor {
         // Sprite Resolvers show their sprite in Edit mode too.
         oxide_scene::sprite_library::resolve_all(&mut engine.world);
         oxide_engine::lens_flares::preload(&mut engine.world);
+        oxide_shadergraph::sync(engine.world.resource_mut::<oxide_assets::AssetServer>());
         oxide_engine::text::components::update(&mut engine.world);
         let animation_open = self.dock.iter_all_tabs().any(|(_, t)| *t == Tab::Animation);
         self.st.tile_palette_open = self

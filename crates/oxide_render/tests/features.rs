@@ -104,6 +104,7 @@ fn full_screen_pass_runs_user_wgsl() {
     let invert = assets.shaders.insert(
         "test:invert.wgsl",
         Shader {
+            surface: None,
             name: "invert".into(),
             source: "fn fs_main(in: FullscreenIn) -> vec4f {\n    \
                      let c = sample_source(in.uv);\n    \
@@ -140,6 +141,7 @@ fn full_screen_pass_runs_user_wgsl() {
     let broken = assets.shaders.insert(
         "test:broken.wgsl",
         Shader {
+            surface: None,
             name: "broken".into(),
             source: "fn fs_main(in: FullscreenIn) -> vec4f { return nope; }".into(),
         },

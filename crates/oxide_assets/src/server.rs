@@ -583,11 +583,11 @@ impl AssetServer {
             ..Default::default()
         };
         for (k, v) in file.fields {
-            if let Value::Asset(p) = &v
-                && let Err(e) = self.ensure_loaded(p)
-            {
-                oxide_core::debug_log_warning!("{path}: {e}");
-            }
+            visit_asset_refs(&v, &mut |p| {
+                if let Err(e) = self.ensure_loaded(p) {
+                    oxide_core::debug_log_warning!("{path}: {e}");
+                }
+            });
             if let Err(e) = m.set_field(&k, v) {
                 oxide_core::debug_log_warning!("{path}: {k}: {e}");
             }
@@ -633,9 +633,14 @@ impl AssetServer {
             .and_then(|s| s.to_str())
             .unwrap_or("Shader")
             .to_owned();
-        Ok(self
-            .shaders
-            .insert(path.to_owned(), crate::shader::Shader { name, source }))
+        Ok(self.shaders.insert(
+            path.to_owned(),
+            crate::shader::Shader {
+                name,
+                source,
+                surface: None,
+            },
+        ))
     }
 
     /// Loads (or reloads) a `.renderTexture` file.

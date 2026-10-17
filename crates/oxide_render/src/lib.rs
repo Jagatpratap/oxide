@@ -36,6 +36,6 @@ pub use flares::{
 };
 pub use frame::*;
 pub use gpu::{Gpu, GpuError, WindowSurface};
-pub use renderer::SceneRenderer;
+pub use renderer::{SceneRenderer, validate_surface_hooks};
 pub use text::{SDF_WGSL, SdfMaterial, TextDraw, TextInstance};
 pub use wgpu;

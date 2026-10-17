@@ -2,6 +2,7 @@
 //! Reference: <https://docs.unity3d.com/Manual/urp/lit-shader.html>
 
 use crate::handle::{Asset, Handle};
+use crate::shader::ShaderGraphRef;
 use crate::texture::Texture2D;
 use oxide_core::Reflect;
 use oxide_math::{Color, Vector2};
@@ -25,10 +26,25 @@ pub enum SurfaceType {
     Transparent,
 }
 
+/// A Shader Graph property value on a material (Unity `Material.SetFloat` / `SetColor` /
+/// `SetTexture` by reference name).
+#[derive(Clone, Debug, Default, PartialEq, Reflect)]
+pub struct MaterialProperty {
+    pub name: String,
+    /// Floats use `x`; colours are sRGB like `base_color` (converted on upload).
+    pub value: oxide_math::Vector4,
+    pub texture: Option<Handle<Texture2D>>,
+}
+
 #[derive(Clone, Debug, Reflect)]
 pub struct Material {
     pub name: String,
     pub shader: ShaderKind,
+    /// Draws with this Shader Graph instead of the built-in Lit/Unlit shader.
+    pub shader_graph: Option<Handle<ShaderGraphRef>>,
+    /// Values of the Shader Graph's exposed properties (missing ones use the graph's
+    /// defaults).
+    pub properties: Vec<MaterialProperty>,
     pub surface_type: SurfaceType,
     /// `_BaseColor` (sRGB).
     pub base_color: Color,
@@ -74,6 +90,8 @@ impl Default for Material {
         Self {
             name: "Default-Material".into(),
             shader: ShaderKind::Lit,
+            shader_graph: None,
+            properties: Vec::new(),
             surface_type: SurfaceType::Opaque,
             base_color: Color::WHITE,
             base_map: None,
@@ -113,6 +131,38 @@ impl Material {
             base_color: color,
             ..Default::default()
         }
+    }
+
+    /// Unity `Material.SetFloat` / `SetVector` / `SetColor` for Shader Graph properties.
+    pub fn set_vector(&mut self, name: &str, v: oxide_math::Vector4) {
+        match self.properties.iter_mut().find(|p| p.name == name) {
+            Some(p) => p.value = v,
+            None => self.properties.push(MaterialProperty {
+                name: name.to_owned(),
+                value: v,
+                texture: None,
+            }),
+        }
+    }
+
+    pub fn set_float(&mut self, name: &str, v: f32) {
+        self.set_vector(name, oxide_math::Vector4::new(v, 0.0, 0.0, 0.0));
+    }
+
+    /// Unity `Material.SetTexture` for a Shader Graph texture property.
+    pub fn set_texture(&mut self, name: &str, t: Option<Handle<Texture2D>>) {
+        match self.properties.iter_mut().find(|p| p.name == name) {
+            Some(p) => p.texture = t,
+            None => self.properties.push(MaterialProperty {
+                name: name.to_owned(),
+                value: oxide_math::Vector4::ZERO,
+                texture: t,
+            }),
+        }
+    }
+
+    pub fn property(&self, name: &str) -> Option<&MaterialProperty> {
+        self.properties.iter().find(|p| p.name == name)
     }
 
     pub fn is_transparent(&self) -> bool {

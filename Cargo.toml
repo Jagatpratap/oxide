@@ -25,6 +25,7 @@ oxide_ui = { path = "crates/oxide_ui" }
 oxide_terrain = { path = "crates/oxide_terrain" }
 oxide_text = { path = "crates/oxide_text" }
 oxide_timeline = { path = "crates/oxide_timeline" }
+oxide_shadergraph = { path = "crates/oxide_shadergraph" }
 oxide_lightmapper = { path = "crates/oxide_lightmapper" }
 oxide_particles = { path = "crates/oxide_particles" }
 oxide_navigation = { path = "crates/oxide_navigation" }
@@ -39,6 +40,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = { version = "0.4", features = ["std"] }
 wgpu = "30"
+naga = { version = "30", features = ["wgsl-in"] }
 winit = "0.30"
 pollster = "1"
 bytemuck = { version = "1", features = ["derive"] }

@@ -111,6 +111,8 @@ struct MainKey {
     depth_write: bool,
     /// Mesh edges in line mode (Scene view wireframe draw modes).
     wire: bool,
+    /// A Shader Graph's module instead of the built-in Lit shader.
+    shader: Option<AssetId>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -118,6 +120,7 @@ struct ShadowKey {
     cutout: bool,
     double_sided: bool,
     skinned: bool,
+    shader: Option<AssetId>,
 }
 
 struct Batch {
@@ -224,6 +227,8 @@ pub struct SceneRenderer {
     shadow_pipeline_layout: wgpu::PipelineLayout,
     lit_module: wgpu::ShaderModule,
     shadow_module: wgpu::ShaderModule,
+    /// Compiled Shader Graphs by their asset id.
+    graph_modules: HashMap<AssetId, GraphModule>,
     main_pipelines: HashMap<MainKey, wgpu::RenderPipeline>,
     shadow_pipelines: HashMap<ShadowKey, wgpu::RenderPipeline>,
     sky_module: wgpu::ShaderModule,
@@ -242,7 +247,7 @@ pub struct SceneRenderer {
     ssao: crate::ssao::SsaoGpu,
     prepass_layout: wgpu::PipelineLayout,
     /// Depth-only pipelines for the SSAO prepass: (cutout, double sided, skinned).
-    prepass_pipelines: HashMap<(bool, bool, bool), wgpu::RenderPipeline>,
+    prepass_pipelines: HashMap<(bool, bool, bool, Option<AssetId>), wgpu::RenderPipeline>,
     terrain_prepass: wgpu::RenderPipeline,
     /// Per view: (frame index, view-projection this frame, last frame's), for motion blur.
     view_prev: HashMap<(u64, u32, u32), (u64, Matrix4x4, Matrix4x4)>,
@@ -328,6 +333,67 @@ fn vertex_layouts(skinned: bool) -> Vec<Option<wgpu::VertexBufferLayout<'static>
         }));
     }
     v
+}
+
+/// The Lit shader with these surface hooks (without the common header).
+pub fn lit_source(hooks: &str) -> String {
+    format!(
+        "{}\n{}",
+        include_str!("shaders/lit.wgsl").replace("//#SURFACE", hooks),
+        include_str!("shaders/lighting.wgsl")
+    )
+}
+
+/// The shadow caster shader with these surface hooks.
+pub fn shadow_source(hooks: &str) -> String {
+    include_str!("shaders/shadow.wgsl").replace("//#SURFACE", hooks)
+}
+
+/// Hooks drawn when a Shader Graph fails to compile: Unity's magenta error shader.
+const ERROR_HOOKS: &str = "
+fn vertex_mod(v: VertexInput) -> VertexMod {
+    var m: VertexMod;
+    m.position = v.position;
+    m.normal = v.normal;
+    m.tangent = v.tangent;
+    return m;
+}
+fn surface(i: SurfaceInput) -> Surface {
+    var s: Surface;
+    s.base_color = vec3f(0.0);
+    s.emission = vec3f(1.0, 0.0, 1.0);
+    s.alpha = 1.0;
+    s.normal_ts = vec3f(0.0, 0.0, 1.0);
+    s.occlusion = 1.0;
+    s.alpha_clip = -1.0;
+    return s;
+}
+";
+
+/// Checks WGSL with naga (wgpu would panic on an invalid module).
+pub fn validate_wgsl(src: &str) -> Result<(), String> {
+    let module = naga::front::wgsl::parse_str(src).map_err(|e| e.emit_to_string(src))?;
+    naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    )
+    .validate(&module)
+    .map(|_| ())
+    .map_err(|e| e.emit_to_string(src))
+}
+
+/// Checks surface hooks against the Lit and shadow caster shaders (Shader Graph errors).
+pub fn validate_surface_hooks(hooks: &str) -> Result<(), String> {
+    let common = include_str!("shaders/common.wgsl");
+    validate_wgsl(&format!("{common}\n{}", lit_source(hooks)))?;
+    validate_wgsl(&shadow_source(hooks)).map_err(|e| format!("shadow pass: {e}"))
+}
+
+/// The modules of one compiled Shader Graph.
+struct GraphModule {
+    generation: u64,
+    lit: wgpu::ShaderModule,
+    shadow: Option<wgpu::ShaderModule>,
 }
 
 fn shader(device: &wgpu::Device, label: &str, src: &str) -> wgpu::ShaderModule {
@@ -447,7 +513,7 @@ impl SceneRenderer {
         let shadow_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("shadow view layout"),
             entries: &[
-                uniform_entry(0, wgpu::ShaderStages::VERTEX),
+                uniform_entry(0, wgpu::ShaderStages::VERTEX_FRAGMENT),
                 storage_entry(1, wgpu::ShaderStages::VERTEX),
             ],
         });
@@ -477,16 +543,16 @@ impl SceneRenderer {
             bind_group_layouts: &[Some(&frame_layout)],
             immediate_size: 0,
         });
-        let lit_src = format!(
-            "{}\n{}",
-            include_str!("shaders/lit.wgsl"),
-            include_str!("shaders/lighting.wgsl")
+        let lit_module = shader(
+            device,
+            "lit.wgsl",
+            &lit_source(include_str!("shaders/lit_surface.wgsl")),
         );
-        let lit_module = shader(device, "lit.wgsl", &lit_src);
-
         let shadow_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("shadow.wgsl"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/shadow.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                shadow_source(include_str!("shaders/shadow_surface.wgsl")).into(),
+            ),
         });
         let sky_module = shader(device, "sky.wgsl", include_str!("shaders/sky.wgsl"));
         let lines_module = shader(device, "lines.wgsl", include_str!("shaders/lines.wgsl"));
@@ -540,7 +606,7 @@ impl SceneRenderer {
             })
         };
         let shadow_buffers = (0..CASCADES)
-            .map(|_| buf("shadow view", 64, wgpu::BufferUsages::UNIFORM))
+            .map(|_| buf("shadow view", 80, wgpu::BufferUsages::UNIFORM))
             .collect();
         let post = PostProcessor::new(device);
         let terrain = crate::terrain::TerrainGpu::new(device);
@@ -651,6 +717,7 @@ impl SceneRenderer {
             shadow_pipeline_layout,
             lit_module,
             shadow_module,
+            graph_modules: HashMap::new(),
             main_pipelines: HashMap::new(),
             shadow_pipelines: HashMap::new(),
             sky_module,
@@ -712,7 +779,7 @@ impl SceneRenderer {
                 })
                 .create_view(&Default::default()),
             atlas_buffers: (0..ATLAS_TILES)
-                .map(|_| buf("shadow tile view", 64, wgpu::BufferUsages::UNIFORM))
+                .map(|_| buf("shadow tile view", 80, wgpu::BufferUsages::UNIFORM))
                 .collect(),
             atlas_groups: Vec::new(),
             atlas_matrices: buf(
@@ -887,8 +954,72 @@ impl SceneRenderer {
         );
     }
 
+    /// Builds the modules of a compiled Shader Graph (again when it was recompiled); a graph
+    /// whose WGSL does not validate draws magenta and logs the error.
+    fn ensure_graph_module(
+        &mut self,
+        device: &wgpu::Device,
+        assets: &AssetServer,
+        id: AssetId,
+        generation: u64,
+    ) {
+        if self
+            .graph_modules
+            .get(&id)
+            .is_some_and(|g| g.generation == generation)
+        {
+            return;
+        }
+        let Some(sh) = assets.shaders.get_by_id(id) else {
+            return;
+        };
+        let common = include_str!("shaders/common.wgsl");
+        let lit = lit_source(&sh.source);
+        let lit = match validate_wgsl(&format!("{common}\n{lit}")) {
+            Ok(()) => lit,
+            Err(e) => {
+                oxide_core::debug_log_error!("Shader Graph {}: {e}", sh.name);
+                lit_source(ERROR_HOOKS)
+            }
+        };
+        let shadow = sh
+            .surface
+            .as_ref()
+            .and_then(|s| s.shadow_source.as_ref())
+            .map(|hooks| shadow_source(hooks))
+            .filter(|src| match validate_wgsl(src) {
+                Ok(()) => true,
+                Err(e) => {
+                    oxide_core::debug_log_error!("Shader Graph {} (shadow): {e}", sh.name);
+                    false
+                }
+            })
+            .map(|src| {
+                device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("shader graph shadow"),
+                    source: wgpu::ShaderSource::Wgsl(src.into()),
+                })
+            });
+        let module = shader(device, &sh.name, &lit);
+        self.main_pipelines.retain(|k, _| k.shader != Some(id));
+        self.shadow_pipelines.retain(|k, _| k.shader != Some(id));
+        self.prepass_pipelines.retain(|k, _| k.3 != Some(id));
+        self.graph_modules.insert(
+            id,
+            GraphModule {
+                generation,
+                lit: module,
+                shadow,
+            },
+        );
+    }
+
     fn main_pipeline(&mut self, device: &wgpu::Device, key: MainKey) -> &wgpu::RenderPipeline {
-        let (module, layout, ms) = (&self.lit_module, &self.main_layout, key.samples);
+        let module = key
+            .shader
+            .and_then(|id| self.graph_modules.get(&id))
+            .map_or(&self.lit_module, |g| &g.lit);
+        let (layout, ms) = (&self.main_layout, key.samples);
         self.main_pipelines.entry(key).or_insert_with(|| {
             let buffers = vertex_layouts(key.skinned);
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -950,9 +1081,16 @@ impl SceneRenderer {
         })
     }
 
-    fn prepass_pipeline(&mut self, device: &wgpu::Device, key: (bool, bool, bool)) {
-        let (cutout, double_sided, skinned) = key;
-        let (module, layout) = (&self.lit_module, &self.prepass_layout);
+    fn prepass_pipeline(
+        &mut self,
+        device: &wgpu::Device,
+        key: (bool, bool, bool, Option<AssetId>),
+    ) {
+        let (cutout, double_sided, skinned, graph) = key;
+        let module = graph
+            .and_then(|id| self.graph_modules.get(&id))
+            .map_or(&self.lit_module, |g| &g.lit);
+        let layout = &self.prepass_layout;
         self.prepass_pipelines.entry(key).or_insert_with(|| {
             let buffers = vertex_layouts(skinned);
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -994,7 +1132,12 @@ impl SceneRenderer {
     }
 
     fn shadow_pipeline(&mut self, device: &wgpu::Device, key: ShadowKey) -> &wgpu::RenderPipeline {
-        let (module, layout) = (&self.shadow_module, &self.shadow_pipeline_layout);
+        let module = key
+            .shader
+            .and_then(|id| self.graph_modules.get(&id))
+            .and_then(|g| g.shadow.as_ref())
+            .unwrap_or(&self.shadow_module);
+        let layout = &self.shadow_pipeline_layout;
         self.shadow_pipelines.entry(key).or_insert_with(|| {
             let buffers = vertex_layouts(key.skinned);
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -1804,7 +1947,11 @@ impl SceneRenderer {
             probes: [u32; 2],
             /// Index into the baked-lighting table, or -1.
             gi: f32,
+            /// Shader Graph module for the main and shadow passes.
+            shader: Option<AssetId>,
+            shadow_shader: Option<AssetId>,
         }
+        let mut graphs: Vec<(AssetId, u64)> = Vec::new();
         let mut gis: Vec<InstanceGi> = Vec::new();
         let exclude = capture.and_then(|c| c.exclude);
         self.update_lightmaps(gpu, assets, &frame.lightmaps);
@@ -1817,6 +1964,11 @@ impl SceneRenderer {
                 .gpu_assets
                 .ensure_material(device, queue, assets, d.material);
             let gm = &self.gpu_assets.materials[&mat];
+            if let Some(g) = gm.shader
+                && !graphs.contains(&g)
+            {
+                graphs.push(g);
+            }
             let mesh = &self.gpu_assets.meshes[&d.mesh];
             if d.submesh as usize >= mesh.submeshes.len() {
                 continue;
@@ -1874,7 +2026,12 @@ impl SceneRenderer {
                 double_sided: gm.double_sided,
                 cast: gm.cast_shadows && (d.cast_shadows || d.shadows_only),
                 priority: gm.priority,
+                shader: gm.shader.map(|g| g.0),
+                shadow_shader: gm.shader.filter(|_| gm.shadow_shader).map(|g| g.0),
             });
+        }
+        for (id, generation) in graphs {
+            self.ensure_graph_module(device, assets, id, generation);
         }
 
         let gi_bytes = (gis.len().max(1) * std::mem::size_of::<InstanceGi>()) as u64;
@@ -2105,6 +2262,7 @@ impl SceneRenderer {
                     cutout: r.cutout,
                     double_sided: r.double_sided,
                     skinned: r.item.joint_offset.is_some(),
+                    shader: r.shadow_shader,
                 };
                 let idx = instances.len() as u32;
                 instances.push(make_instance(r));
@@ -2164,6 +2322,11 @@ impl SceneRenderer {
                     0,
                     bytemuck::cast_slice(&c.view_proj.to_cols_array()),
                 );
+                queue.write_buffer(
+                    &self.shadow_buffers[i],
+                    64,
+                    bytemuck::cast_slice(&[frame.time, 0.0, 0.0, 0.0]),
+                );
                 let casters = resolved
                     .iter()
                     .filter(|r| r.cast && !r.transparent && c.overlaps(r.center, r.radius))
@@ -2185,6 +2348,11 @@ impl SceneRenderer {
                     &self.atlas_buffers[tile],
                     0,
                     bytemuck::cast_slice(&m.to_cols_array()),
+                );
+                queue.write_buffer(
+                    &self.atlas_buffers[tile],
+                    64,
+                    bytemuck::cast_slice(&[frame.time, 0.0, 0.0, 0.0]),
                 );
                 let planes = frustum_planes(m);
                 let casters = resolved
@@ -2382,6 +2550,7 @@ impl SceneRenderer {
                     depth_test: DepthTest::LessEqual,
                     depth_write: true,
                     wire: false,
+                    shader: r.shader,
                 };
                 let idx = instances.len() as u32;
                 instances.push(make_instance(r));
@@ -2418,6 +2587,7 @@ impl SceneRenderer {
                             depth_test: DepthTest::LessEqual,
                             depth_write: false,
                             wire: false,
+                            shader: r.shader,
                         },
                         material: r.material,
                         mesh: r.item.mesh,
@@ -2470,6 +2640,11 @@ impl SceneRenderer {
                             depth_test: *depth_test,
                             depth_write: *write_depth,
                             wire: false,
+                            shader: if override_mat.is_some() {
+                                None
+                            } else {
+                                r.shader
+                            },
                         },
                         material,
                         mesh: r.item.mesh,
@@ -2501,6 +2676,7 @@ impl SceneRenderer {
                             depth_test: DepthTest::LessEqual,
                             depth_write: false,
                             wire: true,
+                            shader: None,
                         },
                         material: r.material,
                         mesh: r.item.mesh,
@@ -2793,7 +2969,10 @@ impl SceneRenderer {
         if let (Some(settings), Some(cam)) = (ssao, frame.cameras.first()) {
             for b in &camera_batches[0].0 {
                 let cutout = self.gpu_assets.materials[&b.material].cutout;
-                self.prepass_pipeline(device, (cutout, b.key.double_sided, b.key.skinned));
+                self.prepass_pipeline(
+                    device,
+                    (cutout, b.key.double_sided, b.key.skinned, b.key.shader),
+                );
             }
             let t = self.targets.get_mut(&(w, h, samples)).expect("targets");
             if t.ssao.is_none() {
@@ -2844,7 +3023,8 @@ impl SceneRenderer {
                     let mesh = &self.gpu_assets.meshes[&b.mesh];
                     let mat = &self.gpu_assets.materials[&b.material];
                     pass.set_pipeline(
-                        &self.prepass_pipelines[&(mat.cutout, b.key.double_sided, b.key.skinned)],
+                        &self.prepass_pipelines
+                            [&(mat.cutout, b.key.double_sided, b.key.skinned, b.key.shader)],
                     );
                     pass.set_bind_group(1, &mat.bind_group, &[]);
                     pass.set_vertex_buffer(0, mesh.vertices.slice(..));
@@ -3546,4 +3726,24 @@ fn frustum_planes(m: &Matrix4x4) -> [Vector4; 6] {
 
 fn sphere_visible(planes: &[Vector4; 6], c: Vector3, r: f32) -> bool {
     planes.iter().all(|p| p.truncate().dot(c) + p.w >= -r)
+}
+
+#[cfg(test)]
+mod shader_tests {
+    use super::*;
+
+    #[test]
+    fn builtin_lit_and_shadow_shaders_validate() {
+        let common = include_str!("shaders/common.wgsl");
+        let lit = lit_source(include_str!("shaders/lit_surface.wgsl"));
+        if let Err(e) = validate_wgsl(&format!("{common}\n{lit}")) {
+            panic!("lit.wgsl:\n{e}");
+        }
+        let err = lit_source(ERROR_HOOKS);
+        validate_wgsl(&format!("{common}\n{err}")).expect("error shader");
+        let shadow = shadow_source(include_str!("shaders/shadow_surface.wgsl"));
+        if let Err(e) = validate_wgsl(&shadow) {
+            panic!("shadow.wgsl:\n{e}");
+        }
+    }
 }

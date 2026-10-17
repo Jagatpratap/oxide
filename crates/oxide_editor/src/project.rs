@@ -349,6 +349,8 @@ enum Op {
     NewFolder(String),
     /// A new asset of a registered type (by type name) in a folder.
     NewAsset(&'static str, String),
+    /// A material using a Shader Graph (Unity: select the graph, Create → Material).
+    GraphMaterial(String),
     /// A Prefab Variant of a prefab asset, next to it.
     PrefabVariant(String),
     /// A Font Asset from a font file, next to it (TMP's Create > TextMeshPro > Font Asset).
@@ -432,34 +434,49 @@ fn create_menu(
     ops: &mut Vec<Op>,
 ) {
     let folder = ps.folder.clone();
-    // Top-level entries first (a separator between order groups of 20), then submenus.
+    let entries: Vec<(&str, &'static str, i32)> =
+        types.iter().map(|(p, t, o)| (*p, *t, *o)).collect();
+    create_level(ui, ps, scripts, &entries, &folder, ops);
+}
+
+/// One menu level: its own entries first (a separator between order groups of 20), then
+/// submenus (nested as deep as the paths go, like Unity's Shader Graph/URP/...).
+fn create_level(
+    ui: &mut egui::Ui,
+    ps: &mut ProjectState,
+    scripts: bool,
+    entries: &[(&str, &'static str, i32)],
+    folder: &str,
+    ops: &mut Vec<Op>,
+) {
     let mut subs: Vec<&str> = Vec::new();
     let mut group = None;
-    for (path, type_name, order) in types {
+    for (path, type_name, order) in entries {
         match path.split_once('/') {
             None => {
                 if group.is_some_and(|g| g != order / 20) {
                     ui.separator();
                 }
                 group = Some(order / 20);
-                create_item(ui, ps, scripts, path, type_name, &folder, ops);
+                create_item(ui, ps, scripts, path, type_name, folder, ops);
             }
             Some((sub, _)) if !subs.contains(&sub) => subs.push(sub),
             Some(_) => {}
         }
     }
-    if !subs.is_empty() {
+    if !subs.is_empty() && group.is_some() {
         ui.separator();
     }
     for sub in subs {
         ui.menu_button(sub, |ui| {
-            for (path, type_name, _) in types {
-                if let Some((s, rest)) = path.split_once('/')
-                    && s == sub
-                {
-                    create_item(ui, ps, scripts, rest, type_name, &folder, ops);
-                }
-            }
+            let inner: Vec<(&str, &'static str, i32)> = entries
+                .iter()
+                .filter_map(|(p, t, o)| {
+                    let (s, rest) = p.split_once('/')?;
+                    (s == sub).then_some((rest, *t, *o))
+                })
+                .collect();
+            create_level(ui, ps, scripts, &inner, folder, ops);
         });
     }
 }
@@ -535,6 +552,10 @@ fn item_menu(ui: &mut egui::Ui, path: &str, dir: bool, ops: &mut Vec<Op>, ps: &m
     }
     if !dir && ui.button("Reimport").clicked() {
         ops.push(Op::Reimport(path.to_owned()));
+        ui.close();
+    }
+    if path.ends_with(".shadergraph") && ui.button("Create Material").clicked() {
+        ops.push(Op::GraphMaterial(path.to_owned()));
         ui.close();
     }
     if path.ends_with(".prefab") && ui.button("Create Prefab Variant").clicked() {
@@ -637,6 +658,15 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
         .create_menu()
         .into_iter()
         .filter_map(|t| Some((t.create_menu?, t.type_name, t.order)))
+        .flat_map(|e| {
+            // Unity's Create → Shader Graph → URP has Lit and Unlit graphs.
+            let unlit = (e.1 == "ShaderGraph").then_some((
+                "Shader Graph/URP/Unlit Shader Graph",
+                "UnlitShaderGraph",
+                e.2,
+            ));
+            std::iter::once(e).chain(unlit)
+        })
         .collect();
     let ps = &mut st.project;
 
@@ -1199,6 +1229,24 @@ fn run(st: &mut EditorState, engine: &mut Engine, root: &Path, op: Op) -> Result
             st.project.start_rename();
             st.project.invalidate();
         }
+        Op::GraphMaterial(graph) => {
+            let stem = graph.trim_end_matches(".shadergraph");
+            let path = asset_ops::unique_path(root, &format!("{stem}.mat"));
+            let name = path
+                .rsplit('/')
+                .next()
+                .unwrap_or(&path)
+                .trim_end_matches(".mat")
+                .to_owned();
+            let mut m = oxide_assets::Material::lit(&name, oxide_math::Color::WHITE);
+            m.shader_graph = Some(oxide_assets::Handle::from_path(graph.clone()));
+            let assets = engine.world.resource_mut::<AssetServer>();
+            assets.ensure_loaded(&graph)?;
+            assets.save_material(&path, &m)?;
+            st.project.selected = Some(path);
+            st.project.inspecting = true;
+            st.project.invalidate();
+        }
         Op::NewAsset(type_name, folder) => {
             let path = new_asset(engine, root, type_name, &folder)?;
             st.project.selected = Some(path);
@@ -1218,6 +1266,19 @@ pub fn new_asset(
     type_name: &str,
     folder: &str,
 ) -> Result<String, String> {
+    if type_name == "UnlitShaderGraph" {
+        let path = asset_ops::unique_path(
+            root,
+            &format!("{folder}/New Unlit Shader Graph.shadergraph"),
+        );
+        let mut g = oxide_shadergraph::ShaderGraph::default();
+        g.settings.material = oxide_shadergraph::GraphMaterial::Unlit;
+        engine
+            .world
+            .resource_mut::<AssetServer>()
+            .save_data(&path, Box::new(g))?;
+        return Ok(path);
+    }
     let info = engine
         .world
         .resource::<AssetServer>()
@@ -1373,6 +1434,10 @@ pub fn open(
         "TimelineAsset" => {
             st.timeline.open_asset(&engine.world, path);
             st.actions.push(Action::OpenTab(crate::Tab::Timeline));
+        }
+        "ShaderGraph" | "ShaderSubGraph" => {
+            st.shader_graph.open(engine, path)?;
+            st.actions.push(Action::OpenTab(crate::Tab::ShaderGraph));
         }
         "AudioMixer" => {
             st.audio_mixer.open(path);

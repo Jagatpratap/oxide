@@ -94,6 +94,7 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: &s
                 }
                 "AvatarMask" => crate::anim_inspectors::avatar_mask(st, engine, ui, path),
                 "Preset" => preset(st, engine, ui, path),
+                "ShaderGraph" | "ShaderSubGraph" => shader_graph_asset(st, engine, ui, path),
                 t if engine.world.resource::<AssetServer>().types.is_data(t) => {
                     data_asset(st, engine, ui, path)
                 }
@@ -381,8 +382,37 @@ fn material(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: 
     let Some(mut m) = assets.materials.get(&h).cloned() else {
         return;
     };
-    ui.weak("Shader: Oxide/Lit");
-    if edit_fields(ui, engine, &mut m, "material") {
+    let mut changed = shader_picker(st, engine, ui, &mut m);
+    if m.shader_graph.is_some() {
+        changed |= graph_properties(engine, ui, &mut m);
+        ui.collapsing("Advanced Options", |ui| {
+            changed |= crate::inspector::reflect_grid_where(
+                ui,
+                &engine.world,
+                &mut m,
+                "material-adv",
+                &|f| matches!(f, "sorting_priority" | "name"),
+            );
+        });
+    } else {
+        // Shader Graph fields only apply to graph materials.
+        changed |=
+            crate::inspector::reflect_grid_where(ui, &engine.world, &mut m, "material", &|f| {
+                !matches!(f, "shader" | "shader_graph" | "properties")
+            });
+    }
+    if changed {
+        for p in m.properties.iter().filter_map(|p| p.texture.as_ref()) {
+            if let Err(e) = engine
+                .world
+                .resource_mut::<AssetServer>()
+                .ensure_loaded(p.path())
+            {
+                oxide_core::debug_log_warning!("{e}");
+            }
+        }
+    }
+    if changed {
         // Unity saves material edits straight to the asset.
         if let Err(e) = engine
             .world
@@ -392,6 +422,319 @@ fn material(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: 
             st.status = e;
         }
     }
+}
+
+/// A Shader Graph or Sub Graph: Open Shader Editor, its properties and compile errors.
+fn shader_graph_asset(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: &str) {
+    use oxide_shadergraph::{ShaderGraph, ShaderSubGraph};
+    if ui.button("Open Shader Editor").clicked() {
+        match st.shader_graph.open(engine, path) {
+            Ok(()) => st.actions.push(Action::OpenTab(crate::Tab::ShaderGraph)),
+            Err(e) => st.status = e,
+        }
+    }
+    let assets = engine.world.resource_mut::<AssetServer>();
+    if !assets.data.contains(path)
+        && let Err(e) = assets.load_data(path)
+    {
+        ui.colored_label(Color32::from_rgb(230, 120, 100), e);
+        return;
+    }
+    let h = |p: &str| oxide_assets::Handle::<ShaderGraph>::from_path(p.to_owned());
+    let (props, extra): (Vec<(String, String)>, Vec<String>) =
+        if let Some(g) = assets.data.get(&h(path)) {
+            (
+                g.properties
+                    .iter()
+                    .map(|p| (p.name.clone(), p.kind.kind_name().to_owned()))
+                    .collect(),
+                vec![format!(
+                    "{:?} · {:?}{}",
+                    g.settings.material,
+                    g.settings.surface,
+                    if g.settings.alpha_clipping {
+                        " · Alpha Clipping"
+                    } else {
+                        ""
+                    }
+                )],
+            )
+        } else if let Some(s) = assets
+            .data
+            .get(&oxide_assets::Handle::<ShaderSubGraph>::from_path(
+                path.to_owned(),
+            ))
+        {
+            (
+                s.properties
+                    .iter()
+                    .map(|p| (p.name.clone(), p.kind.kind_name().to_owned()))
+                    .collect(),
+                s.outputs
+                    .iter()
+                    .map(|o| format!("Output {} ({})", o.name, o.kind.kind_name()))
+                    .collect(),
+            )
+        } else {
+            return;
+        };
+    for l in extra {
+        ui.weak(l);
+    }
+    ui.label(RichText::new("Properties").strong());
+    if props.is_empty() {
+        ui.weak("None");
+    }
+    for (name, kind) in props {
+        ui.horizontal(|ui| {
+            crate::inspector::prop_label(ui, name);
+            ui.weak(kind);
+        });
+    }
+    if let Some(s) = assets
+        .shaders
+        .handle_of(path)
+        .and_then(|h| assets.shaders.get(&h))
+        .and_then(|s| s.surface.as_ref())
+    {
+        for (n, e) in &s.errors {
+            ui.colored_label(Color32::from_rgb(240, 110, 100), format!("Node {n}: {e}"));
+        }
+    }
+}
+
+/// Unity's Shader dropdown: the built-in shaders and every Shader Graph in the project.
+fn shader_picker(
+    st: &mut EditorState,
+    engine: &mut Engine,
+    ui: &mut egui::Ui,
+    m: &mut oxide_assets::Material,
+) -> bool {
+    use oxide_assets::ShaderKind;
+    let graphs = engine
+        .world
+        .resource::<AssetServer>()
+        .paths_of_type("ShaderGraph");
+    let stem = |p: &str| {
+        let n = p.rsplit('/').next().unwrap_or(p);
+        n.split('.').next().unwrap_or(n).to_owned()
+    };
+    let current = match (&m.shader_graph, m.shader) {
+        (Some(g), _) => format!("Shader Graphs/{}", stem(g.path())),
+        (None, ShaderKind::Unlit) => "Universal Render Pipeline/Unlit".into(),
+        (None, _) => "Universal Render Pipeline/Lit".into(),
+    };
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        crate::inspector::prop_label(ui, "Shader");
+        egui::ComboBox::from_id_salt("material-shader")
+            .selected_text(&current)
+            .width(crate::inspector::avail(ui) - 50.0)
+            .show_ui(ui, |ui| {
+                for (label, kind) in [
+                    ("Universal Render Pipeline/Lit", ShaderKind::Lit),
+                    ("Universal Render Pipeline/Unlit", ShaderKind::Unlit),
+                ] {
+                    if ui.selectable_label(current == label, label).clicked() {
+                        m.shader = kind;
+                        m.shader_graph = None;
+                        changed = true;
+                    }
+                }
+                for g in &graphs {
+                    let label = format!("Shader Graphs/{}", stem(g));
+                    if ui
+                        .selectable_label(current == label, &label)
+                        .on_hover_text(g)
+                        .clicked()
+                    {
+                        m.shader_graph = Some(oxide_assets::Handle::from_path(g.clone()));
+                        changed = true;
+                    }
+                }
+            });
+        if let Some(g) = m.shader_graph.clone()
+            && ui.button("Edit...").clicked()
+        {
+            match st.shader_graph.open(engine, g.path()) {
+                Ok(()) => st.actions.push(Action::OpenTab(crate::Tab::ShaderGraph)),
+                Err(e) => st.status = e,
+            }
+        }
+    });
+    if changed && let Some(g) = &m.shader_graph {
+        let assets = engine.world.resource_mut::<AssetServer>();
+        if let Err(e) = assets.ensure_loaded(g.path()) {
+            st.status = e;
+        }
+        oxide_shadergraph::compile_asset(assets, g.path());
+    }
+    changed
+}
+
+/// A Shader Graph material's exposed properties (values saved on the material).
+fn graph_properties(
+    engine: &mut Engine,
+    ui: &mut egui::Ui,
+    m: &mut oxide_assets::Material,
+) -> bool {
+    use oxide_shadergraph::{FloatMode, PropertyType, ShaderGraph};
+    let Some(gh) = m.shader_graph.clone() else {
+        return false;
+    };
+    let assets = engine.world.resource_mut::<AssetServer>();
+    if !assets.data.contains(gh.path())
+        && let Err(e) = assets.load_data(gh.path())
+    {
+        ui.colored_label(Color32::from_rgb(230, 120, 100), e);
+        return false;
+    }
+    let Some(graph) = assets
+        .data
+        .get(&oxide_assets::Handle::<ShaderGraph>::from_path(
+            gh.path().to_owned(),
+        ))
+        .cloned()
+    else {
+        return false;
+    };
+    let mut changed = false;
+    ui.label(RichText::new("Surface Inputs").strong());
+    for p in graph.properties.iter().filter(|p| p.exposed) {
+        let cur = m.property(&p.reference).cloned();
+        let mut v = cur.as_ref().map_or(p.default, |c| c.value).to_array();
+        ui.horizontal(|ui| {
+            crate::inspector::prop_label(ui, &p.name).on_hover_text(&p.reference);
+            let w = crate::inspector::avail(ui);
+            match p.kind {
+                PropertyType::Float => {
+                    let r = match p.float_mode {
+                        FloatMode::Slider => ui.add_sized(
+                            [w, 18.0],
+                            egui::Slider::new(&mut v[0], p.range.x..=p.range.y),
+                        ),
+                        FloatMode::Integer => {
+                            let mut i = v[0].round() as i64;
+                            let r = ui.add(egui::DragValue::new(&mut i));
+                            v[0] = i as f32;
+                            r
+                        }
+                        FloatMode::Default => ui.add(egui::DragValue::new(&mut v[0]).speed(0.01)),
+                    };
+                    if r.changed() {
+                        m.set_float(&p.reference, v[0]);
+                        changed = true;
+                    }
+                }
+                PropertyType::Vector2 | PropertyType::Vector3 | PropertyType::Vector4 => {
+                    let n = match p.kind {
+                        PropertyType::Vector2 => 2,
+                        PropertyType::Vector3 => 3,
+                        _ => 4,
+                    };
+                    let mut any = false;
+                    for x in v.iter_mut().take(n) {
+                        any |= ui.add(egui::DragValue::new(x).speed(0.01)).changed();
+                    }
+                    if any {
+                        m.set_vector(&p.reference, oxide_math::Vector4::from_array(v));
+                        changed = true;
+                    }
+                }
+                PropertyType::Color => {
+                    let mut c = egui::Color32::from_rgba_unmultiplied(
+                        (v[0].clamp(0.0, 1.0) * 255.0) as u8,
+                        (v[1].clamp(0.0, 1.0) * 255.0) as u8,
+                        (v[2].clamp(0.0, 1.0) * 255.0) as u8,
+                        (v[3].clamp(0.0, 1.0) * 255.0) as u8,
+                    );
+                    if egui::color_picker::color_edit_button_srgba(
+                        ui,
+                        &mut c,
+                        egui::color_picker::Alpha::OnlyBlend,
+                    )
+                    .changed()
+                    {
+                        let [r, g, b, a] = c.to_srgba_unmultiplied();
+                        let k = if p.hdr {
+                            v[0].max(v[1]).max(v[2]).max(1.0)
+                        } else {
+                            1.0
+                        };
+                        m.set_vector(
+                            &p.reference,
+                            oxide_math::Vector4::new(
+                                r as f32 / 255.0 * k,
+                                g as f32 / 255.0 * k,
+                                b as f32 / 255.0 * k,
+                                a as f32 / 255.0,
+                            ),
+                        );
+                        changed = true;
+                    }
+                }
+                PropertyType::Boolean => {
+                    let mut b = v[0] > 0.5;
+                    if ui.checkbox(&mut b, "").changed() {
+                        m.set_float(&p.reference, b as u32 as f32);
+                        changed = true;
+                    }
+                }
+                PropertyType::Texture2D => {
+                    let tex = cur.and_then(|c| c.texture).or(p.default_texture.clone());
+                    let mut val = match &tex {
+                        Some(t) => oxide_core::reflect::Value::Asset(t.path().to_owned()),
+                        None => oxide_core::reflect::Value::Null,
+                    };
+                    if crate::inspector::asset_field(
+                        ui,
+                        &engine.world,
+                        Some("Texture"),
+                        &mut val,
+                        &format!("mat-tex-{}", p.reference),
+                    ) {
+                        let t = match val {
+                            oxide_core::reflect::Value::Asset(path) => {
+                                Some(oxide_assets::Handle::from_path(path))
+                            }
+                            _ => None,
+                        };
+                        m.set_texture(&p.reference, t);
+                        changed = true;
+                    }
+                }
+            }
+        });
+    }
+    for k in graph.keywords.iter().filter(|k| k.exposed) {
+        let mut b = m
+            .property(&k.reference)
+            .map_or(k.default, |p| p.value.x > 0.5);
+        ui.horizontal(|ui| {
+            crate::inspector::prop_label(ui, &k.name).on_hover_text(&k.reference);
+            if ui.checkbox(&mut b, "").changed() {
+                m.set_float(&k.reference, b as u32 as f32);
+                changed = true;
+            }
+        });
+    }
+    if m.properties.iter().any(|v| {
+        !graph.properties.iter().any(|p| p.reference == v.name)
+            && !graph.keywords.iter().any(|k| k.reference == v.name)
+    }) && ui
+        .small_button("Remove values of deleted properties")
+        .clicked()
+    {
+        let keep: Vec<String> = graph
+            .properties
+            .iter()
+            .map(|p| p.reference.clone())
+            .chain(graph.keywords.iter().map(|k| k.reference.clone()))
+            .collect();
+        m.properties.retain(|v| keep.contains(&v.name));
+        changed = true;
+    }
+    changed
 }
 
 fn render_texture(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: &str) {

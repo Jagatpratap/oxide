@@ -46,14 +46,14 @@ pub use animator_controller::{
 };
 pub use asset_types::{AssetTypeInfo, AssetTypeRegistry, CreateKind, DataAsset, DataAssets};
 pub use handle::{Asset, AssetId, Assets, Handle};
-pub use material::{Material, ShaderKind, SurfaceType};
+pub use material::{Material, MaterialProperty, ShaderKind, SurfaceType};
 pub use mesh::Mesh;
 pub use model::{Model, ModelNode, ModelSkin};
 pub use preset::Preset;
 pub use primitives::PrimitiveType;
 pub use render_texture::RenderTexture;
 pub use server::{AssetServer, AudioClip, DEFAULT_MATERIAL};
-pub use shader::Shader;
+pub use shader::{Shader, ShaderGraphRef, ShaderProperty, SurfaceShader};
 pub use sprite::{Sprite, SpriteImportMode, SpriteRect};
 pub use sprite_atlas::{AtlasReport, SpriteAtlas};
 pub use terrain::{

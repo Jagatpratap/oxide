@@ -300,6 +300,7 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
             crate::Tab::TilePalette,
             crate::Tab::Navigation,
             crate::Tab::Timeline,
+            crate::Tab::ShaderGraph,
         ])
         .map(|t| t.title())
         .collect();
@@ -333,6 +334,7 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
                     crate::Tab::TilePalette,
                     crate::Tab::Navigation,
                     crate::Tab::Timeline,
+                    crate::Tab::ShaderGraph,
                 ]);
                 let Some(tab) = all
                     .into_iter()
@@ -519,6 +521,53 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
                     return ToolResult::error(err);
                 }
                 ToolResult::json(ed.st.animation.state_json())
+            })
+        },
+    );
+
+    tool(
+        s,
+        bus,
+        ToolDef::new(
+            "editor_shader_graph",
+            "Shader Graph window",
+            "Edits a Shader Graph (.shadergraph) or Sub Graph (.shadersubgraph) in the Shader Graph window, like \
+             Unity's Shader Graph. `open` a file; `library: true` lists every node type with its ports and options. \
+             Returns nodes (id, kind, ports, values, options), edges, Blackboard properties, keywords and compile \
+             errors. Edits (one undo step per call): `add_property` {type: Float|Vector2|Vector3|Vector4|Color|\
+             Boolean|Texture2D, name, reference?, default?, texture?}; `set_property` {reference, name?, default?, \
+             exposed?, texture?, range?: [min,max]}; `add_keyword` (name); `settings` {material: Lit|Unlit, surface: \
+             Opaque|Transparent, render_face: Front|Both, alpha_clipping, cast_shadows, fragment_normal_space}; \
+             `add_nodes` [{kind, position?, options?, values?}] (Property nodes: options {Property: reference}; Sub \
+             Graph: {\"Sub Graph\": path}); `set_nodes` [{node, options?, values?, position?}]; `connect` [{from, \
+             output?, to, input}]; `disconnect` [{to, input}]; `delete` [nodes]. A node is an id, \"$k\" (the k-th \
+             node added by this call), or \"Fragment\" / \"Vertex\" / \"Output\". Fragment inputs: Base Color, \
+             Normal, Metallic, Smoothness, Ambient Occlusion, Emission, Alpha, Alpha Clip Threshold; Vertex: \
+             Position, Normal, Tangent. Values are numbers or [x,y,z,w]; colours are sRGB. `save: true` writes the \
+             file (materials using it update); `wgsl: true` returns the compiled code; `undo`/`redo`; `frame`.",
+            schema(
+                json!({
+                    "open": { "type": "string" }, "library": { "type": "boolean" },
+                    "add_property": { "type": "object" }, "set_property": { "type": "object" },
+                    "add_keyword": { "type": "string" }, "settings": { "type": "object" },
+                    "add_nodes": { "type": "array" }, "set_nodes": { "type": "array" },
+                    "connect": { "type": "array" }, "disconnect": { "type": "array" },
+                    "delete": { "type": "array" }, "select": { "type": "array" },
+                    "save": { "type": "boolean" }, "wgsl": { "type": "boolean" },
+                    "undo": { "type": "boolean" }, "redo": { "type": "boolean" }, "frame": { "type": "boolean" }
+                }),
+                &[],
+            ),
+        ),
+        |args, e| {
+            if args.get("library").and_then(Json::as_bool) == Some(true) {
+                return ToolResult::json(crate::shader_graph_window::library_json());
+            }
+            with_editor(e, |ed, e| {
+                match crate::shader_graph_window::mcp(&mut ed.st, e, args) {
+                    Ok(j) => ToolResult::json(j),
+                    Err(err) => ToolResult::error(err),
+                }
             })
         },
     );

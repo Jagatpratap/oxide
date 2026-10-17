@@ -65,9 +65,19 @@ pub struct MaterialUniform {
     pub flags: [f32; 4],
 }
 
+/// Vec4 slots of a Shader Graph material's property uniform.
+pub const GRAPH_SLOTS: usize = 32;
+/// Texture slots of a Shader Graph material (bindings 1-5, the Lit maps' slots).
+pub const GRAPH_TEXTURES: usize = 5;
+
 pub struct GpuMaterial {
     pub version: u64,
     pub texture_generation: u64,
+    /// The compiled Shader Graph this material draws with (its `generation` too, so the
+    /// material rebuilds when the graph is recompiled).
+    pub shader: Option<(AssetId, u64)>,
+    /// The graph has its own shadow-pass hooks (vertex changes, alpha clipping).
+    pub shadow_shader: bool,
     pub bind_group: wgpu::BindGroup,
     pub transparent: bool,
     pub cutout: bool,
@@ -133,7 +143,7 @@ impl GpuAssets {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
         let tex_entry = |binding| wgpu::BindGroupLayoutEntry {
             binding,
-            visibility: wgpu::ShaderStages::FRAGMENT,
+            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
             ty: wgpu::BindingType::Texture {
                 sample_type: wgpu::TextureSampleType::Float { filterable: true },
                 view_dimension: wgpu::TextureViewDimension::D2,
@@ -161,8 +171,18 @@ impl GpuAssets {
                 tex_entry(5),
                 wgpu::BindGroupLayoutEntry {
                     binding: 6,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
                     count: None,
                 },
             ],
@@ -373,7 +393,13 @@ impl GpuAssets {
         };
         let version = assets.materials.version(id).unwrap_or(0);
         let mat = assets.materials.get_by_id(id).cloned().unwrap_or_default();
-        let tex_ids: Vec<AssetId> = [
+        // A Shader Graph that compiled (its surface info); otherwise the built-in shader.
+        let graph = mat.shader_graph.as_ref().and_then(|h| {
+            let gid = AssetId::from_path(h.path());
+            let s = assets.shaders.get_by_id(gid)?.surface.clone()?;
+            Some((gid, s))
+        });
+        let mut tex_ids: Vec<AssetId> = [
             &mat.base_map,
             &mat.metallic_gloss_map,
             &mat.normal_map,
@@ -384,15 +410,27 @@ impl GpuAssets {
         .flatten()
         .map(|h| h.id())
         .collect();
+        if let Some((_, s)) = &graph {
+            for p in s.properties.iter().filter(|p| p.kind == "Texture2D") {
+                let t = mat
+                    .property(&p.name)
+                    .and_then(|v| v.texture.clone())
+                    .or_else(|| p.default_texture.clone());
+                tex_ids.extend(t.map(|h| h.id()));
+            }
+        }
         for t in tex_ids {
             self.ensure_texture(device, queue, assets, t);
         }
+        let shader = graph.as_ref().map(|(g, s)| (*g, s.generation));
         if self.materials.get(&id).is_some_and(|m| {
-            m.version == version && m.texture_generation == self.texture_generation
+            m.version == version
+                && m.texture_generation == self.texture_generation
+                && m.shader == shader
         }) {
             return id;
         }
-        let gm = self.build_material(device, &mat, version);
+        let gm = self.build_material(device, &mat, version, graph.as_ref());
         self.materials.insert(id, gm);
         id
     }
@@ -407,7 +445,13 @@ impl GpuAssets {
             .map_or(fallback, |t| &t.view)
     }
 
-    fn build_material(&mut self, device: &wgpu::Device, m: &Material, version: u64) -> GpuMaterial {
+    fn build_material(
+        &mut self,
+        device: &wgpu::Device,
+        m: &Material,
+        version: u64,
+        graph: Option<&(AssetId, oxide_assets::SurfaceShader)>,
+    ) -> GpuMaterial {
         let base = m.base_color.linear();
         let em = m.emission_color.linear();
         let k = m.emission_intensity;
@@ -425,13 +469,51 @@ impl GpuAssets {
                 },
             ],
             tiling_offset: [m.tiling.x, m.tiling.y, m.offset.x, m.offset.y],
-            flags: [
-                m.alpha_cutoff,
-                (m.shader == ShaderKind::Unlit) as u32 as f32,
-                (m.surface_type == SurfaceType::Cutout) as u32 as f32,
-                (m.surface_type == SurfaceType::Transparent) as u32 as f32,
-            ],
+            flags: match graph {
+                Some((_, g)) => [
+                    m.alpha_cutoff,
+                    g.unlit as u32 as f32,
+                    g.alpha_clip as u32 as f32,
+                    g.transparent as u32 as f32,
+                ],
+                None => [
+                    m.alpha_cutoff,
+                    (m.shader == ShaderKind::Unlit) as u32 as f32,
+                    (m.surface_type == SurfaceType::Cutout) as u32 as f32,
+                    (m.surface_type == SurfaceType::Transparent) as u32 as f32,
+                ],
+            },
         };
+        // Shader Graph property values by slot (material values, else the graph defaults).
+        let mut props = [[0.0f32; 4]; GRAPH_SLOTS];
+        let mut graph_tex: [Option<oxide_assets::Handle<Texture2D>>; GRAPH_TEXTURES] =
+            Default::default();
+        if let Some((_, g)) = graph {
+            for p in &g.properties {
+                let set = m.property(&p.name);
+                if p.kind == "Texture2D" {
+                    if let Some(slot) = graph_tex.get_mut(p.slot as usize) {
+                        *slot = set
+                            .and_then(|v| v.texture.clone())
+                            .or_else(|| p.default_texture.clone());
+                    }
+                    continue;
+                }
+                let mut v = set.map_or(p.default, |v| v.value.to_array());
+                if p.kind == "Color" {
+                    let c = oxide_math::Color::new(v[0], v[1], v[2], v[3]).linear();
+                    v = [c.r, c.g, c.b, v[3]];
+                }
+                if let Some(slot) = props.get_mut(p.slot as usize) {
+                    *slot = v;
+                }
+            }
+        }
+        let graph_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("shader graph properties"),
+            contents: bytemuck::cast_slice(&props),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
         let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("material uniform"),
             contents: bytemuck::bytes_of(&uniform),
@@ -452,6 +534,20 @@ impl GpuAssets {
             } else {
                 &self.black
             };
+        // A Shader Graph's textures take the Lit maps' bindings.
+        let g = graph.is_some();
+        let pick = |i: usize, lit: &Option<oxide_assets::Handle<Texture2D>>| {
+            if g { graph_tex[i].clone() } else { lit.clone() }
+        };
+        let (t_base, t_mr, t_normal, t_occ, t_em) = (
+            pick(0, &m.base_map),
+            pick(1, &m.metallic_gloss_map),
+            pick(2, &m.normal_map),
+            pick(3, &m.occlusion_map),
+            pick(4, &m.emission_map),
+        );
+        let normal_fallback = if g { &self.white } else { &self.normal };
+        let emission_fallback = if g { &self.white } else { emission_fallback };
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("material bind group"),
             layout: &self.material_layout,
@@ -463,47 +559,58 @@ impl GpuAssets {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::TextureView(
-                        self.view_or(&m.base_map, &self.white),
+                        self.view_or(&t_base, &self.white),
                     ),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::TextureView(
-                        self.view_or(&m.metallic_gloss_map, &self.white),
-                    ),
+                    resource: wgpu::BindingResource::TextureView(self.view_or(&t_mr, &self.white)),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: wgpu::BindingResource::TextureView(
-                        self.view_or(&m.normal_map, &self.normal),
+                        self.view_or(&t_normal, normal_fallback),
                     ),
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
-                    resource: wgpu::BindingResource::TextureView(
-                        self.view_or(&m.occlusion_map, &self.white),
-                    ),
+                    resource: wgpu::BindingResource::TextureView(self.view_or(&t_occ, &self.white)),
                 },
                 wgpu::BindGroupEntry {
                     binding: 5,
                     resource: wgpu::BindingResource::TextureView(
-                        self.view_or(&m.emission_map, emission_fallback),
+                        self.view_or(&t_em, emission_fallback),
                     ),
                 },
                 wgpu::BindGroupEntry {
                     binding: 6,
                     resource: wgpu::BindingResource::Sampler(sampler),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: graph_buffer.as_entire_binding(),
+                },
             ],
         });
+        let (transparent, cutout, double_sided, cast_shadows) = match graph {
+            Some((_, g)) => (g.transparent, g.alpha_clip, g.double_sided, g.cast_shadows),
+            None => (
+                m.surface_type == SurfaceType::Transparent,
+                m.surface_type == SurfaceType::Cutout,
+                m.double_sided,
+                m.cast_shadows,
+            ),
+        };
         GpuMaterial {
             version,
             texture_generation: self.texture_generation,
+            shader: graph.map(|(g, s)| (*g, s.generation)),
+            shadow_shader: graph.is_some_and(|(_, s)| s.shadow_source.is_some()),
             bind_group,
-            transparent: m.surface_type == SurfaceType::Transparent,
-            cutout: m.surface_type == SurfaceType::Cutout,
-            double_sided: m.double_sided,
-            cast_shadows: m.cast_shadows,
+            transparent,
+            cutout,
+            double_sided,
+            cast_shadows,
             priority: m.sorting_priority,
         }
     }

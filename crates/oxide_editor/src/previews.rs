@@ -265,6 +265,50 @@ impl Previews {
     }
 }
 
+/// A material on a primitive seen from `pitch`/`yaw` degrees (the Shader Graph window's
+/// Main Preview, which you turn by dragging).
+pub fn material_frame(
+    engine: &mut Engine,
+    material: &str,
+    mesh: PrimitiveType,
+    pitch: f32,
+    yaw: f32,
+    time: f32,
+) -> Result<oxide_render::RenderFrame, String> {
+    with_scratch_world(&mut engine.world, |w| {
+        let m = w
+            .resource::<AssetServer>()
+            .materials
+            .handle_of(material)
+            .ok_or_else(|| format!("{material} is not loaded"))?;
+        oxide_engine::objects::create_visual(w, "Preview", mesh, Some(m));
+        oxide_engine::objects::create_directional_light(w);
+        let bg = Color::rgb(
+            BACKGROUND[0] as f32 / 255.0,
+            BACKGROUND[1] as f32 / 255.0,
+            BACKGROUND[2] as f32 / 255.0,
+        );
+        let rotation = Quaternion::euler(pitch, yaw, 0.0);
+        let distance = 3.2;
+        let cam = CameraView {
+            position: rotation * Vector3::new(0.0, 0.0, -distance),
+            rotation,
+            projection: ProjectionKind::Perspective { fov: 30.0 },
+            near: 0.05,
+            far: 50.0,
+            viewport: [0.0, 0.0, 1.0, 1.0],
+            clear: ClearMode::Color(bg.linear()),
+            culling_mask: u32::MAX,
+            occlusion_culling: false,
+            antialiasing: Default::default(),
+        };
+        let mut frame = oxide_engine::extract::extract(w, Some(vec![cam]));
+        frame.environment.post.vignette.intensity = 0.0;
+        frame.time = time;
+        Ok(frame)
+    })
+}
+
 /// A Font Asset's sample text ("Abg") on a dark background.
 fn font_asset_frame(engine: &mut Engine, path: &str) -> Result<oxide_render::RenderFrame, String> {
     with_scratch_world(&mut engine.world, |w| {

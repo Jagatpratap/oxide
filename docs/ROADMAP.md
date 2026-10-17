@@ -429,8 +429,21 @@ runner, native plugins.
 ### P9 — Tooling: Packages, Shader Graph, Profiler, Editor extensibility
 - ☐ Package manager: manifest, registry, git deps, local packages, embedded packages
   ([Packages](https://docs.unity3d.com/Manual/PackagesList.html))
-- ☐ Node graph framework → Shader Graph, VFX Graph, Animator, visual scripting all built on it
-  ([Graph Toolkit](https://docs.unity3d.com/Manual/gtk/gtk-index.html))
+- ◐ Node graph framework → Shader Graph, VFX Graph, Animator, visual scripting all built on it
+  ([Graph Toolkit](https://docs.unity3d.com/Manual/gtk/gtk-index.html)): the node canvas ☑ (`node_canvas.rs`:
+  typed ports, wires, pan/zoom, box select, Create Node searcher, drop-a-wire-to-create, groups, sticky notes,
+  copy/paste/duplicate, framing, the window's own undo); Shader Graph ☑; VFX Graph, visual scripting ☐
+- ☑ Shader Graph (URP Lit/Unlit targets): `.shadergraph` / `.shadersubgraph` assets, ~120 of Unity's nodes with
+  Unity's formulas (inputs, geometry, textures, math, UV, noise/Voronoi/shapes, artistic blend/normal/colour,
+  logic, Custom Function, Sub Graph, Boolean keywords), master stack (Vertex: Position/Normal/Tangent; Fragment:
+  Base Color … Alpha Clip Threshold), Graph Settings (material, surface, render face, alpha clipping, cast
+  shadows, normal space), Blackboard properties (Float/Vector/Color/Boolean/Texture2D, sliders, HDR, exposed),
+  compiled to WGSL hooks of the Lit shader (shadow and depth passes included), magenta error shader, live node
+  previews (2D quads / 3D spheres like Unity) and Main Preview, materials with Unity's Shader dropdown and
+  Surface Inputs, Create Material from a graph, `editor_shader_graph` MCP tool. Not yet: Enum keywords and real
+  variants, Gradient/Matrix types, sampler states, Shader Graph-driven decals/sprites/terrain, Convert to Sub
+  Graph
+  ([Shader Graph](https://docs.unity3d.com/Packages/com.unity.shadergraph@17.0/manual/index.html))
 - ◐ Editor extension API: custom inspectors ☑ (`CustomEditor` + `InspectorGui`); custom windows, property drawers,
   overlays, tools, menu items ☐
   ([Extending the Editor](https://docs.unity3d.com/Manual/extending-the-editor.html),

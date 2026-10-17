@@ -9,6 +9,7 @@ license.workspace = true
 oxide_math.workspace = true
 oxide_core.workspace = true
 wgpu.workspace = true
+naga.workspace = true
 bytemuck.workspace = true
 png.workspace = true
 pollster.workspace = true

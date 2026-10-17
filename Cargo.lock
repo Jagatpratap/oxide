@@ -2620,6 +2620,7 @@ dependencies = [
  "oxide_physics",
  "oxide_render",
  "oxide_scene",
+ "oxide_shadergraph",
  "oxide_terrain",
  "oxide_ui",
  "serde",
@@ -2650,6 +2651,7 @@ dependencies = [
  "oxide_physics",
  "oxide_render",
  "oxide_scene",
+ "oxide_shadergraph",
  "oxide_standard",
  "oxide_terrain",
  "oxide_text",
@@ -2775,6 +2777,7 @@ name = "oxide_render"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "naga",
  "oxide_assets",
  "oxide_core",
  "oxide_math",
@@ -2795,6 +2798,17 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
+]
+
+[[package]]
+name = "oxide_shadergraph"
+version = "0.1.0"
+dependencies = [
+ "oxide_assets",
+ "oxide_core",
+ "oxide_math",
+ "oxide_render",
+ "pollster",
 ]
 
 [[package]]

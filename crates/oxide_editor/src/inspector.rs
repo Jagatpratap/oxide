@@ -1394,10 +1394,21 @@ pub fn reflect_grid(
     obj: &mut dyn oxide_core::reflect::Reflect,
     salt: &str,
 ) -> bool {
+    reflect_grid_where(ui, w, obj, salt, &|_| true)
+}
+
+/// [`reflect_grid`] showing only the fields `show` accepts.
+pub fn reflect_grid_where(
+    ui: &mut egui::Ui,
+    w: &World,
+    obj: &mut dyn oxide_core::reflect::Reflect,
+    salt: &str,
+    show: &dyn Fn(&str) -> bool,
+) -> bool {
     let info = obj.type_info();
     let mut changed = false;
     ui.push_id(salt, |ui| {
-        for f in &info.fields {
+        for f in info.fields.iter().filter(|f| show(f.name)) {
             let Some(v) = obj.get_field(f.name) else {
                 continue;
             };
@@ -1798,7 +1809,7 @@ fn drag_array<const N: usize>(ui: &mut egui::Ui, a: &mut [f32; N]) -> bool {
     changed
 }
 
-fn asset_field(
+pub(crate) fn asset_field(
     ui: &mut egui::Ui,
     w: &World,
     type_name: Option<&str>,
