@@ -43,6 +43,8 @@ pub struct Face {
     pub smoothing_group: u32,
     pub uv: AutoUv,
     pub color: Color,
+    /// Manual UVs (one per corner, set in the UV Editor); empty uses the Auto UV settings.
+    pub manual_uv: Vec<Vector2>,
 }
 
 impl Default for Face {
@@ -59,7 +61,13 @@ impl Face {
             smoothing_group: 0,
             uv: AutoUv::default(),
             color: Color::WHITE,
+            manual_uv: Vec::new(),
         }
+    }
+
+    /// Manual UVs that still match the corners (geometry edits can change the count).
+    pub fn has_manual_uv(&self) -> bool {
+        !self.manual_uv.is_empty() && self.manual_uv.len() == self.indices.len()
     }
 
     /// Edges in winding order: (from, to).
@@ -68,9 +76,11 @@ impl Face {
         (0..n).map(move |i| (self.indices[i], self.indices[(i + 1) % n]))
     }
 
+    /// A new face with this one's settings (new geometry gets Auto UVs).
     fn with(&self, indices: Vec<u32>) -> Face {
         Face {
             indices,
+            manual_uv: Vec::new(),
             ..self.clone()
         }
     }
@@ -225,6 +235,36 @@ impl PbMesh {
         e
     }
 
+    /// A face's UV per corner: its manual UVs, or the Auto UV projection.
+    pub fn face_uvs(&self, f: usize) -> Vec<Vector2> {
+        self.face_uvs_with_normal(f, self.face_normal(f))
+    }
+
+    fn face_uvs_with_normal(&self, fi: usize, n: Vector3) -> Vec<Vector2> {
+        let f = &self.faces[fi];
+        if f.has_manual_uv() {
+            return f.manual_uv.clone();
+        }
+        let (r, u) = uv_axes(n);
+        let (s, c) = f.uv.rotation.to_radians().sin_cos();
+        f.indices
+            .iter()
+            .map(|i| {
+                let p = self.positions[*i as usize];
+                let mut uv = Vector2::new(p.dot(r), p.dot(u));
+                uv = Vector2::new(uv.x * c - uv.y * s, uv.x * s + uv.y * c);
+                uv = uv * f.uv.scale + f.uv.offset;
+                if f.uv.flip_u {
+                    uv.x = -uv.x;
+                }
+                if f.uv.flip_v {
+                    uv.y = -uv.y;
+                }
+                uv
+            })
+            .collect()
+    }
+
     /// The renderable mesh: one vertex per face corner, smooth normals within smoothing
     /// groups, auto UVs, face colors, one sub-mesh per material slot.
     pub fn build(&self, name: &str, material_slots: usize) -> Mesh {
@@ -250,8 +290,7 @@ impl PbMesh {
                 continue;
             }
             let n = normals[fi];
-            let (r, u) = uv_axes(n);
-            let (s, c) = f.uv.rotation.to_radians().sin_cos();
+            let uvs = self.face_uvs_with_normal(fi, n);
             let base = m.vertices.len() as u32;
             let poly: Vec<Vector3> = f
                 .indices
@@ -270,16 +309,7 @@ impl PbMesh {
                     n
                 };
                 m.normals.push(nn);
-                let mut uv = Vector2::new(p.dot(r), p.dot(u));
-                uv = Vector2::new(uv.x * c - uv.y * s, uv.x * s + uv.y * c);
-                uv = uv * f.uv.scale + f.uv.offset;
-                if f.uv.flip_u {
-                    uv.x = -uv.x;
-                }
-                if f.uv.flip_v {
-                    uv.y = -uv.y;
-                }
-                m.uv.push(uv);
+                m.uv.push(uvs[k]);
                 m.colors
                     .push(Vector4::new(f.color.r, f.color.g, f.color.b, f.color.a));
             }

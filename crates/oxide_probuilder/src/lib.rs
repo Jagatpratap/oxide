@@ -3,9 +3,12 @@
 //! points the object's MeshFilter (and MeshCollider) at it. Shapes come from [`shapes`].
 //! Reference: <https://docs.unity3d.com/Packages/com.unity.probuilder@6.0/manual/index.html>
 
+pub mod csg;
+pub mod edit;
 pub mod pbmesh;
 pub mod shapes;
 
+pub use csg::{BooleanOp, boolean, boolean_transformed};
 pub use pbmesh::{AutoUv, Face, PbMesh, edge_key, triangulate};
 pub use shapes::{ShapeParams, ShapeType};
 
@@ -30,6 +33,9 @@ pub struct ProBuilderMesh {
     /// The shape it was made from; changing it rebuilds the geometry. Editing faces,
     /// edges or vertices drops it (Unity keeps edits and the shape apart the same way).
     pub shape: Option<ShapeParams>,
+    /// Unity's Generate Lightmap UVs: a non-overlapping second UV set so the object can be
+    /// lightmapped (Contribute GI).
+    pub generate_lightmap_uvs: bool,
     #[reflect(skip)]
     #[doc(hidden)]
     pub state: BuildState,
@@ -59,6 +65,7 @@ impl ProBuilderMesh {
                 shape_stamp: hash_shape(&shape),
             },
             shape: Some(shape),
+            generate_lightmap_uvs: false,
         }
     }
 
@@ -67,6 +74,7 @@ impl ProBuilderMesh {
             mesh,
             materials: Vec::new(),
             shape: None,
+            generate_lightmap_uvs: false,
             state: BuildState::default(),
         }
     }
@@ -124,11 +132,12 @@ impl ProBuilderMesh {
             f.indices.hash(&mut h);
             f.material.hash(&mut h);
             f.smoothing_group.hash(&mut h);
-            format!("{:?}{:?}", f.uv, f.color).hash(&mut h);
+            format!("{:?}{:?}{:?}", f.uv, f.color, f.manual_uv).hash(&mut h);
         }
         for m in &self.materials {
             m.path().hash(&mut h);
         }
+        self.generate_lightmap_uvs.hash(&mut h);
         h.finish()
     }
 }
@@ -167,7 +176,10 @@ pub fn update(world: &mut World) {
             .map_or("ProBuilder", |o| o.name.as_str())
             .to_owned();
         let slots = pb.slot_count();
-        let mesh: Mesh = pb.mesh.build(&name, slots);
+        let mut mesh: Mesh = pb.mesh.build(&name, slots);
+        if pb.generate_lightmap_uvs {
+            mesh.generate_lightmap_uvs();
+        }
         let mats: Vec<Handle<Material>> = (0..slots)
             .map(|k| {
                 pb.materials
@@ -233,6 +245,70 @@ pub fn create_shape(world: &mut World, shape: ShapeParams) -> GameObjectId {
     world.add_component(id, oxide_physics::MeshCollider::default());
     update(world);
     id
+}
+
+/// Unity's Boolean tool: a new object "<a> <op> <b>" with `a` op `b` (in `a`'s space, at
+/// `a`'s transform), using both objects' materials. The originals are kept.
+pub fn boolean_objects(
+    world: &mut World,
+    a: GameObjectId,
+    b: GameObjectId,
+    op: BooleanOp,
+) -> Result<GameObjectId, String> {
+    let get = |id| {
+        world
+            .get_component::<ProBuilderMesh>(id)
+            .cloned()
+            .ok_or("both objects need a ProBuilder Mesh")
+    };
+    let (pa, pb) = (get(a)?, get(b)?);
+    let a_model = world.local_to_world(a);
+    let to_a = a_model.inverse() * world.local_to_world(b);
+    let slots_a = pa.slot_count();
+    let mesh = boolean_transformed(
+        &pa.mesh,
+        &|p| p,
+        &pb.mesh,
+        &|p| to_a.transform_point3(p),
+        op,
+        slots_a as u32,
+    );
+    if mesh.faces.is_empty() {
+        return Err(format!("{op:?} left nothing (do the objects overlap?)"));
+    }
+    let default = || Handle::from_path(DEFAULT_MATERIAL.to_owned());
+    let mut materials: Vec<Handle<Material>> = (0..slots_a)
+        .map(|k| pa.materials.get(k).cloned().unwrap_or_else(default))
+        .collect();
+    materials
+        .extend((0..pb.slot_count()).map(|k| pb.materials.get(k).cloned().unwrap_or_else(default)));
+    let name = |id| {
+        world
+            .get(id)
+            .map_or("Object".to_owned(), |o| o.name.clone())
+    };
+    let label = match op {
+        BooleanOp::Union => "Union",
+        BooleanOp::Subtract => "Subtract",
+        BooleanOp::Intersect => "Intersect",
+    };
+    let title = format!("{} {label} {}", name(a), name(b));
+    let (pos, rot) = (world.position(a), world.rotation(a));
+    let scale = world
+        .get(a)
+        .map_or(oxide_math::Vector3::ONE, |o| o.transform.local_scale);
+    let id = world.create(&title);
+    world.set_position(id, pos);
+    world.set_rotation(id, rot);
+    if let Some(o) = world.get_mut(id) {
+        o.transform.local_scale = scale;
+    }
+    let mut c = ProBuilderMesh::from_mesh(mesh);
+    c.materials = materials;
+    world.add_component(id, c);
+    world.add_component(id, oxide_physics::MeshCollider::default());
+    update(world);
+    Ok(id)
 }
 
 /// Unity's ProBuilderize: turns an object's mesh into an editable ProBuilder mesh.

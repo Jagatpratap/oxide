@@ -9,7 +9,7 @@ use crate::view::Projector;
 use egui::{Color32, RichText, Stroke};
 use oxide_assets::{AssetServer, Handle};
 use oxide_engine::Engine;
-use oxide_math::{Matrix4x4, Vector3};
+use oxide_math::{Matrix4x4, QuaternionExt, Vector2, Vector3};
 use oxide_probuilder::{PbMesh, ProBuilderMesh, ShapeParams, ShapeType, edge_key, triangulate};
 use oxide_scene::{GameObjectId, World};
 use serde_json::{Value as Json, json};
@@ -24,10 +24,26 @@ pub enum Mode {
     Face,
 }
 
+/// Which element handle is dragged (it follows the editor's Move / Rotate / Scale tool).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum HandleKind {
+    Move,
+    Rotate,
+    Scale,
+    /// The center box of the scale handle.
+    ScaleUniform,
+}
+
 #[derive(Clone, Debug)]
 struct Drag {
+    kind: HandleKind,
+    /// World axis (Move, Rotate) or local axis (Scale).
     axis: Vector3,
-    last: egui::Pos2,
+    start: egui::Pos2,
+    /// Mesh positions when the drag started (edits apply to these, so nothing drifts).
+    base: Vec<Vector3>,
+    /// Selection center, local space.
+    pivot: Vector3,
 }
 
 pub struct ProBuilderTool {
@@ -45,6 +61,9 @@ pub struct ProBuilderTool {
     color: [f32; 4],
     material: Option<String>,
     drag: Option<Drag>,
+    /// Poly Shape being drawn: outline points (world, on the ground) clicked so far.
+    pub poly: Option<Vec<Vector3>>,
+    pub poly_height: f32,
 }
 
 impl Default for ProBuilderTool {
@@ -63,6 +82,8 @@ impl Default for ProBuilderTool {
             color: [1.0; 4],
             material: None,
             drag: None,
+            poly: None,
+            poly_height: 1.0,
         }
     }
 }
@@ -90,14 +111,14 @@ impl ProBuilderTool {
 }
 
 /// The selected object's ProBuilder mesh and transform, if any.
-fn target(st: &EditorState, w: &World) -> Option<(GameObjectId, Matrix4x4)> {
+pub(crate) fn target(st: &EditorState, w: &World) -> Option<(GameObjectId, Matrix4x4)> {
     let id = st.active()?;
     w.get_component::<ProBuilderMesh>(id)?;
     Some((id, w.local_to_world(id)))
 }
 
 /// Runs an edit on the selected object's mesh as one undo step.
-fn edit(
+pub(crate) fn edit(
     st: &mut EditorState,
     engine: &mut Engine,
     label: &str,
@@ -158,12 +179,20 @@ pub fn window_ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
                                 }
                             });
                     });
+                    let kind = shape.shape;
                     crate::inspector::reflect_grid_where(
                         ui,
                         &engine.world,
                         &mut shape,
                         "pb-new-shape",
-                        &|f| f != "shape",
+                        &|f| {
+                            let path =
+                                matches!(kind, ShapeType::PolyShape | ShapeType::BezierShape);
+                            f != "shape"
+                                && (path || !matches!(f, "points" | "closed" | "flip_normals"))
+                                && (kind == ShapeType::BezierShape || f != "closed")
+                                && (kind == ShapeType::PolyShape || f != "flip_normals")
+                        },
                     );
                     st.probuilder.shape = shape;
                     if ui.button("Create Shape").clicked() {
@@ -176,6 +205,24 @@ pub fn window_ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
                         st.selection = vec![id];
                         st.status = format!("Created {}", st.probuilder.shape.shape.name());
                     }
+                    ui.horizontal(|ui| {
+                        let drawing = st.probuilder.poly.is_some();
+                        if ui
+                            .selectable_label(drawing, "Draw Poly Shape")
+                            .on_hover_text(
+                                "Click points on the ground in the Scene view; click the first \
+                                 point or press Enter to finish, Esc to cancel",
+                            )
+                            .clicked()
+                        {
+                            st.probuilder.poly = if drawing { None } else { Some(Vec::new()) };
+                        }
+                        ui.add(
+                            egui::DragValue::new(&mut st.probuilder.poly_height)
+                                .speed(0.05)
+                                .prefix("height "),
+                        );
+                    });
                 });
             ui.separator();
             let Some((id, _)) = target(st, &engine.world) else {
@@ -248,9 +295,102 @@ pub fn window_ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
                     if ui.button("Export OBJ").clicked() {
                         st.status = export_obj(engine, id).unwrap_or_else(|e| e);
                     }
+                    let mut lm = engine
+                        .world
+                        .get_component::<ProBuilderMesh>(id)
+                        .is_some_and(|p| p.generate_lightmap_uvs);
+                    if ui
+                        .checkbox(&mut lm, "Generate Lightmap UVs")
+                        .on_hover_text("A second UV set so the object can be lightmapped")
+                        .changed()
+                    {
+                        let now = oxide_core::time::realtime_since_startup();
+                        st.record(&engine.world, "Lightmap UVs", None, now);
+                        if let Some(p) = engine.world.get_component_mut::<ProBuilderMesh>(id) {
+                            p.generate_lightmap_uvs = lm;
+                        }
+                        oxide_probuilder::update(&mut engine.world);
+                    }
+                    // Boolean: the active object and one other selected ProBuilder object.
+                    let other = st.selection.iter().copied().find(|o| {
+                        *o != id && engine.world.get_component::<ProBuilderMesh>(*o).is_some()
+                    });
+                    ui.add_space(4.0);
+                    ui.label("Boolean (active object with the other selected one)");
+                    ui.add_enabled_ui(other.is_some(), |ui| {
+                        ui.horizontal(|ui| {
+                            for (op, label) in [
+                                (oxide_probuilder::BooleanOp::Union, "Union"),
+                                (oxide_probuilder::BooleanOp::Subtract, "Subtract"),
+                                (oxide_probuilder::BooleanOp::Intersect, "Intersect"),
+                            ] {
+                                if ui.button(label).clicked()
+                                    && let Some(b) = other
+                                {
+                                    let now = oxide_core::time::realtime_since_startup();
+                                    st.record(&engine.world, label, None, now);
+                                    match oxide_probuilder::boolean_objects(
+                                        &mut engine.world,
+                                        id,
+                                        b,
+                                        op,
+                                    ) {
+                                        Ok(r) => {
+                                            st.selection = vec![r];
+                                            st.status = format!("Boolean {label}");
+                                        }
+                                        Err(e) => st.status = e,
+                                    }
+                                }
+                            }
+                        });
+                    })
+                    .response
+                    .on_disabled_hover_text("Select two ProBuilder objects");
                 }
-                Mode::Face => face_actions(st, engine, ui, id),
+                Mode::Face => {
+                    face_actions(st, engine, ui, id);
+                    if ui.button("UV Editor…").clicked() {
+                        st.actions
+                            .push(crate::Action::OpenTab(crate::Tab::UvEditor));
+                    }
+                }
                 Mode::Edge => {
+                    ui.horizontal(|ui| {
+                        let pb = engine
+                            .world
+                            .get_component::<ProBuilderMesh>(id)
+                            .expect("target");
+                        if ui.button("Select Edge Loop").clicked() {
+                            let mut all = Vec::new();
+                            for e in &st.probuilder.edges {
+                                all.extend(pb.mesh.edge_loop(*e));
+                            }
+                            all.sort();
+                            all.dedup();
+                            st.probuilder.edges = all;
+                        }
+                        if ui.button("Select Edge Ring").clicked() {
+                            let mut all = Vec::new();
+                            for e in &st.probuilder.edges {
+                                all.extend(pb.mesh.edge_ring(*e));
+                            }
+                            all.sort();
+                            all.dedup();
+                            st.probuilder.edges = all;
+                        }
+                    });
+                    if ui
+                        .button("Insert Edge Loop")
+                        .on_hover_text("Cuts a loop across the ring of the selected edge")
+                        .clicked()
+                    {
+                        edit(st, engine, "Insert Edge Loop", |pb, t| {
+                            if let Some(e) = t.edges.first().copied() {
+                                t.edges = pb.mesh.insert_edge_loop(e);
+                            }
+                        });
+                    }
                     if ui
                         .button("Bridge Edges")
                         .on_hover_text("Select two open edges")
@@ -527,6 +667,9 @@ pub fn scene_edit(
     proj: &Projector,
     painter: &egui::Painter,
 ) -> bool {
+    if st.probuilder.poly.is_some() {
+        return draw_poly_shape(st, engine, ui, resp, proj, painter);
+    }
     if st.probuilder.mode == Mode::Object {
         return false;
     }
@@ -605,66 +748,199 @@ pub fn scene_edit(
             }
         }
     }
-    // The move handle at the selection's center.
+    // The element handle at the selection's center: Move, Rotate or Scale like the
+    // editor's current tool.
     let verts = tool.selected_vertices(&mesh);
-    let mut over_handle = None;
+    let kind = match st.tool {
+        crate::Tool::Rotate => HandleKind::Rotate,
+        crate::Tool::Scale => HandleKind::Scale,
+        _ => HandleKind::Move,
+    };
+    let mut over_handle: Option<(HandleKind, Vector3)> = None;
     let pointer = resp.hover_pos().or(resp.interact_pointer_pos());
-    if !verts.is_empty() {
-        let c = verts.iter().map(|v| world[*v as usize]).sum::<Vector3>() / verts.len() as f32;
-        if let Some(cs) = proj.project(c) {
-            let len = proj.world_per_pixels(c, 70.0);
-            for (axis, col) in [
-                (Vector3::X, Color32::from_rgb(230, 60, 60)),
-                (Vector3::Y, Color32::from_rgb(90, 220, 90)),
-                (Vector3::Z, Color32::from_rgb(70, 130, 240)),
-            ] {
-                if let Some(tip) = proj.project(c + axis * len) {
-                    let hot = pointer.is_some_and(|p| dist_to_segment(p, cs, tip) < 7.0);
-                    if hot {
-                        over_handle = Some(axis);
-                    }
-                    let active = st.probuilder.drag.as_ref().is_some_and(|d| d.axis == axis);
-                    painter.line_segment(
-                        [cs, tip],
-                        Stroke::new(
-                            if hot || active { 4.0 } else { 2.5 },
-                            if hot || active { accent } else { col },
-                        ),
+    let axes = [
+        (Vector3::X, Color32::from_rgb(230, 60, 60)),
+        (Vector3::Y, Color32::from_rgb(90, 220, 90)),
+        (Vector3::Z, Color32::from_rgb(70, 130, 240)),
+    ];
+    let center = (!verts.is_empty())
+        .then(|| verts.iter().map(|v| world[*v as usize]).sum::<Vector3>() / verts.len() as f32);
+    if let Some(c) = center
+        && let Some(cs) = proj.project(c)
+    {
+        let len = proj.world_per_pixels(c, 70.0);
+        let dragging = st.probuilder.drag.as_ref().map(|d| (d.kind, d.axis));
+        for (axis, col) in axes {
+            // Scale handles follow the object's axes; Move and Rotate are world aligned.
+            let dir = if kind == HandleKind::Scale {
+                model.transform_vector3(axis).normalize_or(axis)
+            } else {
+                axis
+            };
+            let active = dragging == Some((kind, axis));
+            match kind {
+                HandleKind::Rotate => {
+                    // A ring in the plane across the axis.
+                    let t = if axis.y.abs() < 0.9 {
+                        Vector3::Y
+                    } else {
+                        Vector3::X
+                    };
+                    let (u, v) = (
+                        axis.cross(t).normalize(),
+                        axis.cross(axis.cross(t)).normalize(),
                     );
-                    painter.circle_filled(tip, 5.0, col);
+                    let pts: Vec<Option<egui::Pos2>> = (0..=48)
+                        .map(|k| {
+                            let a = std::f32::consts::TAU * k as f32 / 48.0;
+                            proj.project(c + (u * a.cos() + v * a.sin()) * len)
+                        })
+                        .collect();
+                    let hot = pointer.is_some_and(|p| {
+                        pts.windows(2).any(|w| match (w[0], w[1]) {
+                            (Some(a), Some(b)) => dist_to_segment(p, a, b) < 6.0,
+                            _ => false,
+                        })
+                    });
+                    let hot = hot && over_handle.is_none();
+                    if hot {
+                        over_handle = Some((kind, axis));
+                    }
+                    let stroke = Stroke::new(
+                        if hot || active { 3.5 } else { 2.0 },
+                        if hot || active { accent } else { col },
+                    );
+                    for w in pts.windows(2) {
+                        if let (Some(a), Some(b)) = (w[0], w[1]) {
+                            painter.line_segment([a, b], stroke);
+                        }
+                    }
+                }
+                HandleKind::Move | HandleKind::Scale | HandleKind::ScaleUniform => {
+                    if let Some(tip) = proj.project(c + dir * len) {
+                        let hot = over_handle.is_none()
+                            && pointer.is_some_and(|p| dist_to_segment(p, cs, tip) < 7.0);
+                        if hot {
+                            over_handle = Some((kind, axis));
+                        }
+                        let col = if hot || active { accent } else { col };
+                        painter.line_segment(
+                            [cs, tip],
+                            Stroke::new(if hot || active { 4.0 } else { 2.5 }, col),
+                        );
+                        if kind == HandleKind::Scale {
+                            painter.rect_filled(
+                                egui::Rect::from_center_size(tip, egui::vec2(9.0, 9.0)),
+                                0.0,
+                                col,
+                            );
+                        } else {
+                            painter.circle_filled(tip, 5.0, col);
+                        }
+                    }
                 }
             }
+        }
+        if kind == HandleKind::Scale {
+            let hot = pointer.is_some_and(|p| p.distance(cs) < 8.0);
+            if hot {
+                over_handle = Some((HandleKind::ScaleUniform, Vector3::ONE));
+            }
+            let active = dragging.is_some_and(|d| d.0 == HandleKind::ScaleUniform);
+            painter.rect_filled(
+                egui::Rect::from_center_size(cs, egui::vec2(11.0, 11.0)),
+                0.0,
+                if hot || active {
+                    accent
+                } else {
+                    Color32::WHITE
+                },
+            );
+        } else {
             painter.circle_filled(cs, 4.0, Color32::WHITE);
         }
     }
-    // Dragging the handle moves the elements along the axis.
+    // Dragging the handle.
     if resp.drag_started()
-        && let Some(axis) = over_handle
+        && let Some((kind, axis)) = over_handle
         && let Some(p) = pointer
+        && let Some(c) = center
     {
         let now = oxide_core::time::realtime_since_startup();
-        st.record(&engine.world, "Move Elements", None, now);
-        st.probuilder.drag = Some(Drag { axis, last: p });
+        let label = match kind {
+            HandleKind::Move => "Move Elements",
+            HandleKind::Rotate => "Rotate Elements",
+            _ => "Scale Elements",
+        };
+        st.record(&engine.world, label, None, now);
+        st.probuilder.drag = Some(Drag {
+            kind,
+            axis,
+            start: p,
+            base: mesh.positions.clone(),
+            pivot: model.inverse().transform_point3(c),
+        });
     }
     if let Some(d) = st.probuilder.drag.clone() {
         if resp.dragged()
             && let Some(p) = pointer
-            && !verts.is_empty()
+            && let Some(c) = center
+            && let Some(cs) = proj.project(c)
         {
-            let c = verts.iter().map(|v| world[*v as usize]).sum::<Vector3>() / verts.len() as f32;
-            let (Some(a), Some(b)) = (proj.project(c), proj.project(c + d.axis)) else {
-                return true;
+            let inv = model.inverse();
+            let delta = p - d.start;
+            let mut positions = d.base.clone();
+            let mut m = PbMesh {
+                positions: std::mem::take(&mut positions),
+                faces: Vec::new(),
             };
-            let dir = (b - a).normalized();
-            let px = (p - d.last).dot(dir);
-            let amount = proj.world_per_pixels(c, px);
-            let local = model.inverse().transform_vector3(d.axis * amount);
+            match d.kind {
+                HandleKind::Move => {
+                    if let Some(b) = proj.project(c + d.axis) {
+                        let dir = (b - cs).normalized();
+                        let amount = proj.world_per_pixels(c, delta.dot(dir));
+                        m.translate(&verts, inv.transform_vector3(d.axis * amount));
+                    }
+                }
+                HandleKind::Rotate => {
+                    // The angle the pointer swept around the handle's center on screen,
+                    // signed by which way the axis faces the camera.
+                    let (a0, a1) = (d.start - cs, p - cs);
+                    let mut angle = a1.y.atan2(a1.x) - a0.y.atan2(a0.x);
+                    if angle > std::f32::consts::PI {
+                        angle -= std::f32::consts::TAU;
+                    } else if angle < -std::f32::consts::PI {
+                        angle += std::f32::consts::TAU;
+                    }
+                    let facing = proj.ray(cs).direction.dot(d.axis);
+                    let world_axis = d.axis * if facing > 0.0 { 1.0 } else { -1.0 };
+                    let local_axis = inv.transform_vector3(world_axis).normalize_or(d.axis);
+                    m.rotate_vertices(
+                        &verts,
+                        d.pivot,
+                        oxide_math::Quaternion::from_axis_angle(local_axis, angle),
+                    );
+                }
+                HandleKind::Scale => {
+                    let dir_w = model.transform_vector3(d.axis).normalize_or(d.axis);
+                    if let Some(b) = proj.project(c + dir_w) {
+                        let dir = (b - cs).normalized();
+                        let f = (1.0 + delta.dot(dir) / 100.0).max(0.0);
+                        m.scale_vertices(&verts, d.pivot, Vector3::ONE + d.axis * (f - 1.0));
+                    }
+                }
+                HandleKind::ScaleUniform => {
+                    let f = (1.0 + (delta.x - delta.y) / 100.0).max(0.0);
+                    m.scale_vertices(&verts, d.pivot, Vector3::splat(f));
+                }
+            }
             if let Some(pb) = engine.world.get_component_mut::<ProBuilderMesh>(id) {
-                pb.mesh.translate(&verts, local);
+                if pb.mesh.positions.len() == m.positions.len() {
+                    pb.mesh.positions = m.positions;
+                }
                 pb.edited();
             }
             oxide_probuilder::update(&mut engine.world);
-            st.probuilder.drag = Some(Drag { last: p, ..d });
         }
         if resp.drag_stopped() || !ui.input(|i| i.pointer.primary_down()) {
             st.probuilder.drag = None;
@@ -728,6 +1004,84 @@ pub fn scene_edit(
     true
 }
 
+/// Poly Shape drawing: clicks on the ground plane (y = 0) add outline points; clicking the
+/// first point or Enter makes the shape (needs 3 points), Esc cancels.
+fn draw_poly_shape(
+    st: &mut EditorState,
+    engine: &mut Engine,
+    ui: &egui::Ui,
+    resp: &egui::Response,
+    proj: &Projector,
+    painter: &egui::Painter,
+) -> bool {
+    let ground = |p: egui::Pos2| {
+        let r = proj.ray(p);
+        (r.direction.y.abs() > 1e-5)
+            .then(|| -r.origin.y / r.direction.y)
+            .filter(|t| *t > 0.0)
+            .map(|t| r.origin + r.direction * t)
+    };
+    let pts = st.probuilder.poly.clone().unwrap_or_default();
+    let accent = Color32::from_rgb(255, 200, 40);
+    let screen: Vec<Option<egui::Pos2>> = pts.iter().map(|p| proj.project(*p)).collect();
+    for w in screen.windows(2) {
+        if let (Some(a), Some(b)) = (w[0], w[1]) {
+            painter.line_segment([a, b], Stroke::new(2.0, accent));
+        }
+    }
+    let hover = resp.hover_pos();
+    if let (Some(Some(last)), Some(h)) = (screen.last(), hover) {
+        painter.line_segment([*last, h], Stroke::new(1.0, accent.gamma_multiply(0.6)));
+    }
+    for (k, s) in screen.iter().enumerate() {
+        if let Some(s) = s {
+            painter.circle_filled(*s, if k == 0 { 6.0 } else { 4.0 }, accent);
+        }
+    }
+    let (enter, esc) = ui.input(|i| {
+        (
+            i.key_pressed(egui::Key::Enter),
+            i.key_pressed(egui::Key::Escape),
+        )
+    });
+    if esc {
+        st.probuilder.poly = None;
+        st.status = "Poly Shape cancelled".into();
+        return true;
+    }
+    let close_click = resp.clicked()
+        && pts.len() >= 3
+        && matches!((screen.first(), hover), (Some(Some(f)), Some(h)) if f.distance(h) < 10.0);
+    if enter && pts.len() >= 3 || close_click {
+        let center = pts.iter().copied().sum::<Vector3>() / pts.len() as f32;
+        let mut shape = ShapeParams::new(ShapeType::PolyShape);
+        shape.points = pts.iter().map(|p| *p - center).collect();
+        shape.size.y = st.probuilder.poly_height;
+        let now = oxide_core::time::realtime_since_startup();
+        st.record(&engine.world, "Poly Shape", None, now);
+        let id = oxide_probuilder::create_shape(&mut engine.world, shape);
+        engine.world.set_position(id, center);
+        st.selection = vec![id];
+        st.probuilder.poly = None;
+        st.status = "Created Poly Shape".into();
+        return true;
+    }
+    if resp.clicked()
+        && let Some(p) = hover.and_then(ground)
+        && let Some(list) = &mut st.probuilder.poly
+    {
+        list.push(p);
+        st.status = format!("Poly Shape: {} points (Enter to finish)", list.len());
+    }
+    true
+}
+
+fn vec3(v: &Json) -> Vector3 {
+    let a = v.as_array().cloned().unwrap_or_default();
+    let at = |k: usize| a.get(k).and_then(Json::as_f64).unwrap_or(0.0) as f32;
+    Vector3::new(at(0), at(1), at(2))
+}
+
 fn toggle<T: PartialEq + Copy>(list: &mut Vec<T>, hit: Option<T>, add: bool) {
     match hit {
         Some(h) if add => {
@@ -755,7 +1109,11 @@ pub fn mcp(
         let kind = c.get("shape").and_then(Json::as_str).unwrap_or("Cube");
         let shape = ShapeType::ALL
             .into_iter()
-            .find(|s| s.name().eq_ignore_ascii_case(kind))
+            .find(|s| {
+                s.name()
+                    .replace(' ', "")
+                    .eq_ignore_ascii_case(&kind.replace(' ', ""))
+            })
             .ok_or_else(|| format!("unknown shape `{kind}`"))?;
         let mut p = ShapeParams::new(shape);
         if let Some(s) = c.get("size").and_then(Json::as_array) {
@@ -773,6 +1131,14 @@ pub fn mcp(
                 "angle" => p.angle = v.as_f64().unwrap_or(180.0) as f32,
                 "subdivisions" => p.subdivisions = v.as_u64().unwrap_or(2) as u32,
                 "smooth" => p.smooth = v.as_bool().unwrap_or(true),
+                "closed" => p.closed = v.as_bool().unwrap_or(false),
+                "flip_normals" => p.flip_normals = v.as_bool().unwrap_or(false),
+                "points" => {
+                    p.points = v
+                        .as_array()
+                        .map(|a| a.iter().map(vec3).collect())
+                        .unwrap_or_default()
+                }
                 _ => {}
             }
         }
@@ -820,7 +1186,29 @@ pub fn mcp(
                 .collect()
         })
         .unwrap_or_default();
-    if let Some(op) = args.get("operation").and_then(Json::as_str) {
+    let edge: Option<(u32, u32)> = args.get("edge").and_then(Json::as_array).and_then(|a| {
+        Some(edge_key(
+            a.first()?.as_u64()? as u32,
+            a.get(1)?.as_u64()? as u32,
+        ))
+    });
+    if let Some(op) = args.get("operation").and_then(Json::as_str)
+        && op == "boolean"
+    {
+        let (id, _) = target(st, &engine.world).ok_or("select a ProBuilder object")?;
+        let other = args
+            .get("other")
+            .and_then(|o| oxide_engine::json_values::resolve_object(&engine.world, o))
+            .ok_or("boolean needs `other` (the second object)")?;
+        let kind = match args.get("op").and_then(Json::as_str).unwrap_or("union") {
+            "subtract" => oxide_probuilder::BooleanOp::Subtract,
+            "intersect" => oxide_probuilder::BooleanOp::Intersect,
+            _ => oxide_probuilder::BooleanOp::Union,
+        };
+        st.record(&engine.world, "Boolean", None, now);
+        let r = oxide_probuilder::boolean_objects(&mut engine.world, id, other, kind)?;
+        st.selection = vec![r];
+    } else if let Some(op) = args.get("operation").and_then(Json::as_str) {
         let amount = args.get("amount").and_then(Json::as_f64).map(|v| v as f32);
         let (id, _) = target(st, &engine.world).ok_or("select a ProBuilder object")?;
         st.record(&engine.world, &format!("ProBuilder {op}"), None, now);
@@ -881,6 +1269,58 @@ pub fn mcp(
                     .resource_mut::<AssetServer>()
                     .ensure_loaded(&mat)?;
             }
+            "edge_loop" | "edge_ring" | "insert_edge_loop" => {
+                let e = edge.ok_or("needs `edge` [a, b]")?;
+                st.probuilder.mode = Mode::Edge;
+                st.probuilder.edges = match op {
+                    "edge_loop" => m.edge_loop(e),
+                    "edge_ring" => m.edge_ring(e),
+                    _ => m.insert_edge_loop(e),
+                };
+            }
+            "rotate" | "scale" => {
+                let v = if vertices.is_empty() {
+                    m.face_vertices(&faces)
+                } else {
+                    vertices.clone()
+                };
+                let c = m.vertices_center(&v);
+                if op == "rotate" {
+                    let e = vec3(
+                        args.get("euler")
+                            .ok_or("rotate needs `euler` [x,y,z] degrees")?,
+                    );
+                    m.rotate_vertices(&v, c, oxide_math::Quaternion::euler(e.x, e.y, e.z));
+                } else {
+                    let k = vec3(args.get("scale").ok_or("scale needs `scale` [x,y,z]")?);
+                    m.scale_vertices(&v, c, k);
+                }
+            }
+            "uv_rotate" | "uv_scale" | "uv_move" => {
+                let c = m.uv_center(&faces);
+                let d = args.get("delta").map(vec3).unwrap_or(Vector3::ZERO);
+                match op {
+                    "uv_rotate" => m.uv_transform(
+                        &faces,
+                        Vector2::ZERO,
+                        amount.unwrap_or(90.0),
+                        Vector2::ONE,
+                        c,
+                    ),
+                    "uv_scale" => m.uv_transform(
+                        &faces,
+                        Vector2::ZERO,
+                        0.0,
+                        Vector2::splat(amount.unwrap_or(2.0)),
+                        c,
+                    ),
+                    _ => m.uv_transform(&faces, Vector2::new(d.x, d.y), 0.0, Vector2::ONE, c),
+                }
+            }
+            "uv_fit" => m.uv_fit(&faces),
+            "uv_planar" => m.uv_planar_project(&faces),
+            "uv_auto" => m.uv_reset_auto(&faces),
+            "lightmap_uvs" => pb.generate_lightmap_uvs = amount.unwrap_or(1.0) != 0.0,
             other => return Err(format!("unknown operation `{other}`")),
         }
         if let Some(pb) = engine.world.get_component_mut::<ProBuilderMesh>(id) {
@@ -897,6 +1337,7 @@ pub fn mcp(
         };
         st.probuilder.faces = faces.clone();
         st.probuilder.vertices = vertices.clone();
+        st.probuilder.object = target(st, &engine.world).map(|t| t.0);
     }
     let Some((id, _)) = target(st, &engine.world) else {
         return Ok(json!({ "selected": null }));
@@ -917,6 +1358,9 @@ pub fn mcp(
         "edge_count": pb.mesh.edges().len(),
         "materials": pb.materials.iter().map(|m| m.path().to_owned()).collect::<Vec<_>>(),
         "mode": format!("{:?}", st.probuilder.mode),
+        "selected_edges": st.probuilder.edges,
+        "manual_uv_faces": pb.mesh.faces.iter().enumerate().filter(|(_, f)| f.has_manual_uv()).map(|(k, _)| k).collect::<Vec<_>>(),
+        "lightmap_uvs": pb.generate_lightmap_uvs,
     }))
 }
 

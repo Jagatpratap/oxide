@@ -740,13 +740,19 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
              (`faces` [ids], all if omitted; `amount`), weld|collapse (`vertices`), translate (`delta`, `faces` or \
              `vertices`), smoothing (`amount` = group), material (`material` path). `mode` Object|Vertex|Edge|Face \
              with `faces`/`vertices` sets the Scene view selection. Returns faces (vertices, normal, center, \
-             material) and counts.",
+             material) and counts. Also: `create` shape PolyShape (`points` outline, size.y = height, \
+             `flip_normals`) and BezierShape (`points` path, size.x = diameter, sides, segments per span, \
+             `closed`); operations edge_loop|edge_ring|insert_edge_loop (`edge` [a,b]; the result becomes the edge \
+             selection), rotate (`euler`) and scale (`scale`) about the elements' center, uv_rotate (`amount` deg)|\
+             uv_scale (`amount`)|uv_move (`delta`)|uv_fit|uv_planar|uv_auto on `faces`, lightmap_uvs (`amount` 1/0), \
+             boolean (`other` object, `op` union|subtract|intersect: a new object).",
             schema(
                 json!({
                     "create": { "type": "object" }, "object": {}, "probuilderize": { "type": "boolean" },
                     "operation": { "type": "string" }, "faces": { "type": "array" }, "vertices": { "type": "array" },
                     "amount": { "type": "number" }, "delta": { "type": "array" }, "material": { "type": "string" },
-                    "mode": { "type": "string" }
+                    "mode": { "type": "string" }, "edge": { "type": "array" }, "euler": { "type": "array" },
+                    "scale": { "type": "array" }, "other": {}, "op": { "type": "string" }
                 }),
                 &[],
             ),
@@ -2010,5 +2016,6 @@ pub(crate) fn extra_windows() -> Vec<crate::Tab> {
         crate::Tab::FrameDebugger,
         crate::Tab::AdaptivePerformance,
         crate::Tab::ProjectAuditor,
+        crate::Tab::UvEditor,
     ]
 }

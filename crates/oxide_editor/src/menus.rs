@@ -291,6 +291,10 @@ pub fn menu_items(world: &World, keymap: &Keymap) -> Vec<MenuItem> {
         Action::OpenTab(Tab::ProBuilder),
     ));
     v.push(item(
+        "Tools/ProBuilder/Editors/UV Editor",
+        Action::OpenTab(Tab::UvEditor),
+    ));
+    v.push(item(
         "Window/Rendering/Lighting/Lighting",
         Action::OpenTab(Tab::Lighting),
     ));

@@ -20,10 +20,14 @@ pub enum ShapeType {
     Torus,
     Sphere,
     Door,
+    /// Unity's Poly Shape: an outline drawn on the ground, extruded up.
+    PolyShape,
+    /// Unity's Bezier Shape: a tube along a smooth path.
+    BezierShape,
 }
 
 impl ShapeType {
-    pub const ALL: [ShapeType; 11] = [
+    pub const ALL: [ShapeType; 13] = [
         ShapeType::Cube,
         ShapeType::Plane,
         ShapeType::Cylinder,
@@ -35,6 +39,8 @@ impl ShapeType {
         ShapeType::Torus,
         ShapeType::Sphere,
         ShapeType::Door,
+        ShapeType::PolyShape,
+        ShapeType::BezierShape,
     ];
 
     pub fn name(self) -> &'static str {
@@ -50,6 +56,8 @@ impl ShapeType {
             ShapeType::Torus => "Torus",
             ShapeType::Sphere => "Sphere",
             ShapeType::Door => "Door",
+            ShapeType::PolyShape => "Poly Shape",
+            ShapeType::BezierShape => "Bezier Shape",
         }
     }
 }
@@ -72,6 +80,12 @@ pub struct ShapeParams {
     pub subdivisions: u32,
     /// Smooth shading around curved shapes.
     pub smooth: bool,
+    /// Poly Shape outline (X and Z; Y ignored) or Bezier Shape path points.
+    pub points: Vec<Vector3>,
+    /// Bezier Shape: the path loops back to its start.
+    pub closed: bool,
+    /// Poly Shape: faces point inward (rooms seen from inside).
+    pub flip_normals: bool,
 }
 
 impl Default for ShapeParams {
@@ -85,6 +99,9 @@ impl Default for ShapeParams {
             angle: 180.0,
             subdivisions: 2,
             smooth: true,
+            points: Vec::new(),
+            closed: false,
+            flip_normals: false,
         }
     }
 }
@@ -124,6 +141,26 @@ impl ShapeParams {
             ShapeType::Cylinder | ShapeType::Cone => {
                 p.size = Vector3::new(1.0, 2.0, 1.0);
             }
+            ShapeType::PolyShape => {
+                p.size = Vector3::new(1.0, 1.0, 1.0);
+                p.points = vec![
+                    Vector3::new(-1.0, 0.0, -1.0),
+                    Vector3::new(-1.0, 0.0, 1.0),
+                    Vector3::new(1.0, 0.0, 1.0),
+                    Vector3::new(1.0, 0.0, -1.0),
+                ];
+            }
+            ShapeType::BezierShape => {
+                p.size = Vector3::new(0.5, 0.5, 0.5);
+                p.sides = 8;
+                p.segments = 8;
+                p.points = vec![
+                    Vector3::new(-2.0, 0.0, 0.0),
+                    Vector3::new(-0.7, 0.0, 1.0),
+                    Vector3::new(0.7, 0.0, -1.0),
+                    Vector3::new(2.0, 0.0, 0.0),
+                ];
+            }
             _ => {}
         }
         p
@@ -145,6 +182,15 @@ impl ShapeParams {
             ShapeType::Torus => torus(s, sides, segs.max(3), self.smooth),
             ShapeType::Sphere => sphere(s, self.subdivisions.min(5), self.smooth),
             ShapeType::Door => door(s, self.thickness),
+            ShapeType::PolyShape => poly_shape(&self.points, s.y, self.flip_normals),
+            ShapeType::BezierShape => bezier_shape(
+                &self.points,
+                s.x * 0.5,
+                sides.min(64),
+                segs,
+                self.closed,
+                self.smooth,
+            ),
         }
     }
 }
@@ -600,5 +646,155 @@ pub fn door(s: Vector3, thickness: f32) -> PbMesh {
     }
     // Posts and lintel touch: weld their shared corners.
     b.m.weld_vertices(&[], 1e-4);
+    b.done()
+}
+
+/// Unity's Poly Shape: the outline (X/Z, any winding, may be concave) as a floor face, and
+/// with a height, a top and side walls too.
+pub fn poly_shape(points: &[Vector3], height: f32, flip: bool) -> PbMesh {
+    let pts: Vec<Vector3> = points.iter().map(|p| Vector3::new(p.x, 0.0, p.z)).collect();
+    let n = pts.len();
+    if n < 3 {
+        return PbMesh::default();
+    }
+    // Counter-clockwise seen from above has positive area.
+    let area: f32 = (0..n)
+        .map(|i| {
+            let (a, c) = (pts[i], pts[(i + 1) % n]);
+            a.x * c.z - c.x * a.z
+        })
+        .sum();
+    let mut b = Builder::new();
+    let bottom: Vec<u32> = pts.iter().map(|p| b.v(*p)).collect();
+    if height.abs() < 1e-5 {
+        b.face(bottom, Vector3::Y, 0);
+    } else {
+        let top: Vec<u32> = pts.iter().map(|p| b.v(*p + Vector3::Y * height)).collect();
+        b.face(top.clone(), Vector3::Y * height.signum(), 0);
+        b.face(bottom.clone(), -Vector3::Y * height.signum(), 0);
+        for i in 0..n {
+            let j = (i + 1) % n;
+            let edge = pts[j] - pts[i];
+            // Outward: right of the edge when the outline runs counter-clockwise from above.
+            let mut out = Vector3::new(edge.z, 0.0, -edge.x);
+            if area < 0.0 {
+                out = -out;
+            }
+            b.face(vec![bottom[i], bottom[j], top[j], top[i]], out, 0);
+        }
+    }
+    let mut m = b.done();
+    if flip {
+        for f in &mut m.faces {
+            f.indices.reverse();
+        }
+    }
+    m
+}
+
+/// Catmull-Rom point on the path segment `i` at `t` (end points repeated, or wrapped when
+/// closed).
+fn catmull(p: &[Vector3], i: usize, t: f32, closed: bool) -> Vector3 {
+    let n = p.len() as isize;
+    let at = |k: isize| {
+        if closed {
+            p[k.rem_euclid(n) as usize]
+        } else {
+            p[k.clamp(0, n - 1) as usize]
+        }
+    };
+    let i = i as isize;
+    let (p0, p1, p2, p3) = (at(i - 1), at(i), at(i + 1), at(i + 2));
+    let (t2, t3) = (t * t, t * t * t);
+    (p1 * 2.0
+        + (p2 - p0) * t
+        + (p0 * 2.0 - p1 * 5.0 + p2 * 4.0 - p3) * t2
+        + (p1 * 3.0 - p0 - p2 * 3.0 + p3) * t3)
+        * 0.5
+}
+
+/// Unity's Bezier Shape: a tube of `radius` with `columns` sides along a smooth path
+/// through `points`, `rows` rings per segment, capped unless closed.
+pub fn bezier_shape(
+    points: &[Vector3],
+    radius: f32,
+    columns: u32,
+    rows: u32,
+    closed: bool,
+    smooth: bool,
+) -> PbMesh {
+    if points.len() < 2 {
+        return PbMesh::default();
+    }
+    let spans = if closed {
+        points.len()
+    } else {
+        points.len() - 1
+    };
+    let mut path = Vec::new();
+    for s in 0..spans {
+        for r in 0..rows {
+            path.push(catmull(points, s, r as f32 / rows as f32, closed));
+        }
+    }
+    if !closed {
+        path.push(*points.last().expect("2+ points"));
+    }
+    let count = path.len();
+    let tangent = |k: usize| {
+        let (a, c) = if closed {
+            (path[(k + count - 1) % count], path[(k + 1) % count])
+        } else {
+            (path[k.saturating_sub(1)], path[(k + 1).min(count - 1)])
+        };
+        (c - a).normalize_or(Vector3::X)
+    };
+    // Parallel transport keeps the rings from twisting.
+    let t0 = tangent(0);
+    let mut normal = t0.cross(if t0.y.abs() < 0.9 {
+        Vector3::Y
+    } else {
+        Vector3::X
+    });
+    normal = normal.normalize_or(Vector3::Z);
+    let mut b = Builder::new();
+    let mut rings: Vec<Vec<u32>> = Vec::with_capacity(count);
+    let mut prev_t = t0;
+    for (k, &center) in path.iter().enumerate() {
+        let t = tangent(k);
+        normal = (normal - t * normal.dot(t)).normalize_or(normal);
+        if prev_t.dot(t) < -0.99 {
+            normal = -normal;
+        }
+        prev_t = t;
+        let binormal = t.cross(normal);
+        let ring: Vec<u32> = (0..columns)
+            .map(|c| {
+                let a = TAU * c as f32 / columns as f32;
+                b.v(center + (normal * a.cos() + binormal * a.sin()) * radius)
+            })
+            .collect();
+        rings.push(ring);
+    }
+    let group = u32::from(smooth);
+    let links = if closed { count } else { count - 1 };
+    for k in 0..links {
+        let (r0, r1) = (&rings[k], &rings[(k + 1) % count]);
+        let center = (path[k] + path[(k + 1) % count]) * 0.5;
+        for c in 0..columns as usize {
+            let d = (c + 1) % columns as usize;
+            let q = vec![r0[c], r0[d], r1[d], r1[c]];
+            let mid = q
+                .iter()
+                .map(|i| b.m.positions[*i as usize])
+                .sum::<Vector3>()
+                / 4.0;
+            b.face(q, mid - center, group);
+        }
+    }
+    if !closed {
+        b.face(rings[0].clone(), -tangent(0), 0);
+        b.face(rings[count - 1].clone(), tangent(count - 1), 0);
+    }
     b.done()
 }

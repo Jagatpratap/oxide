@@ -599,15 +599,20 @@ project's editor and its Scripts both link.
   Surface Inputs, Create Material from a graph, `editor_shader_graph` MCP tool. Not yet: Gradient/Matrix types, sampler states, Shader Graph-driven decals/sprites/terrain, Convert to Sub
   Graph
   ([Shader Graph](https://docs.unity3d.com/Packages/com.unity.shadergraph@17.0/manual/index.html))
-- ◐ ProBuilder: `ProBuilder Mesh` component (n-gon faces over shared positions, material slots, smoothing groups,
+- ☑ ProBuilder: `ProBuilder Mesh` component (n-gon faces over shared positions, material slots, smoothing groups,
   Auto UVs, vertex colours) rebuilt into the MeshFilter/MeshCollider whenever it changes and saved with the
   scene; Shape tool with Unity's shapes (Cube, Plane, Cylinder, Cone, Prism, Stairs, Arch, Pipe, Torus, Sphere,
   Door) whose parameters stay editable until the geometry is edited; ProBuilderize; Object/Vertex/Edge/Face
   modes with Scene view picking (click, Shift to add), highlights and a move handle; Extrude, Inset, Subdivide,
   Merge, Triangulate, Flip Normals, Delete, Detach faces, Bridge Edges, Weld/Collapse Vertices, Center Pivot,
   Apply Material, Smoothing Group, Vertex Color, Export OBJ; undo; ProBuilder window and Scene view overlay;
-  `probuilder` MCP tool. Not yet: UV Editor (manual UVs), Poly Shape / Bezier Shape, Boolean, edge loops and
-  rings, rotate/scale handles for elements, Lightmap UV generation
+  `probuilder` MCP tool; Select Edge Loop / Edge Ring and Insert Edge Loop; element handles that follow the
+  Move / Rotate / Scale tool (rings, axis and uniform scale, one undo step per drag); Poly Shape (drawn by
+  clicking on the ground, extruded, flip normals) and Bezier Shape (tube along a smooth path, open or closed);
+  Boolean Union / Subtract / Intersect into a new object (BSP CSG, both objects' materials); manual UVs and the
+  UV Editor (select and drag faces' UVs, rotate, flip, scale, Fit, Planar Project, Reset to Auto); Generate
+  Lightmap UVs. Not yet: Bezier knot handles in the Scene view (points are edited in the Inspector), UV
+  stitching and auto-stitch
   ([ProBuilder](https://docs.unity3d.com/Packages/com.unity.probuilder@6.0/manual/index.html))
 - ☑ Editor extension API: custom inspectors (`CustomEditor` + `InspectorGui`); `scripts! { ...; extensions: register }`
   with `EditorExtensions`: custom windows (`EditorWindow`: dockable tabs, own window like `GetWindow`, `on_enable`,

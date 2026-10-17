@@ -58,6 +58,7 @@ mod tile_palette;
 mod timeline_window;
 mod ui_builder_window;
 mod undo;
+mod uv_editor;
 mod vfx_graph_window;
 mod view;
 mod visibility;
@@ -110,6 +111,7 @@ pub enum Tab {
     FrameDebugger,
     AdaptivePerformance,
     ProjectAuditor,
+    UvEditor,
     /// A window from a script's editor extensions (Unity `EditorWindow`), by title hash.
     Custom(u32),
 }
@@ -155,6 +157,7 @@ impl Tab {
             Tab::FrameDebugger => "Frame Debugger",
             Tab::AdaptivePerformance => "Adaptive Performance",
             Tab::ProjectAuditor => "Project Auditor",
+            Tab::UvEditor => "UV Editor",
             Tab::Timeline => "Timeline",
             Tab::ShaderGraph => "Shader Graph",
             Tab::VfxGraph => "VFX Graph",
@@ -443,6 +446,7 @@ pub struct EditorState {
     profiler: profiler_window::ProfilerWindow,
     pub(crate) tests: test_runner::TestRunner,
     auditor: auditor_window::AuditorWindow,
+    pub(crate) uv_view: uv_editor::UvView,
     hierarchy: hierarchy::HierarchyState,
     pub(crate) inspector: inspector::InspectorState,
     console: console::ConsoleState,
@@ -530,6 +534,7 @@ impl EditorState {
             profiler: Default::default(),
             tests: Default::default(),
             auditor: Default::default(),
+            uv_view: Default::default(),
             hierarchy: Default::default(),
             inspector: Default::default(),
             console: Default::default(),
@@ -803,6 +808,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::FrameDebugger => profiler_window::frame_debugger_ui(self.st, self.engine, ui),
             Tab::AdaptivePerformance => adaptive_window::window_ui(self.engine, ui),
             Tab::ProjectAuditor => auditor_window::window_ui(self.st, self.engine, ui),
+            Tab::UvEditor => uv_editor::window_ui(self.st, self.engine, ui),
             Tab::Timeline => timeline_window::window_ui(self.st, self.engine, ui),
             Tab::ShaderGraph => shader_graph_window::window_ui(self.st, self.engine, ui),
             Tab::VfxGraph => vfx_graph_window::window_ui(self.st, self.engine, ui),
@@ -957,6 +963,7 @@ impl Editor {
                 | Tab::FontAssetCreator
                 | Tab::TerrainToolbox
                 | Tab::PackageManager
+                | Tab::UvEditor
                 | Tab::Custom(_)
         ) {
             // Unity opens its settings (and the Input Actions editor, the Light Explorer, a
@@ -972,6 +979,8 @@ impl Editor {
                 egui::vec2(620.0, 520.0)
             } else if tab == Tab::PackageManager {
                 egui::vec2(820.0, 520.0)
+            } else if tab == Tab::UvEditor {
+                egui::vec2(640.0, 640.0)
             } else if matches!(tab, Tab::Custom(_)) {
                 egui::vec2(420.0, 420.0)
             } else {
