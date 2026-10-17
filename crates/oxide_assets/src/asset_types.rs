@@ -336,6 +336,7 @@ pub fn builtin_types() -> Vec<AssetTypeInfo> {
         .color(230, 190, 110),
         AssetTypeInfo::new("Model", &["glb", "gltf", "fbx", "obj"]).color(120, 220, 160),
         AssetTypeInfo::new("AudioClip", &["wav", "ogg", "mp3", "flac"]).color(230, 140, 200),
+        AssetTypeInfo::new("NativePlugin", &["dylib", "dll", "so"]).color(200, 200, 120),
         AssetTypeInfo::new("AnimationClip", &["anim"])
             .menu("Animation/Animation Clip", "New Animation", 70)
             .color(200, 200, 120),

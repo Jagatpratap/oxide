@@ -58,6 +58,8 @@ pub fn init_world(world: &mut World, project_root: std::path::PathBuf) {
     oxide_scene::register_builtin(&mut world.registry);
     world.resources.insert(Time::new());
     world.resources.insert(Input::new());
+    // Native plugins are looked up under the project's (or player data's) Assets.
+    crate::native_plugins::NativePlugins::set_search_root(project_root.join("Assets"));
     let mut assets = AssetServer::new(project_root);
     crate::builtin_assets::register(&mut assets);
     // Sprite Atlases are packed up front, like Unity's included atlases.
@@ -148,6 +150,11 @@ impl Engine {
             vsync_override: None,
             auto_refresh: true,
         };
+        // Plugins marked "Load on startup" for this platform (or the editor).
+        crate::native_plugins::NativePlugins::load_startup_plugins(
+            e.world.resource::<AssetServer>(),
+            e.shell.is_some(),
+        );
         e.world.resource_mut::<Input>().screen_height = size.height as f32;
         e.start_systems();
         Ok(e)

@@ -265,3 +265,60 @@ mod tests {
         assert_eq!(a.target_rate(44100, false), Some(11025));
     }
 }
+
+/// Unity's Plugin Inspector settings for a native library under `Assets/` (`.dylib`, `.dll`,
+/// `.so`), kept in its `.meta`: which platforms include it, and whether it loads at startup.
+/// <https://docs.unity3d.com/Manual/PluginInspector.html>
+#[derive(Clone, Debug, PartialEq, Reflect)]
+#[reflect(default)]
+pub struct PluginImporter {
+    /// Included everywhere (the per-platform switches below are ignored).
+    pub any_platform: bool,
+    /// Loaded in the editor.
+    pub editor: bool,
+    /// Copied into desktop player builds.
+    pub standalone: bool,
+    pub android: bool,
+    #[reflect(label = "iOS")]
+    pub ios: bool,
+    /// Loaded when the game starts, not on first use (Unity "Load on startup").
+    pub load_on_startup: bool,
+}
+
+impl Default for PluginImporter {
+    fn default() -> Self {
+        Self {
+            any_platform: true,
+            editor: true,
+            standalone: true,
+            android: true,
+            ios: true,
+            load_on_startup: false,
+        }
+    }
+}
+
+impl PluginImporter {
+    /// Whether the plugin is included for a target (`editor`: the editor itself).
+    pub fn includes(&self, target: crate::texture::BuildTarget, editor: bool) -> bool {
+        use crate::texture::BuildTarget as B;
+        if self.any_platform {
+            return true;
+        }
+        if editor {
+            return self.editor;
+        }
+        match target {
+            B::Standalone => self.standalone,
+            B::Android => self.android,
+            B::IOS => self.ios,
+            B::WebGL => false,
+        }
+    }
+}
+
+/// Whether `path` is a native plugin library for some platform.
+pub fn is_native_plugin(path: &str) -> bool {
+    let p = path.to_ascii_lowercase();
+    [".dylib", ".dll", ".so"].iter().any(|e| p.ends_with(e))
+}

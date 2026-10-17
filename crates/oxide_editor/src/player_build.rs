@@ -185,6 +185,44 @@ fn copy_dir(from: &Path, to: &Path) -> Result<u64, String> {
     Ok(bytes)
 }
 
+/// Leaves out native plugins the player can't use: libraries for another OS, and ones whose
+/// Plugin Inspector settings exclude Standalone.
+fn strip_native_plugins(project: &Path, data_assets: &Path) -> Result<(), String> {
+    let assets = oxide_assets::AssetServer::new(project);
+    let mut stack = vec![data_assets.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+                continue;
+            }
+            let Some(rel) = p.strip_prefix(data_assets).ok().and_then(|r| r.to_str()) else {
+                continue;
+            };
+            let rel = format!("Assets/{}", rel.replace('\\', "/"));
+            if !oxide_assets::importers::is_native_plugin(&rel) {
+                continue;
+            }
+            let imp: oxide_assets::importers::PluginImporter = assets.importer(&rel);
+            let host = rel
+                .to_ascii_lowercase()
+                .ends_with(std::env::consts::DLL_SUFFIX);
+            if !host || !imp.includes(oxide_assets::BuildTarget::Standalone, false) {
+                std::fs::remove_file(&p).map_err(|e| format!("{}: {e}", p.display()))?;
+                let _ = std::fs::remove_file(p.with_extension(format!(
+                    "{}.meta",
+                    p.extension().and_then(|x| x.to_str()).unwrap_or("")
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// A file-name-safe product name.
 fn file_name(product: &str) -> String {
     let s: String = product
@@ -382,6 +420,7 @@ fn main() -> std::process::ExitCode {
     }
     std::fs::copy(&built, &exe).map_err(|e| format!("cannot copy {}: {e}", built.display()))?;
     copy_dir(&project.join("Assets"), &data.join("Assets"))?;
+    strip_native_plugins(project, &data.join("Assets"))?;
     if project.join("ProjectSettings").is_dir() {
         copy_dir(
             &project.join("ProjectSettings"),
@@ -419,5 +458,52 @@ mod tests {
         assert_eq!(BuildSettings::load(&dir), s);
         assert_eq!(file_name("My: Racer!"), "My_ Racer_");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn player_builds_leave_out_unusable_plugins() {
+        let dir = std::env::temp_dir().join(format!("oxide-plugins-build-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let plugins = dir.join("Assets/Plugins");
+        std::fs::create_dir_all(&plugins).unwrap();
+        let host = format!(
+            "{}fast{}",
+            std::env::consts::DLL_PREFIX,
+            std::env::consts::DLL_SUFFIX
+        );
+        let editor_only = format!(
+            "{}tools{}",
+            std::env::consts::DLL_PREFIX,
+            std::env::consts::DLL_SUFFIX
+        );
+        let other_os = if std::env::consts::DLL_SUFFIX == ".dll" {
+            "libfast.so"
+        } else {
+            "fast.dll"
+        };
+        for f in [host.as_str(), editor_only.as_str(), other_os] {
+            std::fs::write(plugins.join(f), b"binary").unwrap();
+        }
+        // The tools plugin is for the editor only.
+        let mut assets = oxide_assets::AssetServer::new(&dir);
+        let imp = oxide_assets::importers::PluginImporter {
+            any_platform: false,
+            standalone: false,
+            ..Default::default()
+        };
+        assets
+            .set_importer(&format!("Assets/Plugins/{editor_only}"), &imp)
+            .unwrap();
+        let data = dir.join("Build/Data/Assets");
+        copy_dir(&dir.join("Assets"), &data).unwrap();
+        strip_native_plugins(&dir, &data).unwrap();
+        let left: Vec<String> = std::fs::read_dir(data.join("Plugins"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| !n.ends_with(".meta"))
+            .collect();
+        assert_eq!(left, vec![host]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

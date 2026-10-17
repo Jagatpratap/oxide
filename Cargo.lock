@@ -2728,6 +2728,7 @@ dependencies = [
  "egui-wgpu",
  "egui-winit",
  "gilrs",
+ "libloading 0.9.0",
  "log",
  "oxide_animation",
  "oxide_assets",

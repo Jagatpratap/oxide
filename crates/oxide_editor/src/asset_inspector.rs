@@ -25,6 +25,7 @@ pub struct AssetInspectorState {
     /// Model / Audio import settings being edited (applied with Apply), by asset path.
     model_importer: Option<(String, oxide_assets::importers::ModelImporter)>,
     audio_importer: Option<(String, oxide_assets::importers::AudioImporter)>,
+    plugin_importer: Option<(String, oxide_assets::importers::PluginImporter)>,
     /// The `.asmdef` being edited (applied with Apply): (path, edited, as loaded).
     asmdef: Option<(String, crate::assemblies::AsmDef, crate::assemblies::AsmDef)>,
 }
@@ -64,6 +65,7 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: &s
             ui.label(RichText::new(&name).strong().size(14.0));
             ui.weak(match type_name {
                 "Texture" | "Model" | "AudioClip" => format!("{type_name} Import Settings"),
+                "NativePlugin" => "Plugin Import Settings".to_owned(),
                 t => t.to_owned(),
             });
         });
@@ -96,6 +98,39 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: &s
                     let mut slot = st.asset_inspector.audio_importer.take();
                     importer_settings(st, engine, ui, path, &mut slot, "audio-importer");
                     st.asset_inspector.audio_importer = slot;
+                }
+                // Unity's Plugin Inspector: the platforms it is included for.
+                "NativePlugin" => {
+                    let mut slot = st.asset_inspector.plugin_importer.take();
+                    importer_settings(st, engine, ui, path, &mut slot, "plugin-importer");
+                    st.asset_inspector.plugin_importer = slot;
+                    ui.separator();
+                    let stem = std::path::Path::new(path)
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("");
+                    let name = stem
+                        .strip_prefix(std::env::consts::DLL_PREFIX)
+                        .filter(|_| !std::env::consts::DLL_PREFIX.is_empty())
+                        .unwrap_or(stem);
+                    let loaded = oxide_engine::native_plugins::NativePlugins::loaded()
+                        .iter()
+                        .any(|n| n == name);
+                    ui.label(format!("Plugin name: \"{name}\""));
+                    ui.weak(if loaded {
+                        "Loaded in the editor"
+                    } else {
+                        "Not loaded yet (loads on first call)"
+                    });
+                    let host = path
+                        .to_ascii_lowercase()
+                        .ends_with(std::env::consts::DLL_SUFFIX);
+                    if !host {
+                        ui.weak(format!(
+                            "Built for another OS: this editor and its players use {} libraries.",
+                            std::env::consts::DLL_SUFFIX
+                        ));
+                    }
                 }
                 "Prefab" => prefab(st, engine, ui, path),
                 "Scene" => {

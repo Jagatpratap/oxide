@@ -29,6 +29,7 @@ mod mcp_timeline;
 pub mod mcp_tools;
 mod mcp_uitk;
 mod mcp_vfx;
+pub mod native_plugins;
 pub mod navigation;
 pub mod objects;
 pub mod project_settings;
@@ -276,6 +277,7 @@ pub mod prelude {
     };
     pub use oxide_vfx::{VisualEffect, VisualEffectAsset};
 
+    pub use crate::native_plugins::NativePlugins;
     pub use crate::render_pipeline::{
         FilteringSettings, RenderPipeline, RenderPipelines, ScriptableRenderContext,
     };

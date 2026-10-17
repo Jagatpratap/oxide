@@ -482,7 +482,12 @@ from the fixed edge and each object along its matching local axis).
   → Test Runner (PlayMode / EditMode tabs, Run All / Run Selected / Rerun Failed, status, durations, failure
   output), MCP `editor_test_runner`; new projects get an example of each
   ([Testing your code](https://docs.unity3d.com/Manual/test-framework/test-framework-introduction.html))
-- ☐ Native plugin interface
+- ☑ Native plugin interface: C ABI libraries (`.dylib` / `.dll` / `.so`) anywhere under `Assets/`, found by name
+  (`lib` prefix optional), loaded once; `native_plugin! { unsafe "lib" { fn f(a: i32) -> i32; } }` (Unity's
+  `[DllImport]`, bound on first call, DllNotFoundException-style panics); `NativePlugins::load` / `symbol`
+  for manual use; Plugin Inspector (Any Platform, Editor, Standalone, Android, iOS, Load on startup) in the
+  `.meta`; player builds leave out other-OS libraries and ones excluded from Standalone. Not yet: Unity's
+  low-level native rendering plugin interface
   ([Plug-ins](https://docs.unity3d.com/Manual/plug-ins.html))
 
 **Exit:** write a player controller script in the editor's script folder, save, it hot-reloads mid-play without losing scene state.
@@ -492,7 +497,7 @@ crate is compiled in the background and hot-reloaded in Edit and Play mode; comp
 objects and physics state survive, scripts get OnDisable/OnEnable across the reload, compile
 errors go to the Console, panics are caught and logged, and scripts that fail to load keep
 their data as Missing Script. The engine is one shared library (`oxide_dylib`) that the
-project's editor and its Scripts both link. Not yet: native plugins.
+project's editor and its Scripts both link.
 
 ### P7 — Physics, Input, 2D
 - ◐ 3D: Rigidbody, Box/Sphere/Capsule/Mesh colliders, triggers, layers collision matrix, raycasts/overlaps, physics materials, joints (Fixed/Hinge/Character ☑), CharacterController, articulations, ragdoll wizard ☑, cloth (later)

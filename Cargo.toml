@@ -73,7 +73,7 @@ libloading = "0.9"
 # Our crates: line tables and function names (backtraces and Console click-to-source work)
 # without full variable info, which kept filling the disk.
 [profile.dev]
-debug = "limited"
+debug = "line-tables-only"
 
 [profile.dev.package.oxide_text]
 opt-level = 2
