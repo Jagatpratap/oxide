@@ -2208,7 +2208,9 @@ impl SceneRenderer {
             cutout: bool,
             double_sided: bool,
             cast: bool,
-            priority: i32,
+            /// Render queue, then the renderer's sorting.
+            queue: i32,
+            sorting: crate::frame::DrawSorting,
             /// Reflection probes chosen for this object (instance `extra.zw`).
             probes: [u32; 2],
             /// Index into the baked-lighting table, or -1.
@@ -2316,7 +2318,8 @@ impl SceneRenderer {
                 cutout: gm.cutout,
                 double_sided: gm.double_sided,
                 cast: gm.cast_shadows && (d.cast_shadows || d.shadows_only),
-                priority: gm.priority,
+                queue: gm.queue,
+                sorting: d.sorting,
                 shader: gm.shader.map(|g| g.0),
                 shadow_shader: gm.shader.filter(|_| gm.shadow_shader).map(|g| g.0),
             });
@@ -2845,8 +2848,12 @@ impl SceneRenderer {
                     opaque.push(r);
                 }
             }
+            // Opaques (Unity's CommonOpaque): Sorting Layer, queue, then grouped by state
+            // (the depth prepass already rejects hidden pixels).
             opaque.sort_by_key(|r| {
                 (
+                    r.sorting.layer,
+                    r.queue,
                     r.double_sided,
                     r.item.joint_offset.is_some(),
                     r.material,
@@ -2854,9 +2861,19 @@ impl SceneRenderer {
                     r.item.submesh,
                 )
             });
+            // Transparents (Unity's CommonTransparent): Sorting Layer, Order in Layer, render
+            // queue, renderer Priority, then back to front.
             transparent.sort_by(|a, b| {
-                a.1.priority
-                    .cmp(&b.1.priority)
+                let key = |r: &Resolved| {
+                    (
+                        r.sorting.layer,
+                        r.sorting.order,
+                        r.queue,
+                        r.sorting.priority,
+                    )
+                };
+                key(a.1)
+                    .cmp(&key(b.1))
                     .then(b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal))
             });
             let mut ob: Vec<Batch> = Vec::new();

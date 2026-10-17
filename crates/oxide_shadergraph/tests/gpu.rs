@@ -39,6 +39,7 @@ fn frame(material: AssetId) -> RenderFrame {
             reflection_probe_static: false,
             lightmap: None,
             light_probe: None,
+            sorting: Default::default(),
         }],
         environment: Environment {
             post: PostSettings {

@@ -39,6 +39,7 @@ fn floor_frame() -> RenderFrame {
             reflection_probe_static: false,
             lightmap: None,
             light_probe: None,
+            sorting: Default::default(),
         }],
         environment: Environment {
             sky_exposure: 0.0,

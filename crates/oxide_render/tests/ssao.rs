@@ -24,6 +24,7 @@ fn draw(mesh: PrimitiveType, pos: Vector3, scale: Vector3) -> DrawItem {
         reflection_probe_static: false,
         lightmap: None,
         light_probe: None,
+        sorting: Default::default(),
     }
 }
 

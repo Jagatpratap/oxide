@@ -400,6 +400,11 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
         if hidden.contains(&id) {
             continue;
         }
+        let sorting = oxide_render::DrawSorting {
+            layer: world.sorting_layer_index(&r.sorting_layer),
+            order: r.sorting_order,
+            priority: r.renderer_priority,
+        };
         let Some(mesh) = world
             .get_component::<MeshFilter>(id)
             .and_then(|f| f.mesh.as_ref())
@@ -444,6 +449,7 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
                 reflection_probe_static: probe_static(id),
                 lightmap,
                 light_probe,
+                sorting,
             });
         }
     }
@@ -452,6 +458,11 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
         if hidden.contains(&id) {
             continue;
         }
+        let sorting = oxide_render::DrawSorting {
+            layer: world.sorting_layer_index(&r.sorting_layer),
+            order: r.sorting_order,
+            priority: r.renderer_priority,
+        };
         let light_probe = crate::lighting::probe_sh(&settings, world.position(id));
         let Some(mesh_h) = &r.mesh else { continue };
         let Some(mesh) = assets.meshes.get(mesh_h) else {
@@ -484,6 +495,7 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
                     reflection_probe_static: probe_static(id),
                     lightmap: None,
                     light_probe,
+                    sorting,
                 });
             }
             continue;
@@ -517,6 +529,7 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
                 reflection_probe_static: probe_static(id),
                 lightmap: None,
                 light_probe,
+                sorting,
             });
         }
     }

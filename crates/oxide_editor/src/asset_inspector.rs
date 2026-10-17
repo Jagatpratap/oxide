@@ -529,7 +529,7 @@ fn material(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: 
                 &engine.world,
                 &mut m,
                 "material-adv",
-                &|f| matches!(f, "sorting_priority" | "name"),
+                &|f| matches!(f, "sorting_priority" | "render_queue" | "name"),
             );
         });
     } else {
@@ -550,7 +550,9 @@ fn material(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: 
                     "occlusion_map" | "occlusion_strength" => kind == K::Lit,
                     _ => true,
                 };
-                shown_for_kind && !matches!(f, "shader" | "shader_graph" | "properties")
+                // Built-in shaders set their keywords from the material's maps and options.
+                shown_for_kind
+                    && !matches!(f, "shader" | "shader_graph" | "properties" | "keywords")
             });
     }
     if changed {

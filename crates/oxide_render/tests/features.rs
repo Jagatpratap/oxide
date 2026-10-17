@@ -23,6 +23,7 @@ fn draw(material: AssetId, pos: Vector3, scale: Vector3, layer: u8) -> DrawItem 
         reflection_probe_static: false,
         lightmap: None,
         light_probe: None,
+        sorting: Default::default(),
     }
 }
 

@@ -86,7 +86,8 @@ pub struct GpuMaterial {
     pub cutout: bool,
     pub double_sided: bool,
     pub cast_shadows: bool,
-    pub priority: i32,
+    /// Render queue (Unity `Material.renderQueue`, resolved).
+    pub queue: i32,
     /// Keyword constants this material sets (its shader variant), and the Global keywords
     /// whose state comes from the frame.
     pub constants: Vec<(String, f64)>,
@@ -635,7 +636,20 @@ impl GpuAssets {
             cutout,
             double_sided,
             cast_shadows,
-            priority: m.sorting_priority,
+            // A Shader Graph's surface type sets the From Shader queue.
+            queue: {
+                let mut q = m.clone();
+                if let Some((_, g)) = graph {
+                    q.surface_type = if g.transparent {
+                        SurfaceType::Transparent
+                    } else if g.alpha_clip {
+                        SurfaceType::Cutout
+                    } else {
+                        SurfaceType::Opaque
+                    };
+                }
+                q.effective_render_queue()
+            },
             constants: match graph {
                 // A Shader Graph's Local variant keywords, from the material's keywords.
                 Some((_, s)) => s

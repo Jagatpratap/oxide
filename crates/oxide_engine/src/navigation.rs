@@ -206,6 +206,7 @@ pub fn draw_overlay(
                     reflection_probe_static: false,
                     lightmap: None,
                     light_probe: None,
+                    sorting: Default::default(),
                 });
             }
             let lift = Vector3::Y * LIFT;

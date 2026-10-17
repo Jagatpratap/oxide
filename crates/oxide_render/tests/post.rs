@@ -49,6 +49,7 @@ fn frame(assets: &mut AssetServer, post: PostSettings) -> RenderFrame {
             reflection_probe_static: false,
             lightmap: None,
             light_probe: None,
+            sorting: Default::default(),
         }],
         environment: Environment {
             post,

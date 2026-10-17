@@ -325,6 +325,7 @@ pub enum ShadowCastingMode {
 
 /// Unity `MeshRenderer`: draws the sibling MeshFilter's mesh, one material per sub-mesh.
 #[derive(Clone, Debug, Reflect)]
+#[reflect(default)]
 pub struct MeshRenderer {
     pub materials: Vec<Handle<Material>>,
     pub cast_shadows: ShadowCastingMode,
@@ -342,6 +343,12 @@ pub struct MeshRenderer {
     /// Set by baking: which lightmap (-1 = none) and where in it.
     pub lightmap_index: i32,
     pub lightmap_scale_offset: Vector4,
+    /// Draw order across renderers (Unity `Renderer.sortingLayerName`, "Sorting Layer").
+    pub sorting_layer: String,
+    /// Order within the sorting layer (Unity `Renderer.sortingOrder`, "Order in Layer").
+    pub sorting_order: i32,
+    /// Transparent draw order before distance (URP "Priority", `Renderer.rendererPriority`).
+    pub renderer_priority: i32,
 }
 
 impl Default for MeshRenderer {
@@ -356,6 +363,9 @@ impl Default for MeshRenderer {
             lightmap_parameters: None,
             lightmap_index: -1,
             lightmap_scale_offset: Vector4::new(1.0, 1.0, 0.0, 0.0),
+            sorting_layer: "Default".into(),
+            sorting_order: 0,
+            renderer_priority: 0,
         }
     }
 }
@@ -377,6 +387,7 @@ impl Component for MeshRenderer {
 
 /// Unity `SkinnedMeshRenderer`: a mesh deformed by bone transforms.
 #[derive(Clone, Debug, Reflect)]
+#[reflect(default)]
 pub struct SkinnedMeshRenderer {
     pub mesh: Option<Handle<Mesh>>,
     pub materials: Vec<Handle<Material>>,
@@ -387,6 +398,12 @@ pub struct SkinnedMeshRenderer {
     pub receive_shadows: bool,
     /// Unity `Renderer.allowOcclusionWhenDynamic`.
     pub allow_occlusion_when_dynamic: bool,
+    /// Draw order across renderers (Unity `Renderer.sortingLayerName`, "Sorting Layer").
+    pub sorting_layer: String,
+    /// Order within the sorting layer (Unity `Renderer.sortingOrder`, "Order in Layer").
+    pub sorting_order: i32,
+    /// Transparent draw order before distance (URP "Priority", `Renderer.rendererPriority`).
+    pub renderer_priority: i32,
 }
 
 impl Default for SkinnedMeshRenderer {
@@ -399,6 +416,9 @@ impl Default for SkinnedMeshRenderer {
             cast_shadows: ShadowCastingMode::On,
             receive_shadows: true,
             allow_occlusion_when_dynamic: true,
+            sorting_layer: "Default".into(),
+            sorting_order: 0,
+            renderer_priority: 0,
         }
     }
 }

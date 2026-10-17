@@ -94,8 +94,13 @@ pub struct Material {
     pub alpha_cutoff: f32,
     /// URP "Render Face: Both".
     pub double_sided: bool,
-    /// Draw order tweak within a queue (Unity `renderQueue` offset).
+    /// URP "Sorting Priority": added to the shader's queue (-50..50).
+    #[reflect(range(-50, 50))]
     pub sorting_priority: i32,
+    /// Unity `Material.renderQueue`: -1 = From Shader (Geometry 2000, AlphaTest 2450,
+    /// Transparent 3000, plus Sorting Priority). Lower queues draw first within the opaque and
+    /// the transparent passes.
+    pub render_queue: i32,
     /// Whether objects with this material cast shadows (in addition to the renderer setting).
     pub cast_shadows: bool,
     /// Enabled shader keywords (Unity `Material.shaderKeywords`): a Shader Graph's Boolean
@@ -103,7 +108,32 @@ pub struct Material {
     pub keywords: Vec<String>,
 }
 
+/// Unity's built-in render queues (`UnityEngine.Rendering.RenderQueue`).
+pub mod render_queue {
+    pub const BACKGROUND: i32 = 1000;
+    pub const GEOMETRY: i32 = 2000;
+    pub const ALPHA_TEST: i32 = 2450;
+    /// The last opaque queue (`GeometryLast`).
+    pub const GEOMETRY_LAST: i32 = 2500;
+    pub const TRANSPARENT: i32 = 3000;
+    pub const OVERLAY: i32 = 4000;
+}
+
 impl Material {
+    /// The queue this material draws in: `render_queue`, or From Shader (its surface type's
+    /// queue plus Sorting Priority).
+    pub fn effective_render_queue(&self) -> i32 {
+        if self.render_queue >= 0 {
+            return self.render_queue.min(5000);
+        }
+        let base = match self.surface_type {
+            SurfaceType::Opaque => render_queue::GEOMETRY,
+            SurfaceType::Cutout => render_queue::ALPHA_TEST,
+            SurfaceType::Transparent => render_queue::TRANSPARENT,
+        };
+        base + self.sorting_priority.clamp(-50, 50)
+    }
+
     /// Unity `Material.EnableKeyword`.
     pub fn enable_keyword(&mut self, k: &str) {
         if !self.keywords.iter().any(|x| x == k) {
@@ -184,6 +214,7 @@ impl Default for Material {
             alpha_cutoff: 0.5,
             double_sided: false,
             sorting_priority: 0,
+            render_queue: -1,
             cast_shadows: true,
             keywords: Vec::new(),
         }

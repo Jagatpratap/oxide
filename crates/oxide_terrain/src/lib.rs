@@ -936,6 +936,7 @@ pub fn extract_details(
                             reflection_probe_static: false,
                             lightmap: None,
                             light_probe: None,
+                            sorting: Default::default(),
                         });
                     }
                 }
@@ -1007,6 +1008,7 @@ pub fn extract(
                     reflection_probe_static: true,
                     lightmap: None,
                     light_probe: None,
+                    sorting: Default::default(),
                 });
             }
         }
@@ -1061,6 +1063,7 @@ pub fn extract(
                     reflection_probe_static: true,
                     lightmap: None,
                     light_probe: None,
+                    sorting: Default::default(),
                 });
             }
         }

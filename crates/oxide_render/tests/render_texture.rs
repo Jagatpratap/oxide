@@ -44,6 +44,7 @@ fn draw(
         reflection_probe_static: false,
         lightmap: None,
         light_probe: None,
+        sorting: Default::default(),
     }
 }
 

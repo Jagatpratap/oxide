@@ -331,7 +331,10 @@ from the fixed edge and each object along its matching local axis).
   ([Cameras](https://docs.unity3d.com/Manual/Cameras.html),
   [Multiple cameras](https://docs.unity3d.com/Manual/MultipleCameras-landing.html),
   [Physical cameras](https://docs.unity3d.com/Manual/PhysicalCameras.html))
-- ◐ Render queues & sorting (opaque front-to-back, transparent back-to-front)
+- ☑ Render queues & sorting: `Material.renderQueue` (From Shader = Geometry/AlphaTest/Transparent + URP Sorting
+  Priority, or an explicit queue), renderer Sorting Layer / Order in Layer / Priority on Mesh and Skinned Mesh
+  Renderers; opaques by sorting layer, queue and state, transparents by sorting layer, order, queue, priority, then
+  back to front (Unity's CommonOpaque / CommonTransparent)
   ([Render queues](https://docs.unity3d.com/Manual/built-in-rendering-order.html))
 - ◐ Materials & shader property system, shader import + reflection
 - ☑ Shader keywords and variants: material keywords (`Material.EnableKeyword`/`DisableKeyword`/

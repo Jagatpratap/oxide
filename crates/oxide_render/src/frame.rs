@@ -244,6 +244,16 @@ pub struct DrawItem {
     /// Light from baked light probes (L2 SH, cosine-convolved, ÷π) for objects without a
     /// lightmap.
     pub light_probe: Option<[Vector3; 9]>,
+    pub sorting: DrawSorting,
+}
+
+/// A renderer's draw-order settings (Unity Sorting Layer, Order in Layer, Priority).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DrawSorting {
+    /// Index of the sorting layer (Tags and Layers order).
+    pub layer: i32,
+    pub order: i32,
+    pub priority: i32,
 }
 
 /// One terrain chunk drawn with the terrain (splat) shader.

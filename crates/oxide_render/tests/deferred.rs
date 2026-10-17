@@ -25,6 +25,7 @@ fn draw(id: u64, mesh: PrimitiveType, material: AssetId, model: Matrix4x4) -> Dr
         reflection_probe_static: false,
         lightmap: None,
         light_probe: None,
+        sorting: Default::default(),
     }
 }
 
