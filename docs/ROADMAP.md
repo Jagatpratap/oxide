@@ -304,9 +304,10 @@ from the fixed edge and each object along its matching local axis).
 **Exit:** drop a glTF + textures into Assets/, it appears in Project window with thumbnail and drags into the scene.
 
 ### P4 — Rendering core (Scriptable Render Pipeline + "URP"-equivalent)
-- ◐ Render graph: passes declare reads/writes, unused passes culled, pooled transient textures
-  aliased by lifetime (wgpu handles barriers). Post-processing runs on it; the scene passes don't
-  yet ([SRP fundamentals](https://docs.unity3d.com/Manual/scriptable-render-pipeline-introduction.html))
+- ☑ Render graph: passes declare reads/writes, unused passes culled, pooled transient textures
+  aliased by lifetime (wgpu handles barriers). The scene runs on it (Shadow Cascades, Shadow Atlas,
+  Depth Prepass, SSAO, Draw Objects; the TAA resolve follows) and so does post-processing; the passes
+  that ran each frame are recorded for the Frame Debugger ([SRP fundamentals](https://docs.unity3d.com/Manual/scriptable-render-pipeline-introduction.html))
 - ◐ Extending the pipeline: URP renderer features — Full Screen Pass (user WGSL, validated, hot
   reloaded) and Render Objects (layer redraw with override material / depth test) at
   After Opaques / After Transparents / Before / After Post-processing. A whole custom

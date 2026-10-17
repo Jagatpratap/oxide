@@ -261,6 +261,10 @@ pub struct SceneRenderer {
     gi_buffer: wgpu::Buffer,
     fullscreen: crate::fullscreen::FullscreenGpu,
     graph_pool: crate::render_graph::TexturePool,
+    /// Render graph passes that ran in the last frame: the scene's, then post-processing's
+    /// (for the Frame Debugger).
+    pub scene_passes: Vec<String>,
+    pub post_passes: Vec<String>,
     frame_buffers: Vec<wgpu::Buffer>,
     /// Per camera: cluster cells and light index list (Forward+).
     cluster_buffers: Vec<(wgpu::Buffer, wgpu::Buffer)>,
@@ -747,6 +751,8 @@ impl SceneRenderer {
             gi_buffer: buf("baked lighting", 176 * 64, wgpu::BufferUsages::STORAGE),
             fullscreen: crate::fullscreen::FullscreenGpu::new(device, &gpu.queue),
             graph_pool: Default::default(),
+            scene_passes: Vec::new(),
+            post_passes: Vec::new(),
             frame_buffers: Vec::new(),
             cluster_buffers: Vec::new(),
             frame_groups: Vec::new(),
@@ -1742,7 +1748,8 @@ impl SceneRenderer {
             cur = dst;
             slot += 1;
         }
-        graph.execute(&gpu.device, &gpu.queue, &mut encoder, &mut self.graph_pool);
+        let compiled = graph.execute(&gpu.device, &gpu.queue, &mut encoder, &mut self.graph_pool);
+        self.post_passes = compiled.ran;
         gpu.queue.submit([encoder.finish()]);
         stats
     }
@@ -2896,91 +2903,13 @@ impl SceneRenderer {
             );
         }
 
-        // ---- shadow passes ------------------------------------------------------------
-        if shadows.is_some() {
-            for (i, list) in shadow_batches.iter().enumerate() {
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("shadow cascade"),
-                    color_attachments: &[],
-                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                        view: &self.shadow_layers[i],
-                        depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(1.0),
-                            store: wgpu::StoreOp::Store,
-                        }),
-                        stencil_ops: None,
-                    }),
-                    ..Default::default()
-                });
-                pass.set_bind_group(0, &self.shadow_groups[i], &[]);
-                pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-                for b in list {
-                    let mesh = &self.gpu_assets.meshes[&b.mesh];
-                    let mat = &self.gpu_assets.materials[&b.material];
-                    pass.set_pipeline(&self.shadow_pipelines[&b.key]);
-                    pass.set_bind_group(1, &mat.bind_group, &[]);
-                    pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-                    if b.key.skinned {
-                        let Some(skin) = &mesh.skin else { continue };
-                        pass.set_vertex_buffer(2, skin.slice(..));
-                    }
-                    pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-                    pass.draw_indexed(
-                        mesh.submeshes[b.submesh as usize].clone(),
-                        0,
-                        b.instances.clone(),
-                    );
-                    stats.shadow_draw_calls += 1;
-                }
-            }
-        }
-
-        // ---- point/spot shadow atlas ------------------------------------------------------
-        if !tile_batches.is_empty() {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("shadow atlas"),
-                color_attachments: &[],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.atlas,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                ..Default::default()
-            });
-            pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-            let per_row = ATLAS_SIZE / ATLAS_TILE;
-            for (tile, list) in &tile_batches {
-                let (tx, ty) = (*tile as u32 % per_row, *tile as u32 / per_row);
-                let (x, y) = ((tx * ATLAS_TILE) as f32, (ty * ATLAS_TILE) as f32);
-                pass.set_viewport(x, y, ATLAS_TILE as f32, ATLAS_TILE as f32, 0.0, 1.0);
-                pass.set_scissor_rect(x as u32, y as u32, ATLAS_TILE, ATLAS_TILE);
-                pass.set_bind_group(0, &self.atlas_groups[*tile], &[]);
-                for b in list {
-                    let mesh = &self.gpu_assets.meshes[&b.mesh];
-                    let mat = &self.gpu_assets.materials[&b.material];
-                    pass.set_pipeline(&self.shadow_pipelines[&b.key]);
-                    pass.set_bind_group(1, &mat.bind_group, &[]);
-                    pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-                    if b.key.skinned {
-                        let Some(skin) = &mesh.skin else { continue };
-                        pass.set_vertex_buffer(2, skin.slice(..));
-                    }
-                    pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-                    pass.draw_indexed(
-                        mesh.submeshes[b.submesh as usize].clone(),
-                        0,
-                        b.instances.clone(),
-                    );
-                    stats.shadow_draw_calls += 1;
-                }
-            }
-        }
-
-        // ---- SSAO: depth prepass of the first camera, then AO ---------------------------
-        if let (Some(settings), Some(cam)) = (ssao, frame.cameras.first()) {
+        // ---- scene passes, on the render graph ------------------------------------------
+        // Mutable setup first (pipelines, targets); the graph's passes only read.
+        let ao_pass = match (ssao, frame.cameras.first()) {
+            (Some(settings), Some(cam)) => Some((settings, cam)),
+            _ => None,
+        };
+        if ao_pass.is_some() {
             for b in &camera_batches[0].0 {
                 let cutout = self.gpu_assets.materials[&b.material].cutout;
                 self.prepass_pipeline(
@@ -2992,160 +2921,199 @@ impl SceneRenderer {
             if t.ssao.is_none() {
                 t.ssao = Some(self.ssao.targets(device, w, h));
             }
-            let st = self.targets[&(w, h, samples)]
-                .ssao
-                .as_ref()
-                .expect("made above");
-            {
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("depth prepass"),
-                    color_attachments: &[],
-                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                        view: &st.depth,
-                        depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(0.0),
-                            store: wgpu::StoreOp::Store,
-                        }),
-                        stencil_ops: None,
-                    }),
-                    ..Default::default()
-                });
-                let [vx, vy, vw, vh] = cam.viewport;
-                let px = (vx * w as f32).clamp(0.0, w as f32);
-                let pw = (vw * w as f32).clamp(1.0, w as f32 - px);
-                let ph = (vh * h as f32).clamp(1.0, h as f32);
-                let py = (h as f32 - (vy * h as f32) - ph).clamp(0.0, h as f32 - ph);
-                pass.set_viewport(px, py, pw, ph, 0.0, 1.0);
-                pass.set_bind_group(0, &self.frame_groups[0], &[]);
-                pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-                if !camera_terrain[0].is_empty() {
-                    pass.set_pipeline(&self.terrain_prepass);
-                    for &(data, mesh_id, idx) in &camera_terrain[0] {
-                        let (Some(bg), Some(mesh)) = (
-                            self.terrain.bind_group(data),
-                            self.gpu_assets.meshes.get(&mesh_id),
-                        ) else {
-                            continue;
-                        };
-                        pass.set_bind_group(1, bg, &[]);
-                        pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-                        pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-                        pass.draw_indexed(mesh.submeshes[0].clone(), 0, idx..idx + 1);
-                    }
-                }
-                for b in &camera_batches[0].0 {
-                    let mesh = &self.gpu_assets.meshes[&b.mesh];
-                    let mat = &self.gpu_assets.materials[&b.material];
-                    pass.set_pipeline(
-                        &self.prepass_pipelines
-                            [&(mat.cutout, b.key.double_sided, b.key.skinned, b.key.shader)],
-                    );
-                    pass.set_bind_group(1, &mat.bind_group, &[]);
-                    pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-                    if b.key.skinned {
-                        let Some(skin) = &mesh.skin else { continue };
-                        pass.set_vertex_buffer(2, skin.slice(..));
-                    }
-                    pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-                    pass.draw_indexed(
-                        mesh.submeshes[b.submesh as usize].clone(),
-                        0,
-                        b.instances.clone(),
-                    );
-                }
-            }
-            self.ssao
-                .run(device, queue, &mut encoder, st, cam0_proj, &settings);
         }
-
-        // ---- camera passes -------------------------------------------------------------
-        let targets = self.targets.get(&(w, h, samples)).expect("targets");
+        let stats_cell = std::cell::RefCell::new(stats);
+        let mut pool = std::mem::take(&mut self.graph_pool);
+        let this = &*self;
+        let targets = this.targets.get(&(w, h, samples)).expect("targets");
         let screen_group = match (&ssao, &targets.ssao) {
             (Some(_), Some(st)) => &st.screen_group,
-            _ => &self.ssao.white_group,
+            _ => &this.ssao.white_group,
         };
-        let fixed = &self.fixed[&samples];
+        let fixed = &this.fixed[&samples];
         let (color_view, resolve) = match &targets.msaa {
             Some(m) => (m, Some(&targets.resolve)),
             None => (&targets.resolve, None),
         };
+        let mut graph = crate::render_graph::RenderGraph::new();
+        // Imported targets: what the passes write and what later steps (TAA, post) read.
+        let shadow_tex = this.shadow_layers.first().map(|v| graph.import(v));
+        let atlas_tex = graph.import(&this.atlas);
+        let ao_targets = targets.ssao.as_ref().filter(|_| ao_pass.is_some());
+        let ao_depth_tex = ao_targets.map(|t| graph.import(&t.depth));
+        let ao_tex = ao_targets.map(|t| graph.import(&t.blurred));
+        let color_tex = graph.import(resolve.unwrap_or(color_view));
+        let depth_tex = graph.import(&targets.depth);
+        if shadows.is_some()
+            && let Some(sm) = shadow_tex
         {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("cameras"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: color_view,
-                    depth_slice: None,
-                    resolve_target: resolve,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &targets.depth,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(0.0),
-                        // TAA, depth-based post effects and lens flare occlusion read
-                        // depth afterwards.
-                        store: if taa || fx || flare_depth {
-                            wgpu::StoreOp::Store
-                        } else {
-                            wgpu::StoreOp::Discard
-                        },
-                    }),
-                    stencil_ops: None,
-                }),
-                ..Default::default()
-            });
-            for (ci, cam) in frame.cameras.iter().enumerate() {
-                let [vx, vy, vw, vh] = cam.viewport;
-                let px = (vx * w as f32).clamp(0.0, w as f32);
-                let pw = (vw * w as f32).clamp(1.0, w as f32 - px);
-                let ph = (vh * h as f32).clamp(1.0, h as f32);
-                let py = (h as f32 - (vy * h as f32) - ph).clamp(0.0, h as f32 - ph);
-                pass.set_viewport(px, py, pw, ph, 0.0, 1.0);
-                pass.set_scissor_rect(px as u32, py as u32, (pw as u32).max(1), (ph as u32).max(1));
-                pass.set_bind_group(0, &self.frame_groups[ci], &[]);
-                pass.set_bind_group(2, screen_group, &[]);
-                match cam.clear {
-                    ClearMode::Sky => pass.set_pipeline(&fixed.sky),
-                    ClearMode::Color(_) => pass.set_pipeline(&fixed.solid),
-                    ClearMode::DepthOnly => pass.set_pipeline(&fixed.depth_clear),
-                    ClearMode::Nothing => {}
-                }
-                if cam.clear != ClearMode::Nothing {
-                    pass.draw(0..3, 0..1);
-                }
-                pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-                if !camera_terrain[ci].is_empty() {
-                    pass.set_pipeline(&fixed.terrain);
-                    for &(data, mesh_id, idx) in &camera_terrain[ci] {
-                        let (Some(bg), Some(mesh)) = (
-                            self.terrain.bind_group(data),
-                            self.gpu_assets.meshes.get(&mesh_id),
-                        ) else {
-                            continue;
-                        };
-                        pass.set_bind_group(1, bg, &[]);
-                        pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-                        pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-                        let range = mesh.submeshes[0].clone();
-                        stats.triangles += ((range.end - range.start) / 3) as u64;
-                        stats.draw_calls += 1;
-                        pass.draw_indexed(range, 0, idx..idx + 1);
+            let stats_cell = &stats_cell;
+            let shadow_batches = &shadow_batches;
+            graph.add_pass(
+                "Shadow Cascades",
+                |b| {
+                    b.write(sm);
+                },
+                move |ctx| {
+                    let mut st = stats_cell.borrow_mut();
+
+                    for (i, list) in shadow_batches.iter().enumerate() {
+                        let mut pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("shadow cascade"),
+                            color_attachments: &[],
+                            depth_stencil_attachment: Some(
+                                wgpu::RenderPassDepthStencilAttachment {
+                                    view: &this.shadow_layers[i],
+                                    depth_ops: Some(wgpu::Operations {
+                                        load: wgpu::LoadOp::Clear(1.0),
+                                        store: wgpu::StoreOp::Store,
+                                    }),
+                                    stencil_ops: None,
+                                },
+                            ),
+                            ..Default::default()
+                        });
+                        pass.set_bind_group(0, &this.shadow_groups[i], &[]);
+                        pass.set_vertex_buffer(1, this.instance_buffer.slice(..));
+                        for b in list {
+                            let mesh = &this.gpu_assets.meshes[&b.mesh];
+                            let mat = &this.gpu_assets.materials[&b.material];
+                            pass.set_pipeline(&this.shadow_pipelines[&b.key]);
+                            pass.set_bind_group(1, &mat.bind_group, &[]);
+                            pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                            if b.key.skinned {
+                                let Some(skin) = &mesh.skin else { continue };
+                                pass.set_vertex_buffer(2, skin.slice(..));
+                            }
+                            pass.set_index_buffer(
+                                mesh.indices.slice(..),
+                                wgpu::IndexFormat::Uint32,
+                            );
+                            pass.draw_indexed(
+                                mesh.submeshes[b.submesh as usize].clone(),
+                                0,
+                                b.instances.clone(),
+                            );
+                            st.shadow_draw_calls += 1;
+                        }
                     }
-                }
-                if ci == 0 && !grass_ranges.is_empty() {
-                    stats.draw_calls += self.grass.draw(&mut pass, &grass_ranges, samples);
-                    pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-                }
-                let draw_batches = |pass: &mut wgpu::RenderPass,
-                                    list: &[Batch],
-                                    stats: &mut RenderStats| {
-                    for b in list {
-                        let mesh = &self.gpu_assets.meshes[&b.mesh];
-                        let mat = &self.gpu_assets.materials[&b.material];
-                        pass.set_pipeline(&self.main_pipelines[&b.key]);
+                },
+            );
+        }
+        if !tile_batches.is_empty() {
+            let stats_cell = &stats_cell;
+            let tile_batches = &tile_batches;
+            graph.add_pass(
+                "Shadow Atlas",
+                |b| {
+                    b.write(atlas_tex);
+                },
+                move |ctx| {
+                    let mut st = stats_cell.borrow_mut();
+
+                    let mut pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("shadow atlas"),
+                        color_attachments: &[],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: &this.atlas,
+                            depth_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(1.0),
+                                store: wgpu::StoreOp::Store,
+                            }),
+                            stencil_ops: None,
+                        }),
+                        ..Default::default()
+                    });
+                    pass.set_vertex_buffer(1, this.instance_buffer.slice(..));
+                    let per_row = ATLAS_SIZE / ATLAS_TILE;
+                    for (tile, list) in tile_batches {
+                        let (tx, ty) = (*tile as u32 % per_row, *tile as u32 / per_row);
+                        let (x, y) = ((tx * ATLAS_TILE) as f32, (ty * ATLAS_TILE) as f32);
+                        pass.set_viewport(x, y, ATLAS_TILE as f32, ATLAS_TILE as f32, 0.0, 1.0);
+                        pass.set_scissor_rect(x as u32, y as u32, ATLAS_TILE, ATLAS_TILE);
+                        pass.set_bind_group(0, &this.atlas_groups[*tile], &[]);
+                        for b in list {
+                            let mesh = &this.gpu_assets.meshes[&b.mesh];
+                            let mat = &this.gpu_assets.materials[&b.material];
+                            pass.set_pipeline(&this.shadow_pipelines[&b.key]);
+                            pass.set_bind_group(1, &mat.bind_group, &[]);
+                            pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                            if b.key.skinned {
+                                let Some(skin) = &mesh.skin else { continue };
+                                pass.set_vertex_buffer(2, skin.slice(..));
+                            }
+                            pass.set_index_buffer(
+                                mesh.indices.slice(..),
+                                wgpu::IndexFormat::Uint32,
+                            );
+                            pass.draw_indexed(
+                                mesh.submeshes[b.submesh as usize].clone(),
+                                0,
+                                b.instances.clone(),
+                            );
+                            st.shadow_draw_calls += 1;
+                        }
+                    }
+                },
+            );
+        }
+        if let (Some((settings, cam)), Some(ao_targets), Some(ao_depth), Some(ao)) =
+            (ao_pass, ao_targets, ao_depth_tex, ao_tex)
+        {
+            let camera_batches = &camera_batches;
+            let camera_terrain = &camera_terrain;
+            graph.add_pass(
+                "Depth Prepass",
+                |b| {
+                    b.write(ao_depth);
+                },
+                move |ctx| {
+                    let mut pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("depth prepass"),
+                        color_attachments: &[],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: &ao_targets.depth,
+                            depth_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(0.0),
+                                store: wgpu::StoreOp::Store,
+                            }),
+                            stencil_ops: None,
+                        }),
+                        ..Default::default()
+                    });
+                    let [vx, vy, vw, vh] = cam.viewport;
+                    let px = (vx * w as f32).clamp(0.0, w as f32);
+                    let pw = (vw * w as f32).clamp(1.0, w as f32 - px);
+                    let ph = (vh * h as f32).clamp(1.0, h as f32);
+                    let py = (h as f32 - (vy * h as f32) - ph).clamp(0.0, h as f32 - ph);
+                    pass.set_viewport(px, py, pw, ph, 0.0, 1.0);
+                    pass.set_bind_group(0, &this.frame_groups[0], &[]);
+                    pass.set_vertex_buffer(1, this.instance_buffer.slice(..));
+                    if !camera_terrain[0].is_empty() {
+                        pass.set_pipeline(&this.terrain_prepass);
+                        for &(data, mesh_id, idx) in &camera_terrain[0] {
+                            let (Some(bg), Some(mesh)) = (
+                                this.terrain.bind_group(data),
+                                this.gpu_assets.meshes.get(&mesh_id),
+                            ) else {
+                                continue;
+                            };
+                            pass.set_bind_group(1, bg, &[]);
+                            pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                            pass.set_index_buffer(
+                                mesh.indices.slice(..),
+                                wgpu::IndexFormat::Uint32,
+                            );
+                            pass.draw_indexed(mesh.submeshes[0].clone(), 0, idx..idx + 1);
+                        }
+                    }
+                    for b in &camera_batches[0].0 {
+                        let mesh = &this.gpu_assets.meshes[&b.mesh];
+                        let mat = &this.gpu_assets.materials[&b.material];
+                        pass.set_pipeline(
+                            &this.prepass_pipelines
+                                [&(mat.cutout, b.key.double_sided, b.key.skinned, b.key.shader)],
+                        );
                         pass.set_bind_group(1, &mat.bind_group, &[]);
                         pass.set_vertex_buffer(0, mesh.vertices.slice(..));
                         if b.key.skinned {
@@ -3153,49 +3121,200 @@ impl SceneRenderer {
                             pass.set_vertex_buffer(2, skin.slice(..));
                         }
                         pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-                        let range = mesh.submeshes[b.submesh as usize].clone();
-                        let n = b.instances.end - b.instances.start;
-                        stats.triangles += ((range.end - range.start) / 3) as u64 * n as u64;
-                        stats.instances += n;
-                        stats.draw_calls += 1;
-                        pass.draw_indexed(range, 0, b.instances.clone());
+                        pass.draw_indexed(
+                            mesh.submeshes[b.submesh as usize].clone(),
+                            0,
+                            b.instances.clone(),
+                        );
                     }
-                };
-                let features_at = |event: RenderPassEvent| {
-                    camera_features[ci]
-                        .iter()
-                        .filter(move |(e, _)| *e == event)
-                        .map(|(_, l)| l)
-                };
-                let (ob, tb) = &camera_batches[ci];
-                draw_batches(&mut pass, ob, &mut stats);
-                for list in features_at(RenderPassEvent::AfterRenderingOpaques) {
-                    draw_batches(&mut pass, list, &mut stats);
-                }
-                draw_batches(&mut pass, tb, &mut stats);
-                if !particle_ranges.is_empty() {
-                    stats.draw_calls += self.particles.draw(&mut pass, &particle_ranges, samples);
-                }
-                if !frame.vfx.is_empty() {
-                    stats.draw_calls += self.vfx.draw(&mut pass, frame, samples);
-                }
-                if !sprite_ranges.is_empty() {
-                    stats.draw_calls += self.sprites.draw(&mut pass, &sprite_ranges, samples);
-                }
-                if !text_ranges.is_empty() {
-                    stats.draw_calls += self.text.draw(&mut pass, &text_ranges, samples);
-                }
-                for list in features_at(RenderPassEvent::AfterRenderingTransparents) {
-                    draw_batches(&mut pass, list, &mut stats);
-                }
-                if !frame.lines.is_empty() {
-                    pass.set_pipeline(&fixed.line);
-                    pass.set_vertex_buffer(0, self.line_buffer.slice(..));
-                    pass.draw(0..frame.lines.len() as u32, 0..1);
-                }
-            }
+                },
+            );
+            graph.add_pass(
+                "SSAO",
+                |b| {
+                    b.read(ao_depth).write(ao);
+                },
+                move |ctx| {
+                    this.ssao.run(
+                        ctx.device,
+                        ctx.queue,
+                        ctx.encoder,
+                        ao_targets,
+                        cam0_proj,
+                        &settings,
+                    );
+                },
+            );
         }
-
+        {
+            let stats_cell = &stats_cell;
+            let camera_batches = &camera_batches;
+            let camera_terrain = &camera_terrain;
+            let camera_features = &camera_features;
+            let grass_ranges = &grass_ranges;
+            let particle_ranges = &particle_ranges;
+            let sprite_ranges = &sprite_ranges;
+            let text_ranges = &text_ranges;
+            graph.add_pass(
+                "Draw Objects",
+                |b| {
+                    for t in [shadow_tex, Some(atlas_tex), ao_tex].into_iter().flatten() {
+                        b.read(t);
+                    }
+                    b.write(color_tex).write(depth_tex);
+                },
+                move |ctx| {
+                    let mut st = stats_cell.borrow_mut();
+                    {
+                        let mut pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("cameras"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: color_view,
+                                depth_slice: None,
+                                resolve_target: resolve,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            depth_stencil_attachment: Some(
+                                wgpu::RenderPassDepthStencilAttachment {
+                                    view: &targets.depth,
+                                    depth_ops: Some(wgpu::Operations {
+                                        load: wgpu::LoadOp::Clear(0.0),
+                                        // TAA, depth-based post effects and lens flare occlusion read
+                                        // depth afterwards.
+                                        store: if taa || fx || flare_depth {
+                                            wgpu::StoreOp::Store
+                                        } else {
+                                            wgpu::StoreOp::Discard
+                                        },
+                                    }),
+                                    stencil_ops: None,
+                                },
+                            ),
+                            ..Default::default()
+                        });
+                        for (ci, cam) in frame.cameras.iter().enumerate() {
+                            let [vx, vy, vw, vh] = cam.viewport;
+                            let px = (vx * w as f32).clamp(0.0, w as f32);
+                            let pw = (vw * w as f32).clamp(1.0, w as f32 - px);
+                            let ph = (vh * h as f32).clamp(1.0, h as f32);
+                            let py = (h as f32 - (vy * h as f32) - ph).clamp(0.0, h as f32 - ph);
+                            pass.set_viewport(px, py, pw, ph, 0.0, 1.0);
+                            pass.set_scissor_rect(
+                                px as u32,
+                                py as u32,
+                                (pw as u32).max(1),
+                                (ph as u32).max(1),
+                            );
+                            pass.set_bind_group(0, &this.frame_groups[ci], &[]);
+                            pass.set_bind_group(2, screen_group, &[]);
+                            match cam.clear {
+                                ClearMode::Sky => pass.set_pipeline(&fixed.sky),
+                                ClearMode::Color(_) => pass.set_pipeline(&fixed.solid),
+                                ClearMode::DepthOnly => pass.set_pipeline(&fixed.depth_clear),
+                                ClearMode::Nothing => {}
+                            }
+                            if cam.clear != ClearMode::Nothing {
+                                pass.draw(0..3, 0..1);
+                            }
+                            pass.set_vertex_buffer(1, this.instance_buffer.slice(..));
+                            if !camera_terrain[ci].is_empty() {
+                                pass.set_pipeline(&fixed.terrain);
+                                for &(data, mesh_id, idx) in &camera_terrain[ci] {
+                                    let (Some(bg), Some(mesh)) = (
+                                        this.terrain.bind_group(data),
+                                        this.gpu_assets.meshes.get(&mesh_id),
+                                    ) else {
+                                        continue;
+                                    };
+                                    pass.set_bind_group(1, bg, &[]);
+                                    pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                                    pass.set_index_buffer(
+                                        mesh.indices.slice(..),
+                                        wgpu::IndexFormat::Uint32,
+                                    );
+                                    let range = mesh.submeshes[0].clone();
+                                    st.triangles += ((range.end - range.start) / 3) as u64;
+                                    st.draw_calls += 1;
+                                    pass.draw_indexed(range, 0, idx..idx + 1);
+                                }
+                            }
+                            if ci == 0 && !grass_ranges.is_empty() {
+                                st.draw_calls += this.grass.draw(&mut pass, &grass_ranges, samples);
+                                pass.set_vertex_buffer(1, this.instance_buffer.slice(..));
+                            }
+                            let draw_batches =
+                                |pass: &mut wgpu::RenderPass,
+                                 list: &[Batch],
+                                 stats: &mut RenderStats| {
+                                    for b in list {
+                                        let mesh = &this.gpu_assets.meshes[&b.mesh];
+                                        let mat = &this.gpu_assets.materials[&b.material];
+                                        pass.set_pipeline(&this.main_pipelines[&b.key]);
+                                        pass.set_bind_group(1, &mat.bind_group, &[]);
+                                        pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                                        if b.key.skinned {
+                                            let Some(skin) = &mesh.skin else { continue };
+                                            pass.set_vertex_buffer(2, skin.slice(..));
+                                        }
+                                        pass.set_index_buffer(
+                                            mesh.indices.slice(..),
+                                            wgpu::IndexFormat::Uint32,
+                                        );
+                                        let range = mesh.submeshes[b.submesh as usize].clone();
+                                        let n = b.instances.end - b.instances.start;
+                                        stats.triangles +=
+                                            ((range.end - range.start) / 3) as u64 * n as u64;
+                                        stats.instances += n;
+                                        stats.draw_calls += 1;
+                                        pass.draw_indexed(range, 0, b.instances.clone());
+                                    }
+                                };
+                            let features_at = |event: RenderPassEvent| {
+                                camera_features[ci]
+                                    .iter()
+                                    .filter(move |(e, _)| *e == event)
+                                    .map(|(_, l)| l)
+                            };
+                            let (ob, tb) = &camera_batches[ci];
+                            draw_batches(&mut pass, ob, &mut st);
+                            for list in features_at(RenderPassEvent::AfterRenderingOpaques) {
+                                draw_batches(&mut pass, list, &mut st);
+                            }
+                            draw_batches(&mut pass, tb, &mut st);
+                            if !particle_ranges.is_empty() {
+                                st.draw_calls +=
+                                    this.particles.draw(&mut pass, &particle_ranges, samples);
+                            }
+                            if !frame.vfx.is_empty() {
+                                st.draw_calls += this.vfx.draw(&mut pass, frame, samples);
+                            }
+                            if !sprite_ranges.is_empty() {
+                                st.draw_calls +=
+                                    this.sprites.draw(&mut pass, &sprite_ranges, samples);
+                            }
+                            if !text_ranges.is_empty() {
+                                st.draw_calls += this.text.draw(&mut pass, &text_ranges, samples);
+                            }
+                            for list in features_at(RenderPassEvent::AfterRenderingTransparents) {
+                                draw_batches(&mut pass, list, &mut st);
+                            }
+                            if !frame.lines.is_empty() {
+                                pass.set_pipeline(&fixed.line);
+                                pass.set_vertex_buffer(0, this.line_buffer.slice(..));
+                                pass.draw(0..frame.lines.len() as u32, 0..1);
+                            }
+                        }
+                    }
+                },
+            );
+        }
+        let compiled = graph.execute(device, queue, &mut encoder, &mut pool);
+        self.graph_pool = pool;
+        self.scene_passes = compiled.ran;
+        let stats = stats_cell.into_inner();
         self.occlusion = occlusion;
 
         // ---- TAA: motion vectors, then the history resolve ----------------------------

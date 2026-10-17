@@ -238,6 +238,14 @@ fn spot_and_point_lights_cast_shadows() {
         let unshadowed = render(&gpu, &mut r, &assets, &f);
         f.lights[0].shadow = Some(shadow_settings());
         let shadowed = render(&gpu, &mut r, &assets, &f);
+        // The scene ran on the render graph: shadows first, then the objects.
+        let at = |name: &str| r.scene_passes.iter().position(|p| p == name);
+        assert!(
+            at("Shadow Atlas") < at("Draw Objects"),
+            "{:?}",
+            r.scene_passes
+        );
+        assert!(at("Shadow Atlas").is_some(), "{:?}", r.scene_passes);
         assert!(lum(&unshadowed, below) > 100, "{name}: lit without shadows");
         assert!(
             lum(&shadowed, below) < lum(&unshadowed, below) / 4,

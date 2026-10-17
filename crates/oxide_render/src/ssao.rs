@@ -20,7 +20,7 @@ pub(crate) struct SsaoTargets {
     /// Depth prepass (single sample).
     pub depth: wgpu::TextureView,
     ao: wgpu::TextureView,
-    blurred: wgpu::TextureView,
+    pub(crate) blurred: wgpu::TextureView,
     /// Group 2 of the lit and terrain pipelines, with the final AO.
     pub screen_group: wgpu::BindGroup,
 }

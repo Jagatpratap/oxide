@@ -94,6 +94,8 @@ fn debug_views_show_their_input() {
 
     f.debug_view = DebugView::Albedo;
     let p = render(&gpu, &mut r, &assets, &f).pixel(c, c);
+    // No lights casting shadows and no SSAO: only the objects pass runs.
+    assert_eq!(r.scene_passes, vec!["Draw Objects".to_owned()]);
     assert!(
         p[0] > 250 && p[1] < 5 && p[2] < 5,
         "albedo is the material color: {p:?}"

@@ -102,6 +102,8 @@ pub struct Compiled {
     pub order: Vec<usize>,
     /// Names of culled passes.
     pub culled: Vec<String>,
+    /// Names of the passes that run, in order (the Frame Debugger's event list).
+    pub ran: Vec<String>,
     /// For each transient resource that is used: which physical slot it lives in.
     pub slots: HashMap<u32, usize>,
     /// Number of physical textures needed for transients.
@@ -241,8 +243,10 @@ impl<'a> RenderGraph<'a> {
             slot_desc[slot].1 = last + 1;
             slots.insert(id, slot);
         }
+        let ran = order.iter().map(|&i| self.passes[i].name.clone()).collect();
         Compiled {
             order,
+            ran,
             culled,
             slots,
             physical: slot_desc.len(),
