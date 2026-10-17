@@ -187,8 +187,11 @@ impl Engine {
                 self.fps * 0.95 + inst * 0.05
             };
         }
+        oxide_core::profiler::Profiler::begin_frame();
+        let input = oxide_core::profile_scope!("Input");
         self.gamepads.poll(self.world.resource_mut::<Input>());
         self.update_screen();
+        drop(input);
 
         // Debug lines live until the next frame starts (so screenshots taken between
         // frames still see them), or until their `until` time.
@@ -203,29 +206,43 @@ impl Engine {
                 self.pending_steps -= 1;
             }
             let dt = if step { 1.0 / 60.0 } else { real_dt };
+            let _s = oxide_core::profile_scope!("PlayerLoop");
             self.tick(dt);
         } else if !self.simulate {
             // Edit mode: `[ExecuteAlways]` scripts still update.
+            let _s = oxide_core::profile_scope!("ExecuteAlways");
             self.world.run_execute_always();
         }
         for s in &mut self.systems {
+            let _s = oxide_core::profiler::Profiler::enabled()
+                .then(|| oxide_core::profiler::Profiler::scope(format!("{}.Always", s.name())));
             s.always(&mut self.world);
         }
         if let Some(mut shell) = self.shell.take() {
+            let _s = oxide_core::profile_scope!("Editor");
             shell.ui(self);
             self.shell = Some(shell);
         }
-        self.gui
-            .end(&self.window, &self.gpu, &mut self.renderer, &mut self.world);
-        self.render();
+        {
+            let _s = oxide_core::profile_scope!("UI");
+            self.gui
+                .end(&self.window, &self.gpu, &mut self.renderer, &mut self.world);
+        }
+        {
+            let _s = oxide_core::profile_scope!("Rendering");
+            self.render();
+        }
         if self.simulate {
             // WaitForEndOfFrame: after the frame is rendered.
+            let _s = oxide_core::profile_scope!("EndOfFrame");
             oxide_scene::Coroutines::run(
                 &mut self.world,
                 oxide_scene::coroutines::Stage::EndOfFrame,
             );
         }
         self.end_frame();
+        crate::profiling::record_counters(self);
+        oxide_core::profiler::Profiler::end_frame();
     }
 
     /// Advances the simulation by `dt` seconds of real time (one frame).
@@ -241,8 +258,12 @@ impl Engine {
         oxide_text::components::update(w);
         w.run_start();
         while w.resource_mut::<Time>().next_fixed_step() {
+            let _fixed = oxide_core::profile_scope!("FixedUpdate");
             w.run_phase(Phase::FixedUpdate);
             for s in &mut self.systems {
+                let _s = oxide_core::profiler::Profiler::enabled().then(|| {
+                    oxide_core::profiler::Profiler::scope(format!("{}.FixedUpdate", s.name()))
+                });
                 s.fixed_update(w);
             }
             oxide_scene::Coroutines::run(w, oxide_scene::coroutines::Stage::AfterFixedUpdate);
@@ -251,12 +272,19 @@ impl Engine {
         let t = w.resource::<Time>().time();
         Timers::run(w, t);
         // Unity resumes `yield return null` / WaitForSeconds / WaitUntil after Update.
-        oxide_scene::Coroutines::run(w, oxide_scene::coroutines::Stage::AfterUpdate);
+        {
+            let _s = oxide_core::profile_scope!("Coroutines");
+            oxide_scene::Coroutines::run(w, oxide_scene::coroutines::Stage::AfterUpdate);
+        }
+        let profiling = oxide_core::profiler::Profiler::enabled();
         for s in &mut self.systems {
+            let _s = profiling.then(|| oxide_core::profiler::Profiler::scope(s.name()));
             s.update(w);
         }
         w.run_phase(Phase::LateUpdate);
         for s in &mut self.systems {
+            let _s = profiling
+                .then(|| oxide_core::profiler::Profiler::scope(format!("{}.LateUpdate", s.name())));
             s.late_update(w);
         }
     }
@@ -439,6 +467,8 @@ impl Engine {
     fn render(&mut self) {
         // Far terrain trees need their billboards baked (one prototype per frame).
         crate::tree_billboards::update(self);
+        // Waiting for the next swapchain image (vsync) — Unity's Gfx.WaitForPresent.
+        let wait = oxide_core::profile_scope!("Gfx.WaitForPresent");
         let frame = match self.surface.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f) => f,
             wgpu::CurrentSurfaceTexture::Suboptimal(f) => {
@@ -460,24 +490,43 @@ impl Engine {
                 return;
             }
         };
+        drop(wait);
         let (w, h) = self.surface.size();
         let ui_view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
             format: Some(self.surface.format().remove_srgb_suffix()),
             ..Default::default()
         });
         if let Some(mut shell) = self.shell.take() {
-            shell.render(self);
+            {
+                let _s = oxide_core::profile_scope!("Render.Views");
+                shell.render(self);
+            }
             self.shell = Some(shell);
+            let _s = oxide_core::profile_scope!("Render.UI");
             self.gui.draw(&self.gpu, &ui_view, w, h, w, true);
         } else {
-            let rf = extract::extract(&self.world, None);
+            let rf = {
+                let _s = oxide_core::profile_scope!("Render.Extract");
+                extract::extract(&self.world, None)
+            };
             let view = frame.texture.create_view(&Default::default());
             let assets = self.world.resource::<AssetServer>();
-            self.stats =
-                self.renderer
-                    .render(&self.gpu, assets, &rf, &view, self.surface.format(), w, h);
+            {
+                let _s = oxide_core::profile_scope!("Render.Camera");
+                self.stats = self.renderer.render(
+                    &self.gpu,
+                    assets,
+                    &rf,
+                    &view,
+                    self.surface.format(),
+                    w,
+                    h,
+                );
+            }
+            let _s = oxide_core::profile_scope!("Render.UI");
             self.gui.draw(&self.gpu, &ui_view, w, h, w, false);
         }
+        let _s = oxide_core::profile_scope!("Gfx.Present");
         self.window.pre_present_notify();
         self.gpu.queue.present(frame);
     }

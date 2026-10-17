@@ -75,9 +75,17 @@ pub struct PassContext<'a> {
     pub queue: &'a wgpu::Queue,
     pub encoder: &'a mut wgpu::CommandEncoder,
     views: &'a [Option<wgpu::TextureView>],
+    timer: Option<&'a crate::gpu_timer::GpuTimer>,
 }
 
-impl PassContext<'_> {
+impl<'a> PassContext<'a> {
+    /// Timestamp writes for this pass's render pass(es), when the Profiler times the GPU:
+    /// pass them as `RenderPassDescriptor::timestamp_writes` (several render passes in one
+    /// graph pass are timed from the first's start to the last's end).
+    pub fn timestamp_writes(&self) -> Option<wgpu::RenderPassTimestampWrites<'a>> {
+        self.timer.and_then(|t| t.pass_writes())
+    }
+
     /// The texture behind `t` (only valid for handles the pass declared). Views are cheap
     /// reference-counted handles, so this returns its own.
     pub fn view(&self, t: TextureHandle) -> wgpu::TextureView {
@@ -114,6 +122,7 @@ pub struct Compiled {
 pub struct RenderGraph<'a> {
     resources: Vec<Resource>,
     passes: Vec<Pass<'a>>,
+    timer: Option<&'a crate::gpu_timer::GpuTimer>,
 }
 
 /// Transient textures kept between frames, by description.
@@ -156,6 +165,11 @@ impl TexturePool {
 impl<'a> RenderGraph<'a> {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Times each pass on the GPU (the Profiler's GPU module).
+    pub fn set_timer(&mut self, timer: Option<&'a crate::gpu_timer::GpuTimer>) {
+        self.timer = timer;
     }
 
     /// A texture that lives outside the graph (camera targets, history buffers).
@@ -289,15 +303,26 @@ impl<'a> RenderGraph<'a> {
             })
             .collect();
         let mut passes: Vec<Option<Pass>> = self.passes.into_iter().map(Some).collect();
+        let timer = self.timer;
         for &i in &compiled.order {
             let pass = passes[i].take().expect("each pass runs once");
+            if let Some(t) = timer {
+                t.mark(encoder, &pass.name);
+            }
+            if let Some(t) = timer {
+                t.begin_pass(&pass.name);
+            }
             let mut ctx = PassContext {
                 device,
                 queue,
                 encoder,
                 views: &views,
+                timer,
             };
             (pass.exec)(&mut ctx);
+        }
+        if let Some(t) = timer {
+            t.mark(encoder, "");
         }
         for (d, v) in physical {
             pool.give(d, v);

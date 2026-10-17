@@ -37,7 +37,7 @@ If the engine isn't running, the bridge returns an error that says how to start 
 
 ## Tools
 
-81 tools (generated from the running editor's `tools/list`). Tools named `editor_*` exist
+82 tools (generated from the running editor's `tools/list`). Tools named `editor_*` exist
 only when the editor is running (not with `--player`).
 
 | Tool | What it does | Changes state |
@@ -95,6 +95,7 @@ only when the editor is running (not with `--player`).
 | `ui_toolkit` | UI Toolkit documents: lists each UI Document with elements (type, name, classes, text, value, rect) and last events; with `object`: `set_text`, `set_value`, `add_class`, `remove_class`, `display`, `style` (by element name), `click` (queues a Click event for scripts) | yes |
 | `accessibility` | What screen readers see: screen reader on/off, the script AccessibilityHierarchy, the AccessKit tree given to the platform (roles, labels, values, hints, actions); `screen_reader` turns the tree on/off; `act` performs a screen reader action on a labelled node | yes |
 | `video` | Video Players: clip/URL, render mode, prepared/playing/paused, time, frame, length, size, errors; with `object`: play / pause / stop / prepare, seek by `time` or `frame`, `looping`, `speed` | yes |
+| `profiler` | Profiler: start/stop recording; average and worst CPU/GPU ms, the CPU Hierarchy, GPU time per render pass and module counters (Rendering, Scripts, Physics, Audio, Memory, Video); Frame Debugger on/off, `step` to draw up to an event, its event list | yes |
 | `localization` | Localization: locales, selected locale and String Table Collections (name, path, keys); `set_locale`; `get` {table, key, args?} (fallbacks and Smart Strings); `set` [{table, key, locale, value, smart?}] (creates the table if needed); locales are edited with `project_settings` section `localization` | yes |
 | `ragdoll` | Ragdolls on humanoids (Ragdoll Wizard): `create` (Rigidbodies, colliders, CharacterJoints on the mapped bones; `mass`), `activate` (Animator off, bodies fall), `deactivate` | yes |
 | `create_terrain` | Creates a generated terrain (noise heights, auto grass/rock/sand/snow texturing, heightfield collider) | yes |

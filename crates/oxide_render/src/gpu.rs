@@ -33,7 +33,9 @@ fn compression_features(adapter: &wgpu::Adapter) -> wgpu::Features {
             | wgpu::Features::TEXTURE_COMPRESSION_ASTC
             | wgpu::Features::TEXTURE_COMPRESSION_ETC2
             // Scene view wireframe draw modes.
-            | wgpu::Features::POLYGON_MODE_LINE)
+            | wgpu::Features::POLYGON_MODE_LINE
+            // The Profiler's GPU pass times.
+            | wgpu::Features::TIMESTAMP_QUERY)
 }
 
 /// The GPU: adapter, logical device and submission queue.

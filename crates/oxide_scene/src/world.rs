@@ -1778,6 +1778,14 @@ impl World {
             }
         }
         self.sort_by_execution_order(&mut todo);
+        let profiling = oxide_core::profiler::Profiler::enabled();
+        let _phase = profiling.then(|| {
+            oxide_core::profiler::Profiler::scope(match phase {
+                Phase::FixedUpdate => "Scripts.FixedUpdate",
+                Phase::Update => "Scripts.Update",
+                Phase::LateUpdate => "Scripts.LateUpdate",
+            })
+        });
         for (id, cid) in todo {
             // Re-check: an earlier script may have disabled or deactivated this one.
             let ok = self.get(id).is_some_and(|o| o.active_in_hierarchy)
@@ -1787,10 +1795,24 @@ impl World {
             if !ok {
                 continue;
             }
-            self.call(id, cid, |c, ctx| match phase {
-                Phase::FixedUpdate => c.fixed_update(ctx),
-                Phase::Update => c.update(ctx),
-                Phase::LateUpdate => c.late_update(ctx),
+            self.call(id, cid, |c, ctx| {
+                // Each script's callback is its own Profiler sample.
+                let _s = profiling.then(|| {
+                    let callback = match phase {
+                        Phase::FixedUpdate => "FixedUpdate",
+                        Phase::Update => "Update",
+                        Phase::LateUpdate => "LateUpdate",
+                    };
+                    oxide_core::profiler::Profiler::scope(format!(
+                        "{}.{callback}",
+                        c.type_info().name
+                    ))
+                });
+                match phase {
+                    Phase::FixedUpdate => c.fixed_update(ctx),
+                    Phase::Update => c.update(ctx),
+                    Phase::LateUpdate => c.late_update(ctx),
+                }
             });
         }
         self.flush_destroyed();

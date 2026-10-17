@@ -36,6 +36,7 @@ pub mod player_build;
 pub mod prefs;
 mod previews;
 mod probuilder_window;
+mod profiler_window;
 mod project;
 pub mod project_files;
 mod scene_view;
@@ -100,6 +101,8 @@ pub enum Tab {
     TestRunner,
     FontAssetCreator,
     TerrainToolbox,
+    Profiler,
+    FrameDebugger,
 }
 
 impl Tab {
@@ -138,6 +141,8 @@ impl Tab {
             Tab::TestRunner => "Test Runner",
             Tab::FontAssetCreator => "Font Asset Creator",
             Tab::TerrainToolbox => "Terrain Toolbox",
+            Tab::Profiler => "Profiler",
+            Tab::FrameDebugger => "Frame Debugger",
             Tab::Timeline => "Timeline",
             Tab::ShaderGraph => "Shader Graph",
             Tab::VfxGraph => "VFX Graph",
@@ -419,6 +424,7 @@ pub struct EditorState {
     lighting_window: lighting_window::LightingWindow,
     font_asset_creator: font_asset_creator::FontAssetCreator,
     terrain_toolbox: terrain_toolbox::TerrainToolbox,
+    profiler: profiler_window::ProfilerWindow,
     pub(crate) tests: test_runner::TestRunner,
     hierarchy: hierarchy::HierarchyState,
     pub(crate) inspector: inspector::InspectorState,
@@ -499,6 +505,7 @@ impl EditorState {
             lighting_window: Default::default(),
             font_asset_creator: Default::default(),
             terrain_toolbox: Default::default(),
+            profiler: Default::default(),
             tests: Default::default(),
             hierarchy: Default::default(),
             inspector: Default::default(),
@@ -765,6 +772,8 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::TestRunner => test_runner::window_ui(self.st, self.engine, ui),
             Tab::FontAssetCreator => font_asset_creator::window_ui(self.st, self.engine, ui),
             Tab::TerrainToolbox => terrain_toolbox::window_ui(self.st, self.engine, ui),
+            Tab::Profiler => profiler_window::window_ui(self.st, self.engine, ui),
+            Tab::FrameDebugger => profiler_window::frame_debugger_ui(self.st, self.engine, ui),
             Tab::Timeline => timeline_window::window_ui(self.st, self.engine, ui),
             Tab::ShaderGraph => shader_graph_window::window_ui(self.st, self.engine, ui),
             Tab::VfxGraph => vfx_graph_window::window_ui(self.st, self.engine, ui),
@@ -937,6 +946,8 @@ impl Editor {
                 Tab::Animator
                     | Tab::Animation
                     | Tab::AudioMixer
+                    | Tab::Profiler
+                    | Tab::FrameDebugger
                     | Tab::Timeline
                     | Tab::ShaderGraph
                     | Tab::VfxGraph

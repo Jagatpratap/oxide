@@ -306,6 +306,14 @@ pub fn menu_items(world: &World, keymap: &Keymap) -> Vec<MenuItem> {
         Action::OpenTab(Tab::TerrainToolbox),
     ));
     v.push(item(
+        "Window/Analysis/Profiler",
+        Action::OpenTab(Tab::Profiler),
+    ));
+    v.push(item(
+        "Window/Analysis/Frame Debugger",
+        Action::OpenTab(Tab::FrameDebugger),
+    ));
+    v.push(item(
         "Window/Rendering/Lighting/Generate Lighting",
         Action::GenerateLighting,
     ));

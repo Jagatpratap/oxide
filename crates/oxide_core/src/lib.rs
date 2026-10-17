@@ -8,6 +8,7 @@ pub mod curves;
 pub mod debug;
 pub mod jobs;
 pub mod player_prefs;
+pub mod profiler;
 pub mod random;
 pub mod reflect;
 pub mod time;

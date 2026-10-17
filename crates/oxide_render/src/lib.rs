@@ -16,6 +16,7 @@ pub mod frame;
 pub mod fullscreen;
 pub mod gpu;
 pub mod gpu_assets;
+pub mod gpu_timer;
 pub mod grass;
 pub mod occlusion;
 pub mod particles;
@@ -39,6 +40,6 @@ pub use flares::{
 };
 pub use frame::*;
 pub use gpu::{Gpu, GpuError, WindowSurface};
-pub use renderer::{SceneRenderer, skybox_faces, validate_surface_hooks};
+pub use renderer::{FrameDebugEvent, SceneRenderer, skybox_faces, validate_surface_hooks};
 pub use text::{SDF_WGSL, SdfMaterial, TextDraw, TextInstance, pack_rgba8};
 pub use wgpu;

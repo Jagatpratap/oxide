@@ -137,6 +137,21 @@ struct MainKey {
     variant: u64,
 }
 
+/// One step of a frame in the Frame Debugger.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FrameDebugEvent {
+    /// The render pass it belongs to.
+    pub pass: String,
+    pub name: String,
+    /// Draw calls and triangles.
+    pub draw_calls: u32,
+    pub triangles: u64,
+    /// Name / value details (mesh, material, shader, state).
+    pub details: Vec<(String, String)>,
+    /// Counts against [`SceneRenderer::frame_debug_limit`] (object draws).
+    pub limitable: bool,
+}
+
 /// The blend state of a transparent blend mode (shaders output straight alpha).
 fn transparent_blend(mode: u8) -> wgpu::BlendState {
     use wgpu::{BlendComponent, BlendFactor as F, BlendOperation as Op};
@@ -283,6 +298,13 @@ pub struct SceneRenderer {
     terrain: crate::terrain::TerrainGpu,
     particles: crate::particles::ParticleGpu,
     decals: crate::decals::DecalGpu,
+    /// GPU pass times for the Profiler (made when profiling starts).
+    gpu_timer: Option<crate::gpu_timer::GpuTimer>,
+    /// Frame Debugger: record each frame's draw events.
+    pub frame_debugger: bool,
+    /// Frame Debugger: stop drawing objects after this many draw events.
+    pub frame_debug_limit: Option<usize>,
+    frame_events: Vec<FrameDebugEvent>,
     /// Last `TextureWrite::serial` written to each Render Texture.
     texture_write_serials: HashMap<AssetId, u64>,
     /// Decal prepass depth and DBuffer by target size.
@@ -909,6 +931,10 @@ impl SceneRenderer {
             terrain,
             particles,
             decals,
+            gpu_timer: None,
+            frame_debugger: false,
+            frame_debug_limit: None,
+            frame_events: Vec::new(),
             texture_write_serials: HashMap::new(),
             decal_targets: HashMap::new(),
             grass,
@@ -1833,6 +1859,11 @@ impl SceneRenderer {
         stats
     }
 
+    /// The Frame Debugger's events of the last frame rendered with it on.
+    pub fn frame_events(&self) -> &[FrameDebugEvent] {
+        &self.frame_events
+    }
+
     /// Cameras with a target texture render into it (once per frame each; the cameras that
     /// share a texture, such as a Base camera and its Stack, draw into it together).
     fn render_texture_cameras(&mut self, gpu: &Gpu, assets: &AssetServer, frame: &RenderFrame) {
@@ -1880,6 +1911,18 @@ impl SceneRenderer {
         height: u32,
     ) -> RenderStats {
         let (w, h) = (width.max(1), height.max(1));
+        // GPU pass times of earlier frames reach the Profiler; this view is timed too.
+        if oxide_core::profiler::Profiler::enabled() {
+            if self.gpu_timer.is_none() {
+                self.gpu_timer = crate::gpu_timer::GpuTimer::new(&gpu.device, &gpu.queue);
+            }
+            if let Some(t) = &mut self.gpu_timer {
+                for (frame_index, passes) in t.collect(&gpu.device) {
+                    oxide_core::profiler::Profiler::set_gpu_times(frame_index, passes);
+                }
+                t.begin(oxide_core::profiler::Profiler::current_frame());
+            }
+        }
         let (mut encoder, stats, out) = self.render_scene(gpu, assets, frame, w, h, None);
         // Textures of the uber pass: Color Lookup (a strip N² × N) and lens dirt.
         let post_settings = &frame.environment.post;
@@ -2039,6 +2082,11 @@ impl SceneRenderer {
         let (aspect, time) = (w as f32 / h as f32, frame.time);
         let srgb = wgpu::TextureFormat::Rgba8UnormSrgb;
         let mut graph = crate::render_graph::RenderGraph::new();
+        graph.set_timer(
+            self.gpu_timer
+                .as_ref()
+                .filter(|_| oxide_core::profiler::Profiler::enabled()),
+        );
         let mut cur = graph.import(hdr);
         let mut slot = 0;
         for (shader, params) in before {
@@ -2226,7 +2274,13 @@ impl SceneRenderer {
         }
         let compiled = graph.execute(&gpu.device, &gpu.queue, &mut encoder, &mut self.graph_pool);
         self.post_passes = compiled.ran;
+        if let Some(t) = &mut self.gpu_timer {
+            t.finish(&mut encoder);
+        }
         gpu.queue.submit([encoder.finish()]);
+        if let Some(t) = &mut self.gpu_timer {
+            t.after_submit();
+        }
         stats
     }
 
@@ -3723,6 +3777,155 @@ impl SceneRenderer {
             );
         }
 
+        // ---- Frame Debugger events --------------------------------------------------------
+        if self.frame_debugger {
+            let mesh_name = |id: AssetId| {
+                assets
+                    .meshes
+                    .get_by_id(id)
+                    .map_or_else(|| format!("{id:?}"), |m| m.name.clone())
+            };
+            let mat_name = |id: AssetId| {
+                assets
+                    .materials
+                    .get_by_id(id)
+                    .map_or_else(|| format!("{id:?}"), |m| m.name.clone())
+            };
+            let tris = |mesh: AssetId, sub: u32| {
+                self.gpu_assets
+                    .meshes
+                    .get(&mesh)
+                    .and_then(|m| m.submeshes.get(sub as usize))
+                    .map_or(0, |r| ((r.end - r.start) / 3) as u64)
+            };
+            let mut ev = Vec::new();
+            for (i, list) in shadow_batches.iter().enumerate() {
+                if list.is_empty() {
+                    continue;
+                }
+                let instances: u32 = list
+                    .iter()
+                    .map(|b| b.instances.end - b.instances.start)
+                    .sum();
+                ev.push(FrameDebugEvent {
+                    pass: "Shadow Cascades".into(),
+                    name: format!("Cascade {i}: {} shadow casters", instances),
+                    draw_calls: list.len() as u32,
+                    triangles: list
+                        .iter()
+                        .map(|b| {
+                            tris(b.mesh, b.submesh) * (b.instances.end - b.instances.start) as u64
+                        })
+                        .sum(),
+                    details: vec![],
+                    limitable: false,
+                });
+            }
+            if !frame.decals.is_empty() {
+                ev.push(FrameDebugEvent {
+                    pass: "Decals".into(),
+                    name: format!("{} decal projectors", frame.decals.len()),
+                    draw_calls: frame.decals.len() as u32,
+                    triangles: 12 * frame.decals.len() as u64,
+                    details: vec![],
+                    limitable: false,
+                });
+            }
+            for (ci, (ob, tb)) in camera_batches.iter().enumerate() {
+                for (queue, list) in [("Opaque", ob), ("Transparent", tb)] {
+                    for b in list {
+                        let n = b.instances.end - b.instances.start;
+                        let t = tris(b.mesh, b.submesh) * n as u64;
+                        ev.push(FrameDebugEvent {
+                            pass: format!("Draw Objects (camera {ci})"),
+                            name: format!(
+                                "Draw Mesh {} [{}]",
+                                mesh_name(b.mesh),
+                                mat_name(b.material)
+                            ),
+                            draw_calls: 1,
+                            triangles: t,
+                            details: vec![
+                                ("Queue".into(), queue.into()),
+                                ("Mesh".into(), mesh_name(b.mesh)),
+                                ("Submesh".into(), b.submesh.to_string()),
+                                ("Material".into(), mat_name(b.material)),
+                                ("Instances".into(), n.to_string()),
+                                ("Triangles".into(), t.to_string()),
+                                (
+                                    "Shader".into(),
+                                    if b.key.shader.is_some() {
+                                        "Shader Graph".into()
+                                    } else {
+                                        "Oxide/Lit".into()
+                                    },
+                                ),
+                                (
+                                    "Blend".into(),
+                                    if b.key.transparent {
+                                        ["Alpha", "Premultiply", "Additive", "Multiply"]
+                                            [b.key.blend.min(3) as usize]
+                                            .into()
+                                    } else {
+                                        "Off".into()
+                                    },
+                                ),
+                                (
+                                    "Cull".into(),
+                                    if b.key.double_sided {
+                                        "Off".into()
+                                    } else {
+                                        "Back".into()
+                                    },
+                                ),
+                                (
+                                    "ZWrite".into(),
+                                    if b.key.depth_write && !b.key.transparent {
+                                        "On".into()
+                                    } else {
+                                        "Off".into()
+                                    },
+                                ),
+                                ("Skinned".into(), b.key.skinned.to_string()),
+                                ("Keyword variant".into(), format!("{:#x}", b.key.variant)),
+                            ],
+                            limitable: true,
+                        });
+                    }
+                }
+            }
+            if !frame.particles.is_empty() || !frame.vfx.is_empty() {
+                let n: usize = frame.particles.iter().map(|b| b.particles.len()).sum();
+                ev.push(FrameDebugEvent {
+                    pass: "Draw Objects (camera 0)".into(),
+                    name: format!(
+                        "Particles: {} batches, {n} quads; VFX: {}",
+                        frame.particles.len(),
+                        frame.vfx.len()
+                    ),
+                    draw_calls: (frame.particles.len() + frame.vfx.len()) as u32,
+                    triangles: n as u64 * 2,
+                    details: vec![],
+                    limitable: false,
+                });
+            }
+            if !frame.sprites.is_empty() || !frame.texts.is_empty() {
+                ev.push(FrameDebugEvent {
+                    pass: "Draw Objects (camera 0)".into(),
+                    name: format!(
+                        "Sprites: {}, text draws: {}",
+                        frame.sprites.len(),
+                        frame.texts.len()
+                    ),
+                    draw_calls: (frame.sprites.len() + frame.texts.len()) as u32,
+                    triangles: 0,
+                    details: vec![],
+                    limitable: false,
+                });
+            }
+            self.frame_events = ev;
+        }
+
         // ---- scene passes, on the render graph ------------------------------------------
         // Mutable setup first (pipelines, targets); the graph's passes only read.
         let ao_pass = match (ssao, frame.cameras.first()) {
@@ -3779,6 +3982,9 @@ impl SceneRenderer {
             self.ensure_gbuffer(device, w, h);
         }
         let stats_cell = std::cell::RefCell::new(stats);
+        // Frame Debugger: object draws left to draw this frame.
+        let draw_budget_cell = std::cell::Cell::new(self.frame_debug_limit.unwrap_or(usize::MAX));
+        let draw_budget = &draw_budget_cell;
         let mut pool = std::mem::take(&mut self.graph_pool);
         let this = &*self;
         let targets = this.targets.get(&(w, h, samples)).expect("targets");
@@ -3793,6 +3999,11 @@ impl SceneRenderer {
             None => (&targets.resolve, None),
         };
         let mut graph = crate::render_graph::RenderGraph::new();
+        graph.set_timer(
+            this.gpu_timer
+                .as_ref()
+                .filter(|_| oxide_core::profiler::Profiler::enabled()),
+        );
         // Imported targets: what the passes write and what later steps (TAA, post) read.
         let shadow_tex = this.shadow_layers.first().map(|v| graph.import(v));
         let atlas_tex = graph.import(&this.atlas);
@@ -3821,7 +4032,9 @@ impl SceneRenderer {
                     let mut st = stats_cell.borrow_mut();
 
                     for (i, list) in shadow_batches.iter().enumerate() {
+                        let timestamp_writes = ctx.timestamp_writes();
                         let mut pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            timestamp_writes,
                             label: Some("shadow cascade"),
                             color_attachments: &[],
                             depth_stencil_attachment: Some(
@@ -3874,7 +4087,9 @@ impl SceneRenderer {
                 move |ctx| {
                     let mut st = stats_cell.borrow_mut();
 
+                    let timestamp_writes = ctx.timestamp_writes();
                     let mut pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        timestamp_writes,
                         label: Some("shadow atlas"),
                         color_attachments: &[],
                         depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
@@ -3931,7 +4146,9 @@ impl SceneRenderer {
                     b.write(ao_depth);
                 },
                 move |ctx| {
+                    let timestamp_writes = ctx.timestamp_writes();
                     let mut pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        timestamp_writes,
                         label: Some("depth prepass"),
                         color_attachments: &[],
                         depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
@@ -4067,7 +4284,9 @@ impl SceneRenderer {
                             })
                         })
                         .collect();
+                    let timestamp_writes = ctx.timestamp_writes();
                     let mut pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        timestamp_writes,
                         label: Some("gbuffer"),
                         color_attachments: &attachments,
                         depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
@@ -4085,6 +4304,10 @@ impl SceneRenderer {
                     pass.set_bind_group(2, screen_group, &[]);
                     pass.set_vertex_buffer(1, this.instance_buffer.slice(..));
                     for b in opaque {
+                        if draw_budget.get() == 0 {
+                            break;
+                        }
+                        draw_budget.set(draw_budget.get() - 1);
                         let mesh = &this.gpu_assets.meshes[&b.mesh];
                         let mat = &this.gpu_assets.materials[&b.material];
                         pass.set_pipeline(&this.gbuffer_pipelines[&b.key]);
@@ -4120,7 +4343,9 @@ impl SceneRenderer {
                     b.write(color_tex);
                 },
                 move |ctx| {
+                    let timestamp_writes = ctx.timestamp_writes();
                     let mut pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        timestamp_writes,
                         label: Some("deferred lighting"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                             view: color_view,
@@ -4167,7 +4392,9 @@ impl SceneRenderer {
                 move |ctx| {
                     let mut st = stats_cell.borrow_mut();
                     {
+                        let timestamp_writes = ctx.timestamp_writes();
                         let mut pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            timestamp_writes,
                             label: Some("cameras"),
                             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                                 view: color_view,
@@ -4225,6 +4452,10 @@ impl SceneRenderer {
                                  list: &[Batch],
                                  stats: &mut RenderStats| {
                                     for b in list {
+                                        if draw_budget.get() == 0 {
+                                            break;
+                                        }
+                                        draw_budget.set(draw_budget.get() - 1);
                                         let mesh = &this.gpu_assets.meshes[&b.mesh];
                                         let mat = &this.gpu_assets.materials[&b.material];
                                         pass.set_pipeline(&this.main_pipelines[&b.key]);

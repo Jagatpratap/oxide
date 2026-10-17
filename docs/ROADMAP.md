@@ -614,7 +614,7 @@ project's editor and its Scripts both link.
   ([Extending the Editor](https://docs.unity3d.com/Manual/extending-the-editor.html),
   [Custom overlay](https://docs.unity3d.com/Manual/overlays-custom.html),
   [Custom tools](https://docs.unity3d.com/Manual/UsingCustomEditorTools.html))
-- ☐ Profiler: CPU timeline/hierarchy, GPU, memory, rendering, physics, audio modules; Frame Debugger; Memory Profiler
+- ◐ Profiler: Unity's Profiler API (`Profiler.BeginSample/EndSample`, `ProfilerMarker`, `profile_scope!`, counters) with every system, script callback (per type), phase and render step sampled; Profiler window with CPU Usage (stacked chart, Timeline per thread, Hierarchy with total/self/calls), GPU Usage per render pass (timestamp queries), Rendering, Scripts, Physics, Audio, Memory and Video modules over 300 frames ☑; Frame Debugger (draw events per pass with mesh, material, shader, blend/cull/zwrite state; step through to draw the frame up to an event) ☑; `profiler` MCP tool ☑; standalone Memory Profiler snapshots ☐
   ([Profiler](https://docs.unity3d.com/Manual/Profiler.html),
   [Graphics performance](https://docs.unity3d.com/Manual/graphics-performance-profiling.html),
   [Memory](https://docs.unity3d.com/Manual/performance-memory.html))
