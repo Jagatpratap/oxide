@@ -288,10 +288,11 @@ fn fs_depth_cutout(in: VertexOut, @builtin(front_facing) front: bool) {
 @fragment
 fn fs_main(in: VertexOut, @builtin(front_facing) front: bool) -> FragOut {
     let si = surface_input(in, front);
-    let s = surface(si);
+    var s = surface(si);
     if (s.alpha < s.alpha_clip) {
         discard;
     }
+    s.base_color = apply_decals(s.base_color, in.clip.xy, material.flags.w > 0.5);
     var out: FragOut;
     let alpha = select(1.0, s.alpha, material.flags.w > 0.5);
     if (material.flags.y > 0.5) {
@@ -338,10 +339,11 @@ struct GBufferOut {
 @fragment
 fn fs_gbuffer(in: VertexOut, @builtin(front_facing) front: bool) -> GBufferOut {
     let si = surface_input(in, front);
-    let s = surface(si);
+    var s = surface(si);
     if (s.alpha < s.alpha_clip) {
         discard;
     }
+    s.base_color = apply_decals(s.base_color, in.clip.xy, false);
     var out: GBufferOut;
     let geo = normalize(in.normal) * select(-1.0, 1.0, front);
     if (material.flags.y > 0.5) {

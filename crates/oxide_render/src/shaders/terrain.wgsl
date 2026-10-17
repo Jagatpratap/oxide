@@ -123,6 +123,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
         }
     }
     let n = normalize(select(geo_n, nrm, dot(nrm, nrm) > 1e-6));
+    albedo = apply_decals(albedo, in.clip.xy, false);
     let mode = debug_mode();
     if (mode != 0u) {
         return vec4f(debug_view(mode, in.world_pos, n, geo_n, albedo, in.receive_shadows != 0u, in.probes, in.clip.xy, NO_GI, vec2f(0.0)), 1.0);

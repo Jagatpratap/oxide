@@ -1132,6 +1132,8 @@ pub struct RenderFrame {
     /// centered on the origin under each matrix.
     pub occluder_boxes: Vec<Matrix4x4>,
     pub particles: Vec<ParticleBatch>,
+    /// URP Decal Projectors (first camera).
+    pub decals: Vec<crate::decals::DecalDraw>,
     /// VFX Graph systems (GPU particles).
     pub vfx: Vec<VfxDraw>,
     /// Terrain grass and detail billboards.

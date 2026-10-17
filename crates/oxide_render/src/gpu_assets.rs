@@ -83,6 +83,8 @@ pub struct GpuMaterial {
     pub shadow_shader: bool,
     pub bind_group: wgpu::BindGroup,
     pub transparent: bool,
+    /// Transparent blend mode ([`oxide_assets::material::BlendMode::index`]).
+    pub blend: u8,
     pub cutout: bool,
     pub double_sided: bool,
     pub cast_shadows: bool,
@@ -391,6 +393,11 @@ impl GpuAssets {
         self.textures.get(&id).map(|t| &t.view)
     }
 
+    /// An already uploaded texture's view (see [`Self::texture_view`]).
+    pub fn cached_texture_view(&self, id: AssetId) -> Option<&wgpu::TextureView> {
+        self.textures.get(&id).map(|t| &t.view)
+    }
+
     /// GPU cube view of a Cubemap asset (uploading it if needed).
     pub fn cubemap_view(
         &mut self,
@@ -670,6 +677,11 @@ impl GpuAssets {
             ),
         };
         GpuMaterial {
+            blend: if graph.is_some() {
+                0
+            } else {
+                m.blend_mode.index()
+            },
             version,
             texture_generation: self.texture_generation,
             shader: graph.map(|(g, s)| (*g, s.generation)),

@@ -122,6 +122,8 @@ struct Instance {
 struct MainKey {
     samples: u32,
     transparent: bool,
+    /// Transparent blend mode: 0 alpha, 1 premultiplied, 2 additive, 3 multiply.
+    blend: u8,
     double_sided: bool,
     skinned: bool,
     /// Render Objects features can change the depth test and turn depth writes off.
@@ -133,6 +135,28 @@ struct MainKey {
     shader: Option<AssetId>,
     /// Shader variant: which keyword constants the pipeline is made with (0: defaults).
     variant: u64,
+}
+
+/// The blend state of a transparent blend mode (shaders output straight alpha).
+fn transparent_blend(mode: u8) -> wgpu::BlendState {
+    use wgpu::{BlendComponent, BlendFactor as F, BlendOperation as Op};
+    let color = |src, dst| BlendComponent {
+        src_factor: src,
+        dst_factor: dst,
+        operation: Op::Add,
+    };
+    match mode {
+        1 => wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+        2 => wgpu::BlendState {
+            color: color(F::SrcAlpha, F::One),
+            alpha: color(F::Zero, F::One),
+        },
+        3 => wgpu::BlendState {
+            color: color(F::Dst, F::Zero),
+            alpha: color(F::Zero, F::One),
+        },
+        _ => wgpu::BlendState::ALPHA_BLENDING,
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -258,6 +282,9 @@ pub struct SceneRenderer {
     pub gpu_assets: GpuAssets,
     terrain: crate::terrain::TerrainGpu,
     particles: crate::particles::ParticleGpu,
+    decals: crate::decals::DecalGpu,
+    /// Decal prepass depth and DBuffer by target size.
+    decal_targets: HashMap<(u32, u32), crate::decals::DecalTargets>,
     grass: crate::grass::GrassGpu,
     sprites: crate::sprites::SpriteGpu,
     flares: crate::flares::FlareGpu,
@@ -780,6 +807,12 @@ impl SceneRenderer {
         );
         let particles =
             crate::particles::ParticleGpu::new(device, &gpu.queue, &frame_layout, particle_module);
+        let decals = crate::decals::DecalGpu::new(
+            device,
+            &gpu.queue,
+            &frame_layout,
+            shader(device, "decals.wgsl", include_str!("shaders/decals.wgsl")),
+        );
         let grass_module = shader(
             device,
             "grass.wgsl",
@@ -873,6 +906,8 @@ impl SceneRenderer {
                 .contains(wgpu::Features::POLYGON_MODE_LINE),
             terrain,
             particles,
+            decals,
+            decal_targets: HashMap::new(),
             grass,
             sprites,
             flares: crate::flares::FlareGpu::new(device, &gpu.queue),
@@ -1289,7 +1324,7 @@ impl SceneRenderer {
                     targets: &[Some(wgpu::ColorTargetState {
                         format: HDR_FORMAT,
                         blend: Some(if key.transparent {
-                            wgpu::BlendState::ALPHA_BLENDING
+                            transparent_blend(key.blend)
                         } else {
                             wgpu::BlendState::REPLACE
                         }),
@@ -2463,6 +2498,8 @@ impl SceneRenderer {
             .environment
             .ssao
             .filter(|_| capture.is_none() && frame.cameras.len() == 1);
+        // Decal Projectors: one camera, like SSAO (the DBuffer covers the whole target).
+        let decals_on = !frame.decals.is_empty() && capture.is_none() && frame.cameras.len() == 1;
         // Deferred (one camera, shaded): G-buffer + lighting pass; it has no MSAA, like URP.
         let deferred = frame.rendering_path == crate::RenderingPath::Deferred
             && frame.custom_steps.is_none()
@@ -2497,6 +2534,7 @@ impl SceneRenderer {
             /// Mesh bounds (local).
             bounds: oxide_math::Bounds,
             transparent: bool,
+            blend: u8,
             cutout: bool,
             double_sided: bool,
             cast: bool,
@@ -2609,6 +2647,7 @@ impl SceneRenderer {
                 radius,
                 bounds: mesh.bounds,
                 transparent: gm.transparent,
+                blend: gm.blend,
                 cutout: gm.cutout,
                 double_sided: gm.double_sided,
                 cast: gm.cast_shadows && (d.cast_shadows || d.shadows_only),
@@ -3187,6 +3226,7 @@ impl SceneRenderer {
                 let key = MainKey {
                     samples,
                     transparent: false,
+                    blend: 0,
                     double_sided: r.double_sided,
                     skinned: r.item.joint_offset.is_some(),
                     depth_test: DepthTest::LessEqual,
@@ -3225,6 +3265,7 @@ impl SceneRenderer {
                         key: MainKey {
                             samples,
                             transparent: true,
+                            blend: r.blend,
                             double_sided: r.double_sided,
                             skinned: r.item.joint_offset.is_some(),
                             depth_test: DepthTest::LessEqual,
@@ -3279,6 +3320,7 @@ impl SceneRenderer {
                         key: MainKey {
                             samples,
                             transparent,
+                            blend: 0,
                             double_sided,
                             skinned: r.item.joint_offset.is_some(),
                             depth_test: *depth_test,
@@ -3316,6 +3358,7 @@ impl SceneRenderer {
                         key: MainKey {
                             samples,
                             transparent: true,
+                            blend: 0,
                             double_sided: true,
                             skinned: r.item.joint_offset.is_some(),
                             depth_test: DepthTest::LessEqual,
@@ -3378,6 +3421,7 @@ impl SceneRenderer {
                         key: MainKey {
                             samples,
                             transparent,
+                            blend: 0,
                             double_sided,
                             skinned: r.item.joint_offset.is_some(),
                             depth_test: DepthTest::LessEqual,
@@ -3502,7 +3546,7 @@ impl SceneRenderer {
                 ssao: [
                     ssao.is_some() as u32 as f32,
                     ssao.map_or(0.0, |s| s.direct_lighting_strength.clamp(0.0, 1.0)),
-                    0.0,
+                    decals_on as u32 as f32,
                     0.0,
                 ],
                 cluster_viewport: {
@@ -3667,7 +3711,7 @@ impl SceneRenderer {
             (Some(settings), Some(cam)) => Some((settings, cam)),
             _ => None,
         };
-        if ao_pass.is_some() {
+        if ao_pass.is_some() || decals_on {
             for b in &camera_batches[0].0 {
                 let cutout = self.gpu_assets.materials[&b.material].cutout;
                 self.prepass_pipeline(
@@ -3675,10 +3719,40 @@ impl SceneRenderer {
                     (cutout, b.key.double_sided, b.key.skinned, b.key.shader),
                 );
             }
+        }
+        if ao_pass.is_some() {
             let t = self.targets.get_mut(&(w, h, samples)).expect("targets");
             if t.ssao.is_none() {
                 t.ssao = Some(self.ssao.targets(device, w, h));
             }
+        }
+        // Decals: their bind groups (reading the prepass depth) and the lit shaders'
+        // screen group with the DBuffer.
+        let mut decal_prepared = Vec::new();
+        let mut decal_screen = None;
+        if decals_on {
+            self.decal_targets
+                .entry((w, h))
+                .or_insert_with(|| crate::decals::DecalTargets::new(device, w, h));
+            let dt = &self.decal_targets[&(w, h)];
+            let ssao_t = self.targets[&(w, h, samples)]
+                .ssao
+                .as_ref()
+                .filter(|_| ao_pass.is_some());
+            let depth = ssao_t.map_or(&dt.depth, |t| &t.depth);
+            decal_prepared = self.decals.prepare(
+                device,
+                &gpu.queue,
+                &mut self.gpu_assets,
+                assets,
+                &frame.decals,
+                depth,
+            );
+            decal_screen = Some(self.ssao.screen_group(
+                device,
+                ssao_t.map(|t| &t.blurred),
+                Some(&dt.dbuffer),
+            ));
         }
         if deferred {
             for b in &camera_batches[0].0 {
@@ -3690,8 +3764,9 @@ impl SceneRenderer {
         let mut pool = std::mem::take(&mut self.graph_pool);
         let this = &*self;
         let targets = this.targets.get(&(w, h, samples)).expect("targets");
-        let screen_group = match (&ssao, &targets.ssao) {
-            (Some(_), Some(st)) => &st.screen_group,
+        let screen_group = match (&decal_screen, &ssao, &targets.ssao) {
+            (Some(g), _, _) => g,
+            (None, Some(_), Some(st)) => &st.screen_group,
             _ => &this.ssao.white_group,
         };
         let fixed = &this.fixed[&samples];
@@ -3704,8 +3779,14 @@ impl SceneRenderer {
         let shadow_tex = this.shadow_layers.first().map(|v| graph.import(v));
         let atlas_tex = graph.import(&this.atlas);
         let ao_targets = targets.ssao.as_ref().filter(|_| ao_pass.is_some());
-        let ao_depth_tex = ao_targets.map(|t| graph.import(&t.depth));
+        let decal_targets = this.decal_targets.get(&(w, h)).filter(|_| decals_on);
+        // The depth prepass feeds SSAO and decals.
+        let prepass_view = ao_targets
+            .map(|t| &t.depth)
+            .or(decal_targets.map(|t| &t.depth));
+        let ao_depth_tex = prepass_view.map(|v| graph.import(v));
         let ao_tex = ao_targets.map(|t| graph.import(&t.blurred));
+        let dbuffer_tex = decal_targets.map(|t| graph.import(&t.dbuffer));
         let color_tex = graph.import(resolve.unwrap_or(color_view));
         let depth_tex = graph.import(&targets.depth);
         if shadows.is_some()
@@ -3821,8 +3902,8 @@ impl SceneRenderer {
                 },
             );
         }
-        if let (Some((settings, cam)), Some(ao_targets), Some(ao_depth), Some(ao)) =
-            (ao_pass, ao_targets, ao_depth_tex, ao_tex)
+        if let (Some(cam), Some(prepass_view), Some(ao_depth)) =
+            (frame.cameras.first(), prepass_view, ao_depth_tex)
         {
             let camera_batches = &camera_batches;
             let camera_terrain = &camera_terrain;
@@ -3836,7 +3917,7 @@ impl SceneRenderer {
                         label: Some("depth prepass"),
                         color_attachments: &[],
                         depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                            view: &ao_targets.depth,
+                            view: prepass_view,
                             depth_ops: Some(wgpu::Operations {
                                 load: wgpu::LoadOp::Clear(0.0),
                                 store: wgpu::StoreOp::Store,
@@ -3893,6 +3974,10 @@ impl SceneRenderer {
                     }
                 },
             );
+        }
+        if let (Some((settings, _)), Some(ao_targets), Some(ao_depth), Some(ao)) =
+            (ao_pass, ao_targets, ao_depth_tex, ao_tex)
+        {
             graph.add_pass(
                 "SSAO",
                 |b| {
@@ -3906,6 +3991,23 @@ impl SceneRenderer {
                         ao_targets,
                         cam0_proj,
                         &settings,
+                    );
+                },
+            );
+        }
+        if let (Some(dt), Some(db), Some(pd)) = (decal_targets, dbuffer_tex, ao_depth_tex) {
+            let decal_prepared = &decal_prepared;
+            graph.add_pass(
+                "Decals",
+                |b| {
+                    b.read(pd).write(db);
+                },
+                move |ctx| {
+                    this.decals.draw(
+                        ctx.encoder,
+                        &this.frame_groups[0],
+                        &dt.dbuffer,
+                        decal_prepared,
                     );
                 },
             );
@@ -3991,7 +4093,10 @@ impl SceneRenderer {
                         b.read(t);
                     }
                     b.read(depth_tex);
-                    for t in [shadow_tex, Some(atlas_tex), ao_tex].into_iter().flatten() {
+                    for t in [shadow_tex, Some(atlas_tex), ao_tex, dbuffer_tex]
+                        .into_iter()
+                        .flatten()
+                    {
                         b.read(t);
                     }
                     b.write(color_tex);
@@ -4033,7 +4138,10 @@ impl SceneRenderer {
             graph.add_pass(
                 "Draw Objects",
                 |b| {
-                    for t in [shadow_tex, Some(atlas_tex), ao_tex].into_iter().flatten() {
+                    for t in [shadow_tex, Some(atlas_tex), ao_tex, dbuffer_tex]
+                        .into_iter()
+                        .flatten()
+                    {
                         b.read(t);
                     }
                     b.write(color_tex).write(depth_tex);

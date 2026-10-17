@@ -30,10 +30,12 @@ pub(crate) struct SsaoGpu {
     ao: wgpu::RenderPipeline,
     blur: wgpu::RenderPipeline,
     uniforms: [wgpu::Buffer; 3],
-    /// Layout of group 2 in lit shaders: the AO texture.
+    /// Layout of group 2 in lit shaders: the AO texture and the decal buffer.
     pub screen_layout: wgpu::BindGroupLayout,
-    /// Group 2 when SSAO is off (white).
+    /// Group 2 when SSAO and decals are off (white AO, no decals).
     pub white_group: wgpu::BindGroup,
+    white: wgpu::TextureView,
+    no_decals: wgpu::TextureView,
 }
 
 impl SsaoGpu {
@@ -123,8 +125,8 @@ impl SsaoGpu {
             })
         });
         let screen_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("screen layout (ssao)"),
-            entries: &[float_tex(0)],
+            label: Some("screen layout (ssao, decals)"),
+            entries: &[float_tex(0), float_tex(1)],
         });
         let white = device
             .create_texture_with_data(
@@ -147,22 +149,76 @@ impl SsaoGpu {
                 &[255],
             )
             .create_view(&Default::default());
-        let white_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("screen group (no ssao)"),
-            layout: &screen_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&white),
-            }],
-        });
-        Self {
+        let no_decals = device
+            .create_texture_with_data(
+                queue,
+                &wgpu::TextureDescriptor {
+                    label: Some("no decals"),
+                    size: wgpu::Extent3d {
+                        width: 1,
+                        height: 1,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: crate::decals::DBUFFER_FORMAT,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                },
+                wgpu::util::TextureDataOrder::LayerMajor,
+                &[0; 8],
+            )
+            .create_view(&Default::default());
+        let mut s = Self {
             layout,
             ao,
             blur,
             uniforms,
+            white_group: device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("screen group (placeholder)"),
+                layout: &screen_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&white),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&no_decals),
+                    },
+                ],
+            }),
             screen_layout,
-            white_group,
-        }
+            white,
+            no_decals,
+        };
+        s.white_group = s.screen_group(device, None, None);
+        s
+    }
+
+    /// Group 2 of the lit pipelines: the AO texture (white when none) and the decal buffer
+    /// (empty when none).
+    pub fn screen_group(
+        &self,
+        device: &wgpu::Device,
+        ao: Option<&wgpu::TextureView>,
+        decals: Option<&wgpu::TextureView>,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("screen group"),
+            layout: &self.screen_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(ao.unwrap_or(&self.white)),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(decals.unwrap_or(&self.no_decals)),
+                },
+            ],
+        })
     }
 
     pub fn targets(&self, device: &wgpu::Device, w: u32, h: u32) -> SsaoTargets {
@@ -187,14 +243,7 @@ impl SsaoGpu {
         };
         let ao = tex("ssao", AO_FORMAT);
         let blurred = tex("ssao blurred", AO_FORMAT);
-        let screen_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("screen group (ssao)"),
-            layout: &self.screen_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&ao),
-            }],
-        });
+        let screen_group = self.screen_group(device, Some(&ao), None);
         SsaoTargets {
             depth: tex("depth prepass", DEPTH_FORMAT),
             ao,

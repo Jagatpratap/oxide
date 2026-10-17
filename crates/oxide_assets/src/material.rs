@@ -53,6 +53,27 @@ pub enum WorkflowMode {
     Specular,
 }
 
+/// URP "Blending Mode" of Transparent surfaces.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Reflect)]
+pub enum BlendMode {
+    /// Fades by alpha (glass, smoke).
+    #[default]
+    Alpha,
+    /// Colour already multiplied by alpha (keeps reflections on clear surfaces).
+    Premultiply,
+    /// Adds light (fire, lasers, glows).
+    Additive,
+    /// Darkens what is behind (tinted glass, shadows).
+    Multiply,
+}
+
+impl BlendMode {
+    /// Index the renderer keys pipelines by.
+    pub fn index(self) -> u8 {
+        self as u8
+    }
+}
+
 /// URP "Surface Type" + "Alpha Clipping".
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Reflect)]
 pub enum SurfaceType {
@@ -83,6 +104,8 @@ pub struct Material {
     /// defaults).
     pub properties: Vec<MaterialProperty>,
     pub surface_type: SurfaceType,
+    /// Transparent: how it combines with what is behind.
+    pub blend_mode: BlendMode,
     /// `_BaseColor` (sRGB).
     pub base_color: Color,
     /// `_BaseMap`.
@@ -233,6 +256,7 @@ impl Default for Material {
             shader_graph: None,
             properties: Vec::new(),
             surface_type: SurfaceType::Opaque,
+            blend_mode: BlendMode::Alpha,
             base_color: Color::WHITE,
             base_map: None,
             tiling: Vector2::ONE,

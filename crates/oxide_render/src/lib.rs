@@ -10,6 +10,7 @@
 pub mod aa;
 pub mod capture;
 pub mod clusters;
+pub mod decals;
 pub mod flares;
 pub mod frame;
 pub mod fullscreen;
@@ -31,6 +32,7 @@ pub mod text;
 pub mod vfx;
 
 pub use capture::{CapturedImage, capture_frame};
+pub use decals::DecalDraw;
 pub use flares::{
     FLARE_LUT, FlareBlend, FlareDistortion, FlareElement, FlareLut, FlareOcclusion, FlareShape,
     LensFlareSource,

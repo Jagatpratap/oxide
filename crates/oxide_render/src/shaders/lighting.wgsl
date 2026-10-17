@@ -155,6 +155,25 @@ fn screen_ao(frag_xy: vec2f) -> f32 {
     return textureLoad(ssao_tex, vec2i(frag_xy), 0).r;
 }
 
+// Decal Projectors (DBuffer): premultiplied albedo and coverage at this pixel.
+@group(2) @binding(1) var dbuffer_tex: texture_2d<f32>;
+
+fn screen_decal(frag_xy: vec2f) -> vec4f {
+    if (frame.ssao.z < 0.5) {
+        return vec4f(0.0);
+    }
+    return textureLoad(dbuffer_tex, vec2i(frag_xy), 0);
+}
+
+// Blends decals into an opaque surface's albedo (transparents are left alone, like URP).
+fn apply_decals(base: vec3f, frag_xy: vec2f, transparent: bool) -> vec3f {
+    if (transparent) {
+        return base;
+    }
+    let d = screen_decal(frag_xy);
+    return base * (1.0 - d.a) + d.rgb;
+}
+
 fn d_ggx(nh: f32, a: f32) -> f32 {
     let a2 = a * a;
     let d = nh * nh * (a2 - 1.0) + 1.0;
