@@ -1,6 +1,7 @@
 //! Unity's Audio Mixer: a `.mixer` asset of groups (Master → Music, SFX, ...) with
 //! volume, pitch, mute/solo and effects (lowpass, highpass, echo, reverb, distortion,
-//! compressor), snapshots that store alternative values (Paused, Underwater) to
+//! compressor), sends to Receive groups (aux buses: one reverb shared by many groups),
+//! sidechain ducking (Duck Volume: music dips while dialogue plays), snapshots that store alternative values (Paused, Underwater) to
 //! transition between, and exposed parameters scripts set by name. Audio Sources route
 //! into a group with `output: "Assets/Main.mixer#SFX"`.
 //! Reference: <https://docs.unity3d.com/Manual/AudioMixer.html>
@@ -10,12 +11,14 @@ use kira::effect::delay::{DelayBuilder, DelayHandle};
 use kira::effect::distortion::{DistortionBuilder, DistortionHandle};
 use kira::effect::filter::{FilterBuilder, FilterHandle, FilterMode};
 use kira::effect::reverb::{ReverbBuilder, ReverbHandle};
-use kira::track::{TrackBuilder, TrackHandle};
-use kira::{Mix, Tween};
+use kira::track::{SendTrackBuilder, SendTrackHandle, SendTrackId, TrackBuilder, TrackHandle};
+use kira::{Frame, Mix, Tween};
 use oxide_assets::Asset;
 use oxide_core::Reflect;
 use oxide_core::reflect::Reflect as _;
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 /// Unity's audio effect types (the ones kira can run).
@@ -28,6 +31,13 @@ pub enum AudioEffectType {
     Reverb,
     Distortion,
     Compressor,
+    /// Sends a copy of the group's signal (at `send_level`) to `target`'s Receive, or
+    /// sidechains `target`'s Duck Volume.
+    Send,
+    /// Mixes in what other groups send here; the effects after it process the sends.
+    Receive,
+    /// Lowers the group's volume while the groups sending to it are above `threshold`.
+    DuckVolume,
 }
 
 /// One effect in a group's chain. Each type uses some of the fields (the Audio Mixer
@@ -53,6 +63,10 @@ pub struct AudioMixerEffect {
     pub attack: f32,
     pub release: f32,
     pub makeup_gain: f32,
+    /// Send: the group (with a Receive or Duck Volume) it sends to.
+    pub target: String,
+    /// Send level (dB).
+    pub send_level: f32,
     /// Wet/dry mix (0 = dry, 1 = fully processed).
     pub wet_mix: f32,
 }
@@ -79,6 +93,8 @@ impl AudioMixerEffect {
             attack: 10.0,
             release: 100.0,
             makeup_gain: 0.0,
+            target: String::new(),
+            send_level: 0.0,
             wet_mix: 1.0,
         };
         match kind {
@@ -88,6 +104,13 @@ impl AudioMixerEffect {
                 e.wet_mix = 0.35;
             }
             AudioEffectType::Echo => e.wet_mix = 0.5,
+            // Unity's Duck Volume defaults.
+            AudioEffectType::DuckVolume => {
+                e.threshold = -25.0;
+                e.ratio = 2.0;
+                e.attack = 100.0;
+                e.release = 300.0;
+            }
             _ => {}
         }
         e
@@ -103,6 +126,16 @@ impl AudioMixerEffect {
             AudioEffectType::Reverb => &["feedback", "damping", "wet_mix"],
             AudioEffectType::Distortion => &["drive", "wet_mix"],
             AudioEffectType::Compressor => &[
+                "threshold",
+                "ratio",
+                "attack",
+                "release",
+                "makeup_gain",
+                "wet_mix",
+            ],
+            AudioEffectType::Send => &["send_level"],
+            AudioEffectType::Receive => &[],
+            AudioEffectType::DuckVolume => &[
                 "threshold",
                 "ratio",
                 "attack",
@@ -300,6 +333,27 @@ impl AudioMixer {
             .unwrap_or(g.volume)
     }
 
+    /// The first effect of type `kind` in `group`.
+    pub fn effect_index(&self, group: &str, kind: AudioEffectType) -> Option<usize> {
+        self.group(group)?
+            .effects
+            .iter()
+            .position(|e| e.kind == kind)
+    }
+
+    /// Sum of the faders (dB) from Master down to `group` (what a Receive's signal plays at).
+    pub fn chain_volume(&self, group: &str, values: &HashMap<String, f32>) -> f32 {
+        let mut sum = 0.0;
+        for g in self.chain(group) {
+            let v = self.effective_volume(&g.name, values);
+            if v <= -79.9 {
+                return -80.0;
+            }
+            sum += v;
+        }
+        sum.max(-80.0)
+    }
+
     /// Product of group pitches from Master down to `group`.
     pub fn pitch(&self, group: &str, values: &HashMap<String, f32>) -> f32 {
         self.chain(group)
@@ -321,7 +375,7 @@ impl AudioMixer {
                 let fx: Vec<String> = g
                     .effects
                     .iter()
-                    .map(|e| format!("{:?}{}", e.kind, e.delay.round()))
+                    .map(|e| format!("{:?}{}>{}", e.kind, e.delay.round(), e.target))
                     .collect();
                 format!("{}<{}[{}]", g.name, g.parent, fx.join(","))
             })
@@ -378,17 +432,189 @@ impl MixerState {
     }
 }
 
+/// An `f32` shared with the audio thread.
+#[derive(Debug, Default)]
+pub struct AtomicF32(AtomicU32);
+
+impl AtomicF32 {
+    pub fn new(v: f32) -> Self {
+        Self(AtomicU32::new(v.to_bits()))
+    }
+    pub fn get(&self) -> f32 {
+        f32::from_bits(self.0.load(Ordering::Relaxed))
+    }
+    pub fn set(&self, v: f32) {
+        self.0.store(v.to_bits(), Ordering::Relaxed);
+    }
+}
+
+/// What a Duck Volume shares with the audio thread: the loudest sidechain peak since it last
+/// looked, and its settings.
+#[derive(Debug, Default)]
+pub struct DuckShared {
+    /// Peak amplitude as `f32` bits (non-negative floats order like their bits, so senders
+    /// combine with `fetch_max`).
+    sidechain: AtomicU32,
+    pub threshold: AtomicF32,
+    pub ratio: AtomicF32,
+    /// Attack / release (ms).
+    pub attack: AtomicF32,
+    pub release: AtomicF32,
+    pub makeup_gain: AtomicF32,
+    pub mix: AtomicF32,
+}
+
+impl DuckShared {
+    fn set(&self, e: &AudioMixerEffect, get: impl Fn(&str, f32) -> f32, mix: f32) {
+        self.threshold.set(get("threshold", e.threshold));
+        self.ratio.set(get("ratio", e.ratio).max(1.0));
+        self.attack.set(get("attack", e.attack).max(0.1));
+        self.release.set(get("release", e.release).max(1.0));
+        self.makeup_gain.set(get("makeup_gain", e.makeup_gain));
+        self.mix.set(mix);
+    }
+}
+
+/// Gain reduction (dB) a Duck Volume applies for a sidechain at `level` dB.
+pub fn duck_reduction(level: f32, threshold: f32, ratio: f32) -> f32 {
+    if level > threshold {
+        (level - threshold) * (1.0 - 1.0 / ratio.max(1.0))
+    } else {
+        0.0
+    }
+}
+
+fn amplitude(db: f32) -> f32 {
+    if db <= -79.9 {
+        0.0
+    } else {
+        10f32.powf(db / 20.0)
+    }
+}
+
+/// A Send to a Duck Volume: measures the signal's peak (times the send level) and passes the
+/// audio through untouched.
+pub struct SidechainMeter {
+    duck: Arc<DuckShared>,
+    /// Send level (amplitude).
+    level: Arc<AtomicF32>,
+}
+
+impl SidechainMeter {
+    pub fn run(&mut self, input: &[Frame]) {
+        let peak = input
+            .iter()
+            .map(|f| f.left.abs().max(f.right.abs()))
+            .fold(0.0f32, f32::max)
+            * self.level.get();
+        self.duck
+            .sidechain
+            .fetch_max(peak.max(0.0).to_bits(), Ordering::Relaxed);
+    }
+}
+
+impl kira::effect::Effect for SidechainMeter {
+    fn process(&mut self, input: &mut [Frame], _dt: f64, _info: &kira::info::Info) {
+        self.run(input);
+    }
+}
+
+/// Unity's Duck Volume: a compressor keyed by what other groups send to it.
+pub struct Ducker {
+    duck: Arc<DuckShared>,
+    /// Current gain reduction (dB), smoothed by attack/release.
+    reduction: f32,
+}
+
+impl Ducker {
+    pub fn run(&mut self, input: &mut [Frame], dt: f64) {
+        let d = &self.duck;
+        let peak = f32::from_bits(d.sidechain.swap(0, Ordering::Relaxed));
+        let level = if peak > 1e-6 {
+            20.0 * peak.log10()
+        } else {
+            -120.0
+        };
+        let target = duck_reduction(level, d.threshold.get(), d.ratio.get());
+        let (attack, release) = (d.attack.get() / 1000.0, d.release.get() / 1000.0);
+        let (makeup, mix) = (d.makeup_gain.get(), d.mix.get());
+        for f in input {
+            let tau = if target > self.reduction {
+                attack
+            } else {
+                release
+            };
+            self.reduction += (target - self.reduction) * (1.0 - (-(dt as f32) / tau).exp());
+            let gain = 1.0 - mix + mix * amplitude(makeup - self.reduction);
+            *f *= gain;
+        }
+    }
+}
+
+impl kira::effect::Effect for Ducker {
+    fn process(&mut self, input: &mut [Frame], dt: f64, _info: &kira::info::Info) {
+        self.run(input, dt);
+    }
+}
+
 enum EffectHandle {
     Filter(FilterHandle),
     Echo(DelayHandle),
     Reverb(ReverbHandle),
     Distortion(DistortionHandle),
     Compressor(CompressorHandle),
+    /// A Send: to a Receive's send track, or a Duck Volume's sidechain meter.
+    Send {
+        track: Option<SendTrackId>,
+        meter: Option<Arc<AtomicF32>>,
+    },
+    Duck(Arc<DuckShared>),
+    /// Receive (the routing is the group's send track), or an effect that can't run here.
+    None,
+}
+
+/// Kira's sub- and send-track builders.
+trait FxBuilder {
+    fn fx<B: kira::effect::EffectBuilder>(&mut self, b: B) -> B::Handle;
+    fn built(&mut self, e: Box<dyn kira::effect::Effect>);
+}
+
+impl FxBuilder for TrackBuilder {
+    fn fx<B: kira::effect::EffectBuilder>(&mut self, b: B) -> B::Handle {
+        self.add_effect(b)
+    }
+    fn built(&mut self, e: Box<dyn kira::effect::Effect>) {
+        self.add_built_effect(e);
+    }
+}
+
+impl FxBuilder for SendTrackBuilder {
+    fn fx<B: kira::effect::EffectBuilder>(&mut self, b: B) -> B::Handle {
+        self.add_effect(b)
+    }
+    fn built(&mut self, e: Box<dyn kira::effect::Effect>) {
+        self.add_built_effect(e);
+    }
+}
+
+/// Where Sends go: Receives' send tracks and Duck Volumes' shared state, by group.
+#[derive(Default)]
+struct Links {
+    receives: HashMap<String, SendTrackId>,
+    ducks: HashMap<String, Arc<DuckShared>>,
+}
+
+/// The Receive's send track and the handles of the effects after it.
+struct ReceiveRuntime {
+    track: SendTrackHandle,
+    start: usize,
+    effects: Vec<EffectHandle>,
 }
 
 pub(crate) struct GroupRuntime {
     pub track: TrackHandle,
     effects: Vec<EffectHandle>,
+    receive: Option<ReceiveRuntime>,
 }
 
 /// A mixer's kira tracks.
@@ -399,60 +625,193 @@ pub(crate) struct MixerRuntime {
     pub generation: u64,
 }
 
-fn add_effects(b: &mut TrackBuilder, g: &AudioMixerGroup) -> Vec<EffectHandle> {
-    g.effects
+/// Adds `effects` to a track; returns a handle per effect and the send tracks to route to
+/// (only sub-tracks can send; `on_send_track` adds meters and skips the rest). `duck` is the
+/// group's Duck Volume state its senders meter into.
+fn add_effects(
+    b: &mut impl FxBuilder,
+    effects: &[AudioMixerEffect],
+    links: &Links,
+    on_send_track: bool,
+    duck: Option<&Arc<DuckShared>>,
+) -> (Vec<EffectHandle>, Vec<(SendTrackId, f32)>) {
+    let mut sends = Vec::new();
+    let handles = effects
         .iter()
         .map(|e| match e.kind {
             AudioEffectType::Lowpass | AudioEffectType::Highpass => EffectHandle::Filter(
-                b.add_effect(
-                    FilterBuilder::new()
-                        .mode(if e.kind == AudioEffectType::Lowpass {
-                            FilterMode::LowPass
-                        } else {
-                            FilterMode::HighPass
-                        })
-                        .cutoff(e.cutoff as f64)
-                        .resonance(e.resonance as f64),
-                ),
+                b.fx(FilterBuilder::new()
+                    .mode(if e.kind == AudioEffectType::Lowpass {
+                        FilterMode::LowPass
+                    } else {
+                        FilterMode::HighPass
+                    })
+                    .cutoff(e.cutoff as f64)
+                    .resonance(e.resonance as f64)),
             ),
             AudioEffectType::Echo => EffectHandle::Echo(
-                b.add_effect(
-                    DelayBuilder::new()
-                        .delay_time(Duration::from_secs_f32(
-                            (e.delay / 1000.0).clamp(0.001, 5.0),
-                        ))
-                        .feedback(e.feedback.min(-0.1)),
-                ),
+                b.fx(DelayBuilder::new()
+                    .delay_time(Duration::from_secs_f32(
+                        (e.delay / 1000.0).clamp(0.001, 5.0),
+                    ))
+                    .feedback(e.feedback.min(-0.1))),
             ),
             AudioEffectType::Reverb => EffectHandle::Reverb(
-                b.add_effect(
-                    ReverbBuilder::new()
-                        .feedback(e.feedback as f64)
-                        .damping(e.damping as f64),
-                ),
+                b.fx(ReverbBuilder::new()
+                    .feedback(e.feedback as f64)
+                    .damping(e.damping as f64)),
             ),
             AudioEffectType::Distortion => {
-                EffectHandle::Distortion(b.add_effect(DistortionBuilder::new().drive(e.drive)))
+                EffectHandle::Distortion(b.fx(DistortionBuilder::new().drive(e.drive)))
             }
             AudioEffectType::Compressor => EffectHandle::Compressor(
-                b.add_effect(
-                    CompressorBuilder::new()
-                        .threshold(e.threshold as f64)
-                        .ratio(e.ratio as f64),
-                ),
+                b.fx(CompressorBuilder::new()
+                    .threshold(e.threshold as f64)
+                    .ratio(e.ratio as f64)),
             ),
+            AudioEffectType::Send => {
+                if let Some(id) = links.receives.get(&e.target).filter(|_| !on_send_track) {
+                    sends.push((*id, e.send_level));
+                    EffectHandle::Send {
+                        track: Some(*id),
+                        meter: None,
+                    }
+                } else if let Some(duck) = links.ducks.get(&e.target) {
+                    let level = Arc::new(AtomicF32::new(amplitude(e.send_level)));
+                    b.built(Box::new(SidechainMeter {
+                        duck: duck.clone(),
+                        level: level.clone(),
+                    }));
+                    EffectHandle::Send {
+                        track: None,
+                        meter: Some(level),
+                    }
+                } else {
+                    EffectHandle::None
+                }
+            }
+            AudioEffectType::Receive => EffectHandle::None,
+            // A Duck Volume runs on the group's own track only (one reader per sidechain).
+            AudioEffectType::DuckVolume => match duck.filter(|_| !on_send_track) {
+                Some(duck) => {
+                    b.built(Box::new(Ducker {
+                        duck: duck.clone(),
+                        reduction: 0.0,
+                    }));
+                    EffectHandle::Duck(duck.clone())
+                }
+                None => EffectHandle::None,
+            },
         })
-        .collect()
+        .collect();
+    (handles, sends)
+}
+
+/// Pushes one effect's current values to its handle.
+fn apply_effect(
+    h: &mut EffectHandle,
+    e: &AudioMixerEffect,
+    get: &dyn Fn(&str, f32) -> f32,
+    mix: f32,
+    track: Option<&mut TrackHandle>,
+) {
+    let t = Tween::default();
+    match h {
+        EffectHandle::Filter(f) => {
+            f.set_cutoff(get("cutoff", e.cutoff).clamp(10.0, 22_000.0) as f64, t);
+            f.set_resonance(get("resonance", e.resonance).clamp(0.0, 1.0) as f64, t);
+            f.set_mix(Mix(mix), t);
+        }
+        EffectHandle::Echo(d) => {
+            d.set_feedback(get("feedback", e.feedback).min(-0.1), t);
+            d.set_mix(Mix(mix), t);
+        }
+        EffectHandle::Reverb(r) => {
+            r.set_feedback(get("feedback", e.feedback).clamp(0.0, 1.0) as f64, t);
+            r.set_damping(get("damping", e.damping).clamp(0.0, 1.0) as f64, t);
+            r.set_mix(Mix(mix), t);
+        }
+        EffectHandle::Distortion(d) => {
+            d.set_drive(get("drive", e.drive), t);
+            d.set_mix(Mix(mix), t);
+        }
+        EffectHandle::Compressor(c) => {
+            c.set_threshold(get("threshold", e.threshold) as f64, t);
+            c.set_ratio(get("ratio", e.ratio).max(1.0) as f64, t);
+            c.set_attack_duration(
+                Duration::from_secs_f32(get("attack", e.attack).max(0.1) / 1000.0),
+                t,
+            );
+            c.set_release_duration(
+                Duration::from_secs_f32(get("release", e.release).max(1.0) / 1000.0),
+                t,
+            );
+            c.set_makeup_gain(get("makeup_gain", e.makeup_gain), t);
+            c.set_mix(Mix(mix), t);
+        }
+        EffectHandle::Send { track: id, meter } => {
+            // Bypassed effects mute the send.
+            let level = if mix > 0.0 {
+                get("send_level", e.send_level)
+            } else {
+                -80.0
+            };
+            if let (Some(id), Some(track)) = (id, track) {
+                // Fails only when the send track is gone (the mixer is being rebuilt).
+                let _ = track.set_send(
+                    *id,
+                    if level <= -79.9 {
+                        f32::NEG_INFINITY
+                    } else {
+                        level
+                    },
+                    t,
+                );
+            }
+            if let Some(m) = meter {
+                m.set(amplitude(level));
+            }
+        }
+        EffectHandle::Duck(d) => d.set(e, get, mix),
+        EffectHandle::None => {}
+    }
 }
 
 impl MixerRuntime {
     /// Builds a track per group under `master` (the kira main track's sub-tracks), parents
-    /// first.
-    pub fn build(
-        manager: &mut kira::AudioManager<kira::DefaultBackend>,
+    /// first, after the Receives' send tracks and Duck Volumes' sidechains they route to.
+    pub fn build<B: kira::backend::Backend>(
+        manager: &mut kira::AudioManager<B>,
         mixer: &AudioMixer,
         generation: u64,
     ) -> Option<Self> {
+        let mut links = Links::default();
+        for g in &mixer.groups {
+            if let Some(i) = mixer.effect_index(&g.name, AudioEffectType::DuckVolume) {
+                let duck = Arc::new(DuckShared::default());
+                duck.set(&g.effects[i], |_, d| d, g.effects[i].wet_mix);
+                links.ducks.insert(g.name.clone(), duck);
+            }
+        }
+        let mut receives: HashMap<String, ReceiveRuntime> = HashMap::new();
+        for g in &mixer.groups {
+            let Some(i) = mixer.effect_index(&g.name, AudioEffectType::Receive) else {
+                continue;
+            };
+            let mut b = SendTrackBuilder::new();
+            let (effects, _) = add_effects(&mut b, &g.effects[i + 1..], &links, true, None);
+            if let Ok(track) = manager.add_send_track(b) {
+                links.receives.insert(g.name.clone(), track.id());
+                receives.insert(
+                    g.name.clone(),
+                    ReceiveRuntime {
+                        track,
+                        start: i + 1,
+                        effects,
+                    },
+                );
+            }
+        }
         let mut groups: HashMap<String, GroupRuntime> = HashMap::new();
         let mut pending: Vec<&AudioMixerGroup> = mixer.groups.iter().collect();
         while !pending.is_empty() {
@@ -460,7 +819,18 @@ impl MixerRuntime {
             let mut rest = Vec::new();
             for g in pending {
                 let mut b = TrackBuilder::new();
-                let effects = add_effects(&mut b, g);
+                let duck = links.ducks.get(&g.name);
+                let (effects, sends) = add_effects(&mut b, &g.effects, &links, false, duck);
+                for (id, level) in sends {
+                    b = b.with_send(
+                        id,
+                        if level <= -79.9 {
+                            f32::NEG_INFINITY
+                        } else {
+                            level
+                        },
+                    );
+                }
                 let track = if g.parent.is_empty() || mixer.group(&g.parent).is_none() {
                     manager.add_sub_track(b).ok()
                 } else if let Some(p) = groups.get_mut(&g.parent) {
@@ -470,7 +840,14 @@ impl MixerRuntime {
                     continue;
                 };
                 if let Some(track) = track {
-                    groups.insert(g.name.clone(), GroupRuntime { track, effects });
+                    groups.insert(
+                        g.name.clone(),
+                        GroupRuntime {
+                            track,
+                            effects,
+                            receive: receives.remove(&g.name),
+                        },
+                    );
                 }
             }
             if rest.len() == before {
@@ -500,57 +877,53 @@ impl MixerRuntime {
                     .set_volume(if vol <= -79.9 { f32::NEG_INFINITY } else { vol }, t);
                 self.applied.insert(key, vol);
             }
-            for (i, (e, h)) in g.effects.iter().zip(rt.effects.iter_mut()).enumerate() {
-                let get = |p: &str, d: f32| {
-                    values
-                        .get(&format!("{}/{i}/{p}", g.name))
-                        .copied()
-                        .unwrap_or(d)
-                };
-                let mix = if g.bypass_effects {
-                    0.0
-                } else {
-                    get("wet_mix", e.wet_mix).clamp(0.0, 1.0)
-                };
-                let key = format!("{}/{i}", g.name);
-                let sig: f32 = e.parameters().iter().map(|p| get(p, 0.0)).sum::<f32>() + mix * 1e3;
-                if self.applied.get(&key) == Some(&sig) {
-                    continue;
+            let GroupRuntime {
+                track,
+                effects,
+                receive,
+            } = rt;
+            if let Some(r) = receive.as_mut() {
+                // The Receive plays at the group's and its parents' faders.
+                let vol = mixer.chain_volume(&g.name, values);
+                let key = format!("{}/receive!", g.name);
+                if self.applied.get(&key) != Some(&vol) {
+                    r.track
+                        .set_volume(if vol <= -79.9 { f32::NEG_INFINITY } else { vol }, t);
+                    self.applied.insert(key, vol);
                 }
-                self.applied.insert(key, sig);
-                match h {
-                    EffectHandle::Filter(f) => {
-                        f.set_cutoff(get("cutoff", e.cutoff).clamp(10.0, 22_000.0) as f64, t);
-                        f.set_resonance(get("resonance", e.resonance).clamp(0.0, 1.0) as f64, t);
-                        f.set_mix(Mix(mix), t);
+            }
+            let mut chains: Vec<(
+                usize,
+                &mut Vec<EffectHandle>,
+                Option<&mut TrackHandle>,
+                &str,
+            )> = vec![(0, effects, Some(track), "")];
+            if let Some(r) = receive.as_mut() {
+                chains.push((r.start, &mut r.effects, None, "r"));
+            }
+            for (start, handles, mut track, suffix) in chains {
+                for (k, h) in handles.iter_mut().enumerate() {
+                    let i = start + k;
+                    let Some(e) = g.effects.get(i) else { break };
+                    let get = |p: &str, d: f32| {
+                        values
+                            .get(&format!("{}/{i}/{p}", g.name))
+                            .copied()
+                            .unwrap_or(d)
+                    };
+                    let mix = if g.bypass_effects {
+                        0.0
+                    } else {
+                        get("wet_mix", e.wet_mix).clamp(0.0, 1.0)
+                    };
+                    let key = format!("{}/{i}{suffix}", g.name);
+                    let sig: f32 =
+                        e.parameters().iter().map(|p| get(p, 0.0)).sum::<f32>() + mix * 1e3;
+                    if self.applied.get(&key) == Some(&sig) {
+                        continue;
                     }
-                    EffectHandle::Echo(d) => {
-                        d.set_feedback(get("feedback", e.feedback).min(-0.1), t);
-                        d.set_mix(Mix(mix), t);
-                    }
-                    EffectHandle::Reverb(r) => {
-                        r.set_feedback(get("feedback", e.feedback).clamp(0.0, 1.0) as f64, t);
-                        r.set_damping(get("damping", e.damping).clamp(0.0, 1.0) as f64, t);
-                        r.set_mix(Mix(mix), t);
-                    }
-                    EffectHandle::Distortion(d) => {
-                        d.set_drive(get("drive", e.drive), t);
-                        d.set_mix(Mix(mix), t);
-                    }
-                    EffectHandle::Compressor(c) => {
-                        c.set_threshold(get("threshold", e.threshold) as f64, t);
-                        c.set_ratio(get("ratio", e.ratio).max(1.0) as f64, t);
-                        c.set_attack_duration(
-                            Duration::from_secs_f32(get("attack", e.attack).max(0.1) / 1000.0),
-                            t,
-                        );
-                        c.set_release_duration(
-                            Duration::from_secs_f32(get("release", e.release).max(1.0) / 1000.0),
-                            t,
-                        );
-                        c.set_makeup_gain(get("makeup_gain", e.makeup_gain), t);
-                        c.set_mix(Mix(mix), t);
-                    }
+                    self.applied.insert(key, sig);
+                    apply_effect(h, e, &get, mix, track.as_deref_mut());
                 }
             }
         }
@@ -652,6 +1025,148 @@ mod tests {
             -3.0,
             "scripts override the snapshot"
         );
+    }
+
+    #[test]
+    fn sends_receives_and_duck_parameters() {
+        let mut m = mixer();
+        let mut fx = AudioMixer::default().groups.remove(0);
+        fx.name = "Reverb Bus".into();
+        fx.parent = "Master".into();
+        fx.effects
+            .push(AudioMixerEffect::new(AudioEffectType::Receive));
+        fx.effects
+            .push(AudioMixerEffect::new(AudioEffectType::Reverb));
+        m.groups.push(fx);
+        let mut send = AudioMixerEffect::new(AudioEffectType::Send);
+        send.target = "Reverb Bus".into();
+        send.send_level = -6.0;
+        m.groups[3].effects.push(send.clone()); // Guns -> Reverb Bus
+        send.target = "Music".into();
+        m.groups[2].effects.push(send); // SFX ducks Music
+        m.groups[1]
+            .effects
+            .push(AudioMixerEffect::new(AudioEffectType::DuckVolume));
+        let v = m.base_values();
+        assert_eq!(v["Guns/0/send_level"], -6.0);
+        assert_eq!(v["Music/1/threshold"], -25.0, "Unity's Duck Volume default");
+        assert!(m.structure().contains("Send500>Reverb Bus"));
+        assert_eq!(
+            m.effect_index("Reverb Bus", AudioEffectType::Receive),
+            Some(0)
+        );
+        let mut v = v;
+        v.insert("Master/volume".into(), -3.0);
+        v.insert("Reverb Bus/volume".into(), -2.0);
+        assert_eq!(m.chain_volume("Reverb Bus", &v), -5.0);
+        m.groups[0].mute = true;
+        assert_eq!(m.chain_volume("Reverb Bus", &v), -80.0, "muted parent");
+    }
+
+    #[test]
+    fn ducking_follows_the_sidechain() {
+        assert_eq!(duck_reduction(-30.0, -25.0, 2.0), 0.0, "below threshold");
+        assert_eq!(duck_reduction(-5.0, -25.0, 2.0), 10.0);
+        assert_eq!(duck_reduction(-5.0, -25.0, 1.0), 0.0, "ratio 1 never ducks");
+        let duck = Arc::new(DuckShared::default());
+        let mut e = AudioMixerEffect::new(AudioEffectType::DuckVolume);
+        e.attack = 1.0;
+        e.release = 50.0;
+        duck.set(&e, |_, d| d, 1.0);
+        let mut meter = SidechainMeter {
+            duck: duck.clone(),
+            level: Arc::new(AtomicF32::new(1.0)),
+        };
+        let mut ducker = Ducker {
+            duck: duck.clone(),
+            reduction: 0.0,
+        };
+        let dt = 1.0 / 48_000.0;
+        let loud = vec![Frame::new(0.5, -0.5); 480]; // -6 dB peak
+        let mut music = vec![Frame::new(1.0, 1.0); 480];
+        meter.run(&loud);
+        ducker.run(&mut music, dt);
+        // -6 dB at a -25 dB threshold, 2:1 -> ~9.5 dB of reduction once attacked.
+        let g = music[479].left;
+        assert!((g - amplitude(-9.53)).abs() < 0.02, "{g}");
+        // Silence: releases back towards unity gain over the release time.
+        for _ in 0..20 {
+            meter.run(&[Frame::ZERO; 480]);
+            music = vec![Frame::new(1.0, 1.0); 480];
+            ducker.run(&mut music, dt);
+        }
+        assert!(music[479].left > 0.97, "{}", music[479].left);
+        // A bypassed duck (mix 0) leaves the signal alone.
+        duck.mix.set(0.0);
+        meter.run(&loud);
+        let mut music = vec![Frame::new(1.0, 1.0); 480];
+        ducker.run(&mut music, dt);
+        assert_eq!(music[479].left, 1.0);
+    }
+
+    #[test]
+    fn builds_sends_receives_and_ducks_on_kira() {
+        use kira::backend::mock::{MockBackend, MockBackendSettings};
+        let mut m = mixer();
+        m.groups.push(AudioMixerGroup::new("Bus", "Master"));
+        m.groups[4]
+            .effects
+            .push(AudioMixerEffect::new(AudioEffectType::Receive));
+        m.groups[4]
+            .effects
+            .push(AudioMixerEffect::new(AudioEffectType::Reverb));
+        m.groups[1]
+            .effects
+            .push(AudioMixerEffect::new(AudioEffectType::DuckVolume));
+        for (target, from) in [("Bus", 3), ("Music", 2)] {
+            let mut send = AudioMixerEffect::new(AudioEffectType::Send);
+            send.target = target.into();
+            m.groups[from].effects.push(send);
+        }
+        let mut manager = kira::AudioManager::<MockBackend>::new(kira::AudioManagerSettings {
+            backend_settings: MockBackendSettings::default(),
+            ..Default::default()
+        })
+        .unwrap();
+        let mut rt = MixerRuntime::build(&mut manager, &m, 1).unwrap();
+        assert_eq!(rt.groups.len(), 5);
+        let bus = &rt.groups["Bus"];
+        let r = bus.receive.as_ref().expect("Bus has a send track");
+        assert_eq!((r.start, r.effects.len()), (1, 1));
+        assert!(matches!(
+            rt.groups["Guns"].effects[0],
+            EffectHandle::Send {
+                track: Some(_),
+                meter: None
+            }
+        ));
+        assert!(matches!(
+            rt.groups["SFX"].effects[0],
+            EffectHandle::Send {
+                track: None,
+                meter: Some(_)
+            }
+        ));
+        let EffectHandle::Duck(d) = &rt.groups["Music"].effects[1] else {
+            panic!("Music has a Duck Volume");
+        };
+        let d = d.clone();
+        let mut values = m.base_values();
+        values.insert("Music/1/threshold".into(), -40.0);
+        values.insert("SFX/0/send_level".into(), -12.0);
+        rt.apply(&m, &values);
+        assert_eq!(
+            d.threshold.get(),
+            -40.0,
+            "snapshot values reach the audio thread"
+        );
+        let EffectHandle::Send {
+            meter: Some(level), ..
+        } = &rt.groups["SFX"].effects[0]
+        else {
+            unreachable!()
+        };
+        assert!((level.get() - amplitude(-12.0)).abs() < 1e-4);
     }
 
     #[test]

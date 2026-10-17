@@ -114,7 +114,7 @@ fn set_value(m: &mut AudioMixer, snapshot: usize, param: &str, x: f32) {
 
 fn param_range(field: &str) -> (f32, f32, &'static str) {
     match field {
-        "volume" | "drive" | "makeup_gain" => (-80.0, 20.0, " dB"),
+        "volume" | "drive" | "makeup_gain" | "send_level" => (-80.0, 20.0, " dB"),
         "threshold" => (-60.0, 0.0, " dB"),
         "pitch" => (0.1, 3.0, ""),
         "cutoff" => (10.0, 22000.0, " Hz"),
@@ -410,7 +410,13 @@ fn strip(ui: &mut egui::Ui, w: &mut AudioMixerWindow, m: &mut AudioMixer, i: usi
             ui.separator();
             ui.weak("Attenuation");
             for e in &g.effects {
-                ui.label(format!("{:?}", e.kind));
+                match e.kind {
+                    AudioEffectType::Send if !e.target.is_empty() => {
+                        ui.label(format!("Send → {}", e.target))
+                    }
+                    AudioEffectType::DuckVolume => ui.label("Duck Volume"),
+                    k => ui.label(format!("{k:?}")),
+                };
             }
             ui.menu_button("Add Effect", |ui| {
                 for k in [
@@ -420,6 +426,9 @@ fn strip(ui: &mut egui::Ui, w: &mut AudioMixerWindow, m: &mut AudioMixer, i: usi
                     AudioEffectType::Reverb,
                     AudioEffectType::Distortion,
                     AudioEffectType::Compressor,
+                    AudioEffectType::Send,
+                    AudioEffectType::Receive,
+                    AudioEffectType::DuckVolume,
                 ] {
                     if ui.button(format!("{k:?}")).clicked() {
                         g.effects.push(AudioMixerEffect::new(k));
@@ -521,6 +530,36 @@ fn group_inspector(ui: &mut egui::Ui, w: &mut AudioMixerWindow, m: &mut AudioMix
                 }
             });
         });
+        if e.kind == AudioEffectType::Send {
+            // Unity's Send target: a group with a Receive (aux bus) or a Duck Volume
+            // (sidechain).
+            let targets: Vec<String> = m
+                .groups
+                .iter()
+                .filter(|g| {
+                    g.name != name
+                        && g.effects.iter().any(|x| {
+                            matches!(
+                                x.kind,
+                                AudioEffectType::Receive | AudioEffectType::DuckVolume
+                            )
+                        })
+                })
+                .map(|g| g.name.clone())
+                .collect();
+            ui.horizontal(|ui| {
+                crate::inspector::prop_label(ui, "Receive");
+                let cur = &mut m.groups[i].effects[k].target;
+                egui::ComboBox::from_id_salt(("mixer_send", i, k))
+                    .selected_text(if cur.is_empty() { "None" } else { cur.as_str() })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(cur, String::new(), "None");
+                        for t in &targets {
+                            ui.selectable_value(cur, t.clone(), t);
+                        }
+                    });
+            });
+        }
         for p in e.parameters() {
             param_row(
                 ui,

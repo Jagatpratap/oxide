@@ -7,6 +7,7 @@
 //! Reference: <https://docs.unity3d.com/Manual/AudioOverview.html>
 
 pub mod mixer;
+pub mod random_container;
 pub mod synth;
 
 use kira::sound::PlaybackState;
@@ -50,6 +51,9 @@ pub struct AudioSource {
     pub max_distance: f32,
     /// Audio Mixer group to play through (Unity "Output"): `Assets/Main.mixer#SFX`.
     pub output: Option<Handle<mixer::AudioMixerGroupRef>>,
+    /// An Audio Random Container to play instead of `clip` (Unity's `AudioSource.resource`):
+    /// each Play picks a clip from it, or starts its automatic trigger.
+    pub random_container: Option<Handle<random_container::AudioRandomContainer>>,
     #[reflect(skip)]
     #[doc(hidden)]
     pub commands: Vec<AudioCommand>,
@@ -74,6 +78,7 @@ impl Default for AudioSource {
             min_distance: 1.0,
             max_distance: 500.0,
             output: None,
+            random_container: None,
             commands: Vec::new(),
             playing: false,
             started: false,
@@ -140,6 +145,10 @@ struct Voice {
     distances: (f32, f32),
     /// Mixer path, group and mixer generation it was routed to.
     route: Option<(String, String, u64)>,
+    /// Random container playback: the picker, its clips still sounding, and Pause.
+    container: Option<random_container::ContainerPlayer>,
+    container_sounds: Vec<StaticSoundHandle>,
+    container_paused: bool,
 }
 
 /// The audio resource (Unity's `AudioSettings` + mixer).
@@ -522,7 +531,16 @@ impl System for AudioSystem {
             .query::<AudioSource>()
             .filter_map(|(_, s)| s.clip.clone())
             .collect();
+        let containers: Vec<_> = world
+            .query::<AudioSource>()
+            .filter_map(|(_, s)| s.random_container.clone())
+            .collect();
         if let Some(assets) = world.try_resource::<AssetServer>() {
+            let in_containers = containers
+                .iter()
+                .filter_map(|h| assets.data.get(h))
+                .flat_map(|c| c.elements.iter().filter_map(|e| e.clip.clone()));
+            let clips: Vec<Handle<AudioClip>> = clips.into_iter().chain(in_containers).collect();
             for h in clips {
                 let imp: oxide_assets::importers::AudioImporter = assets.importer(h.path());
                 if imp.preload_audio_data && assets.audio.get(&h).is_some() {
@@ -589,6 +607,9 @@ fn sync(world: &mut World, audio: &mut Audio) {
         .retain(|(_, h)| h.state() != PlaybackState::Stopped);
 
     update_mixers(world, audio);
+    let dt = world
+        .try_resource::<oxide_core::Time>()
+        .map_or(0.0, |t| t.delta_time());
 
     let sources: Vec<(GameObjectId, ComponentId)> = world.query_ids::<AudioSource>();
     let mut alive = std::collections::HashSet::new();
@@ -601,7 +622,7 @@ fn sync(world: &mut World, audio: &mut Audio) {
         let mut cmds = std::mem::take(&mut src.commands);
         if !src.started {
             src.started = true;
-            if src.play_on_awake && src.clip.is_some() {
+            if src.play_on_awake && (src.clip.is_some() || src.random_container.is_some()) {
                 cmds.insert(0, AudioCommand::Play);
                 src.playing = true;
             }
@@ -666,13 +687,39 @@ fn sync(world: &mut World, audio: &mut Audio) {
                     looping: false,
                     distances: (s.min_distance, s.max_distance),
                     route: route.clone(),
+                    container: None,
+                    container_sounds: Vec::new(),
+                    container_paused: false,
                 },
             );
         }
         let vol = if s.mute { 0.0 } else { s.volume };
         let pitch = s.pitch * mixer_pitch;
+        let container = s
+            .random_container
+            .as_ref()
+            .and_then(|h| assets.data.get(h).cloned());
         for c in cmds {
             match c {
+                AudioCommand::Play if s.random_container.is_some() => {
+                    let Some(c) = &container else { continue };
+                    let v = audio.voices.get_mut(&cid).expect("voice");
+                    v.container_paused = false;
+                    let player = v.container.get_or_insert_with(|| {
+                        use std::hash::{BuildHasher, BuildHasherDefault};
+                        random_container::ContainerPlayer::new(
+                            BuildHasherDefault::<std::collections::hash_map::DefaultHasher>::default()
+                                .hash_one(cid),
+                        )
+                    });
+                    player.start(c);
+                    // Manual: one clip per Play. Automatic: the trigger plays the first now.
+                    if !player.active
+                        && let Some(pick) = player.next(c)
+                    {
+                        play_container_pick(audio, assets, cid, c, &pick, vol, pitch);
+                    }
+                }
                 AudioCommand::Play => {
                     let Some(clip) = &s.clip else { continue };
                     let Some(mut data) = audio.clip_data(assets, clip) else {
@@ -696,19 +743,27 @@ fn sync(world: &mut World, audio: &mut Audio) {
                     v.looping = s.looping;
                 }
                 AudioCommand::Stop => {
-                    if let Some(snd) = audio.voices.get_mut(&cid).and_then(|v| v.sound.as_mut()) {
+                    let v = audio.voices.get_mut(&cid).expect("voice");
+                    for snd in v.sound.iter_mut().chain(v.container_sounds.iter_mut()) {
                         snd.stop(Tween::default());
+                    }
+                    if let Some(p) = v.container.as_mut() {
+                        p.stop();
                     }
                 }
                 AudioCommand::Pause => {
-                    if let Some(snd) = audio.voices.get_mut(&cid).and_then(|v| v.sound.as_mut()) {
+                    let v = audio.voices.get_mut(&cid).expect("voice");
+                    for snd in v.sound.iter_mut().chain(v.container_sounds.iter_mut()) {
                         snd.pause(Tween::default());
                     }
+                    v.container_paused = true;
                 }
                 AudioCommand::UnPause => {
-                    if let Some(snd) = audio.voices.get_mut(&cid).and_then(|v| v.sound.as_mut()) {
+                    let v = audio.voices.get_mut(&cid).expect("voice");
+                    for snd in v.sound.iter_mut().chain(v.container_sounds.iter_mut()) {
                         snd.resume(Tween::default());
                     }
+                    v.container_paused = false;
                 }
                 AudioCommand::OneShot(clip, scale) => {
                     let Some(data) = audio.clip_data(assets, &clip) else {
@@ -723,7 +778,39 @@ fn sync(world: &mut World, audio: &mut Audio) {
                 }
             }
         }
+        // The container's automatic trigger.
+        if let Some(c) = &container {
+            let v = audio.voices.get_mut(&cid).expect("voice");
+            let running = !v.container_paused && v.container.as_ref().is_some_and(|p| p.active);
+            if running {
+                let durations: Vec<f32> = if c.automatic_trigger_mode
+                    == random_container::AudioContainerAutomaticTriggerMode::Offset
+                {
+                    c.elements
+                        .iter()
+                        .map(|e| {
+                            e.clip
+                                .as_ref()
+                                .and_then(|h| audio.clip_data(assets, h))
+                                .map_or(0.0, |d| d.duration().as_secs_f32())
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                let v = audio.voices.get_mut(&cid).expect("voice");
+                let pick = v
+                    .container
+                    .as_mut()
+                    .and_then(|p| p.update(c, dt, |i| durations.get(i).copied().unwrap_or(0.0)));
+                if let Some(pick) = pick {
+                    play_container_pick(audio, assets, cid, c, &pick, vol, pitch);
+                }
+            }
+        }
         let v = audio.voices.get_mut(&cid).expect("voice");
+        v.container_sounds
+            .retain(|h| h.state() != PlaybackState::Stopped);
         if let Output::Spatial(t) = &mut v.output {
             t.set_position(mirror(pos), Tween::default());
         }
@@ -737,12 +824,15 @@ fn sync(world: &mut World, audio: &mut Audio) {
                 v.pitch = pitch as f64;
             }
         }
-        let playing = v.sound.as_ref().is_some_and(|h| {
+        let sounding = |h: &StaticSoundHandle| {
             matches!(
                 h.state(),
                 PlaybackState::Playing | PlaybackState::Pausing | PlaybackState::Resuming
             )
-        });
+        };
+        let playing = v.sound.as_ref().is_some_and(sounding)
+            || v.container_sounds.iter().any(sounding)
+            || v.container.as_ref().is_some_and(|p| p.active);
         if let Some(src) = world.component_mut::<AudioSource>(obj, cid) {
             src.playing = playing;
         }
@@ -755,6 +845,35 @@ fn sync(world: &mut World, audio: &mut Audio) {
         }
         keep
     });
+}
+
+/// Plays one clip a random container picked on a source's voice.
+fn play_container_pick(
+    audio: &mut Audio,
+    assets: &AssetServer,
+    cid: ComponentId,
+    c: &random_container::AudioRandomContainer,
+    pick: &random_container::ContainerPick,
+    volume: f32,
+    pitch: f32,
+) {
+    let Some(clip) = c.elements.get(pick.element).and_then(|e| e.clip.as_ref()) else {
+        return;
+    };
+    let Some(data) = audio.clip_data(assets, clip) else {
+        return;
+    };
+    let data = data
+        .volume(db(volume) + pick.volume_db)
+        .playback_rate((pitch * pick.rate) as f64);
+    let Some(v) = audio.voices.get_mut(&cid) else {
+        return;
+    };
+    let handle = match &mut v.output {
+        Output::Spatial(t) => t.play(data).ok(),
+        Output::Flat(t) => t.play(data).ok(),
+    };
+    v.container_sounds.extend(handle);
 }
 
 fn src_was_playing(s: &AudioSource) -> bool {
@@ -859,6 +978,11 @@ pub fn install(world: &mut World) -> Box<dyn System> {
         a.register_data_asset::<mixer::AudioMixer>(
             oxide_assets::AssetTypeInfo::new("AudioMixer", &["mixer"])
                 .menu("Audio Mixer", "New Audio Mixer", 55)
+                .color(230, 140, 200),
+        );
+        a.register_data_asset::<random_container::AudioRandomContainer>(
+            oxide_assets::AssetTypeInfo::new("AudioRandomContainer", &["randomcontainer"])
+                .menu("Audio Random Container", "New Audio Random Container", 56)
                 .color(230, 140, 200),
         );
     }
