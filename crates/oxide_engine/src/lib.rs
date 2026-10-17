@@ -300,7 +300,7 @@ pub mod prelude {
         AimConstraint, ConstraintAxes, ConstraintSource, LookAtConstraint, ParentConstraint,
         PositionConstraint, RotationConstraint, ScaleConstraint, WorldUpType,
     };
-    pub use oxide_scene::{Application, RuntimePlatform, Screen};
+    pub use oxide_scene::{Application, Co, CoroutineId, RuntimePlatform, Screen};
     pub use oxide_scene::{
         Camera, CameraClearFlags, Collision, Component, Ctx, GameObjectId, Light, LightShadows,
         LightType, MeshFilter, MeshRenderer, OcclusionPortal, PlayerInput, Projection,

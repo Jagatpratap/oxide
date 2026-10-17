@@ -11,6 +11,7 @@ pub mod application;
 pub mod builtin;
 pub mod component;
 pub mod constraints;
+pub mod coroutines;
 pub mod ctx;
 pub mod id;
 pub mod lens_flare;
@@ -37,6 +38,7 @@ pub use constraints::{
     LookAtConstraint, ParentConstraint, ParentConstraintOffset, PositionConstraint,
     RotationConstraint, ScaleConstraint, WorldUpType,
 };
+pub use coroutines::{Co, CoroutineId, Coroutines};
 pub use ctx::{Ctx, TransformRef};
 pub use id::{ComponentId, GameObjectId};
 pub use lens_flare::{

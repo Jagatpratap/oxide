@@ -330,6 +330,11 @@ impl ScriptHost {
         if let Some(e) = w.resources.get_mut::<oxide_engine::CustomEditors>() {
             e.remove(&old);
         }
+        // Coroutines are futures from the old library: they stop on reload (Unity's domain
+        // reload stops them too).
+        if let Some(c) = w.try_resource_mut::<oxide_scene::Coroutines>() {
+            c.clear();
+        }
         let taken = w.take_components_for_reload(|t| old.iter().any(|o| o == t));
         w.registry
             .unregister_where(|r| old.iter().any(|o| o == r.info.name));

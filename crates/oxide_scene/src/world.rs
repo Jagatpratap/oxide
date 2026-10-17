@@ -1889,6 +1889,10 @@ impl World {
     /// that is active.
     pub fn start_scripts(&mut self) {
         self.run_scripts = true;
+        // Coroutines from an earlier run don't carry over.
+        if let Some(c) = self.try_resource_mut::<crate::coroutines::Coroutines>() {
+            c.clear();
+        }
         for id in self.hierarchy_order() {
             if !self.get(id).is_some_and(|o| o.active_in_hierarchy) {
                 continue;

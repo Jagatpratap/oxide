@@ -207,6 +207,13 @@ impl Engine {
         self.gui
             .end(&self.window, &self.gpu, &mut self.renderer, &mut self.world);
         self.render();
+        if self.simulate {
+            // WaitForEndOfFrame: after the frame is rendered.
+            oxide_scene::Coroutines::run(
+                &mut self.world,
+                oxide_scene::coroutines::Stage::EndOfFrame,
+            );
+        }
         self.end_frame();
     }
 
@@ -227,10 +234,13 @@ impl Engine {
             for s in &mut self.systems {
                 s.fixed_update(w);
             }
+            oxide_scene::Coroutines::run(w, oxide_scene::coroutines::Stage::AfterFixedUpdate);
         }
         w.run_phase(Phase::Update);
         let t = w.resource::<Time>().time();
         Timers::run(w, t);
+        // Unity resumes `yield return null` / WaitForSeconds / WaitUntil after Update.
+        oxide_scene::Coroutines::run(w, oxide_scene::coroutines::Stage::AfterUpdate);
         for s in &mut self.systems {
             s.update(w);
         }

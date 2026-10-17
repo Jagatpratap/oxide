@@ -453,7 +453,12 @@ from the fixed edge and each object along its matching local axis).
   an assembly folder joins it, `assembly_definitions` MCP tool; only the changed assembly and its dependents
   rebuild. Not yet: define constraints / version defines, GUID references, precompiled references
   ([Assembly definitions](https://docs.unity3d.com/Manual/ScriptCompilationAssemblyDefinitionFiles.html))
-- ☐ Coroutines (`yield WaitForSeconds`, `WaitForEndOfFrame`) via async
+- ☑ Coroutines as `async` blocks: `ctx.start_coroutine(|co| async move { ... })` with `co.wait_for_seconds`,
+  `wait_for_seconds_realtime`, `next_frame` (yield null), `wait_until` / `wait_while`, `wait_for_end_of_frame`,
+  `wait_for_fixed_update`, nested coroutines by `.await`, `co.with(|ctx| ...)` / `co.with_component` between
+  waits; resumed where Unity resumes them (after Update, after each FixedUpdate, after rendering);
+  `stop_coroutine`, `stop_all_coroutines`; stopped when the object is deactivated or destroyed and on script
+  reload; panics logged like exceptions
   ([Coroutines](https://docs.unity3d.com/Manual/coroutines-section.html))
 - ☐ Execution order control
   ([Control when your code updates](https://docs.unity3d.com/Manual/managing-update-order.html))
@@ -473,8 +478,8 @@ crate is compiled in the background and hot-reloaded in Edit and Play mode; comp
 objects and physics state survive, scripts get OnDisable/OnEnable across the reload, compile
 errors go to the Console, panics are caught and logged, and scripts that fail to load keep
 their data as Missing Script. The engine is one shared library (`oxide_dylib`) that the
-project's editor and its Scripts both link. Not yet: coroutines, execution order, jobs, test
-runner, native plugins.
+project's editor and its Scripts both link. Not yet: execution order, jobs, test runner, native
+plugins.
 
 ### P7 — Physics, Input, 2D
 - ◐ 3D: Rigidbody, Box/Sphere/Capsule/Mesh colliders, triggers, layers collision matrix, raycasts/overlaps, physics materials, joints (Fixed/Hinge/Character ☑), CharacterController, articulations, ragdoll wizard ☑, cloth (later)
