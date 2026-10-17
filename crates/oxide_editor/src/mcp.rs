@@ -2009,5 +2009,6 @@ pub(crate) fn extra_windows() -> Vec<crate::Tab> {
         crate::Tab::Profiler,
         crate::Tab::FrameDebugger,
         crate::Tab::AdaptivePerformance,
+        crate::Tab::ProjectAuditor,
     ]
 }

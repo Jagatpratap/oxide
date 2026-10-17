@@ -16,6 +16,7 @@ mod assemblies;
 mod asset_inspector;
 mod asset_ops;
 mod audio_mixer_window;
+mod auditor_window;
 mod console;
 mod curve_editor;
 mod extensions;
@@ -108,6 +109,7 @@ pub enum Tab {
     Profiler,
     FrameDebugger,
     AdaptivePerformance,
+    ProjectAuditor,
     /// A window from a script's editor extensions (Unity `EditorWindow`), by title hash.
     Custom(u32),
 }
@@ -152,6 +154,7 @@ impl Tab {
             Tab::Profiler => "Profiler",
             Tab::FrameDebugger => "Frame Debugger",
             Tab::AdaptivePerformance => "Adaptive Performance",
+            Tab::ProjectAuditor => "Project Auditor",
             Tab::Timeline => "Timeline",
             Tab::ShaderGraph => "Shader Graph",
             Tab::VfxGraph => "VFX Graph",
@@ -439,6 +442,7 @@ pub struct EditorState {
     package_manager: package_manager::PackageManager,
     profiler: profiler_window::ProfilerWindow,
     pub(crate) tests: test_runner::TestRunner,
+    auditor: auditor_window::AuditorWindow,
     hierarchy: hierarchy::HierarchyState,
     pub(crate) inspector: inspector::InspectorState,
     console: console::ConsoleState,
@@ -525,6 +529,7 @@ impl EditorState {
             package_manager: Default::default(),
             profiler: Default::default(),
             tests: Default::default(),
+            auditor: Default::default(),
             hierarchy: Default::default(),
             inspector: Default::default(),
             console: Default::default(),
@@ -797,6 +802,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::Profiler => profiler_window::window_ui(self.st, self.engine, ui),
             Tab::FrameDebugger => profiler_window::frame_debugger_ui(self.st, self.engine, ui),
             Tab::AdaptivePerformance => adaptive_window::window_ui(self.engine, ui),
+            Tab::ProjectAuditor => auditor_window::window_ui(self.st, self.engine, ui),
             Tab::Timeline => timeline_window::window_ui(self.st, self.engine, ui),
             Tab::ShaderGraph => shader_graph_window::window_ui(self.st, self.engine, ui),
             Tab::VfxGraph => vfx_graph_window::window_ui(self.st, self.engine, ui),

@@ -327,6 +327,10 @@ pub fn menu_items(world: &World, keymap: &Keymap) -> Vec<MenuItem> {
         Action::OpenTab(Tab::AdaptivePerformance),
     ));
     v.push(item(
+        "Window/Analysis/Project Auditor",
+        Action::OpenTab(Tab::ProjectAuditor),
+    ));
+    v.push(item(
         "Window/Rendering/Lighting/Generate Lighting",
         Action::GenerateLighting,
     ));

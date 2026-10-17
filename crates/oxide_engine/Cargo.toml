@@ -9,6 +9,7 @@ license.workspace = true
 libloading.workspace = true
 oxide_math.workspace = true
 oxide_core.workspace = true
+image.workspace = true
 oxide_render.workspace = true
 oxide_mcp.workspace = true
 oxide_assets.workspace = true
