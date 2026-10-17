@@ -290,6 +290,107 @@ impl Importer<'_> {
     }
 }
 
+/// A copy of a `.glb`/`.gltf` whose textures with an `EXT_texture_webp` image use it as
+/// their `source` (WebP-only files leave `source` out), with the extension dropped from
+/// `extensionsRequired`/`extensionsUsed`. `None` when the file doesn't use the extension.
+fn with_webp_sources(bytes: &[u8]) -> Option<Vec<u8>> {
+    use serde_json::Value;
+    const EXT: &str = "EXT_texture_webp";
+    let glb = bytes.starts_with(b"glTF");
+    let json = if glb {
+        let len = u32::from_le_bytes(bytes.get(12..16)?.try_into().ok()?) as usize;
+        (bytes.get(16..20)? == b"JSON").then_some(bytes.get(20..20 + len)?)?
+    } else {
+        bytes
+    };
+    if !json.windows(EXT.len()).any(|w| w == EXT.as_bytes()) {
+        return None;
+    }
+    let mut v: Value = serde_json::from_slice(json).ok()?;
+    for t in v
+        .get_mut("textures")
+        .and_then(Value::as_array_mut)
+        .into_iter()
+        .flatten()
+    {
+        let src = t.pointer(&format!("/extensions/{EXT}/source")).cloned();
+        if let Some(src) = src {
+            if t.get("source").is_none() {
+                t["source"] = src;
+            }
+            if let Some(e) = t.get_mut("extensions").and_then(Value::as_object_mut) {
+                e.remove(EXT);
+            }
+        }
+    }
+    for k in ["extensionsRequired", "extensionsUsed"] {
+        if let Some(a) = v.get_mut(k).and_then(Value::as_array_mut) {
+            a.retain(|e| e.as_str() != Some(EXT));
+        }
+    }
+    let mut text = serde_json::to_vec(&v).ok()?;
+    if !glb {
+        return Some(text);
+    }
+    // Rebuild the GLB: header, the new JSON chunk (space-padded to 4 bytes), the rest.
+    while text.len() % 4 != 0 {
+        text.push(b' ');
+    }
+    let old_len = u32::from_le_bytes(bytes[12..16].try_into().ok()?) as usize;
+    let rest = bytes.get(20 + old_len..)?;
+    let total = 12 + 8 + text.len() + rest.len();
+    let mut out = Vec::with_capacity(total);
+    out.extend_from_slice(&bytes[..8]);
+    out.extend_from_slice(&(total as u32).to_le_bytes());
+    out.extend_from_slice(&(text.len() as u32).to_le_bytes());
+    out.extend_from_slice(b"JSON");
+    out.extend_from_slice(&text);
+    out.extend_from_slice(rest);
+    Some(out)
+}
+
+/// Decodes every image with the `image` crate (PNG, JPEG, WebP, ...), as RGBA8.
+fn decode_images(
+    doc: &gltf::Document,
+    base_dir: Option<&std::path::Path>,
+    buffers: &[gltf::buffer::Data],
+) -> Result<Vec<gltf::image::Data>, String> {
+    doc.images()
+        .map(|img| {
+            let bytes: Vec<u8> = match img.source() {
+                gltf::image::Source::View { view, .. } => {
+                    let b = &buffers[view.buffer().index()];
+                    b.get(view.offset()..view.offset() + view.length())
+                        .ok_or("image view out of range")?
+                        .to_vec()
+                }
+                gltf::image::Source::Uri { uri, .. } => {
+                    if let Some(data) = uri.strip_prefix("data:") {
+                        use base64::Engine as _;
+                        let b64 = data.split_once(";base64,").ok_or("bad data URI")?.1;
+                        base64::engine::general_purpose::STANDARD
+                            .decode(b64)
+                            .map_err(|e| e.to_string())?
+                    } else {
+                        let dir = base_dir.ok_or("external image without a folder")?;
+                        let p = dir.join(uri.replace("%20", " "));
+                        std::fs::read(&p).map_err(|e| format!("{}: {e}", p.display()))?
+                    }
+                }
+            };
+            let rgba = image::load_from_memory(&bytes)
+                .map_err(|e| e.to_string())?
+                .to_rgba8();
+            Ok(gltf::image::Data {
+                width: rgba.width(),
+                height: rgba.height(),
+                format: gltf::image::Format::R8G8B8A8,
+                pixels: rgba.into_raw(),
+            })
+        })
+        .collect()
+}
+
 /// Imports a glTF file (already read into `bytes`; `base_dir` resolves external buffers and
 /// images) as a [`Model`] stored under `path`, plus its meshes, materials, textures and clips.
 pub fn import_gltf(
@@ -298,12 +399,19 @@ pub fn import_gltf(
     bytes: &[u8],
     base_dir: Option<&std::path::Path>,
 ) -> Result<Handle<Model>, String> {
-    let gltf::Gltf { document, blob } =
-        gltf::Gltf::from_slice(bytes).map_err(|e| format!("{path}: {e}"))?;
+    // EXT_texture_webp: point the textures at their WebP images so the gltf crate accepts
+    // the file, and decode the images here (the crate only decodes PNG and JPEG).
+    let webp = with_webp_sources(bytes);
+    let gltf::Gltf { document, blob } = gltf::Gltf::from_slice(webp.as_deref().unwrap_or(bytes))
+        .map_err(|e| format!("{path}: {e}"))?;
     let buffers = gltf::import_buffers(&document, base_dir, blob)
         .map_err(|e| format!("{path}: buffers: {e}"))?;
-    let images = gltf::import_images(&document, base_dir, &buffers)
-        .map_err(|e| format!("{path}: images: {e}"))?;
+    let images = if webp.is_some() {
+        decode_images(&document, base_dir, &buffers)
+    } else {
+        gltf::import_images(&document, base_dir, &buffers).map_err(|e| e.to_string())
+    }
+    .map_err(|e| format!("{path}: images: {e}"))?;
 
     let mut imp = Importer {
         server,
@@ -417,4 +525,31 @@ pub fn import_gltf(
         animations,
     };
     Ok(imp.server.models.insert(path.to_owned(), model))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn webp_textures_get_their_source() {
+        let json = br#"{"asset":{"version":"2.0"},"extensionsRequired":["EXT_texture_webp"],"extensionsUsed":["EXT_texture_webp"],"textures":[{"extensions":{"EXT_texture_webp":{"source":3}}}]}"#;
+        let mut glb = b"glTF".to_vec();
+        glb.extend(2u32.to_le_bytes());
+        glb.extend(0u32.to_le_bytes());
+        glb.extend((json.len() as u32).to_le_bytes());
+        glb.extend(b"JSON");
+        glb.extend(json);
+        glb.extend(b"BINCHUNK");
+        let out = super::with_webp_sources(&glb).unwrap();
+        let len = u32::from_le_bytes(out[12..16].try_into().unwrap()) as usize;
+        assert_eq!(len % 4, 0);
+        assert_eq!(
+            u32::from_le_bytes(out[8..12].try_into().unwrap()) as usize,
+            out.len()
+        );
+        let v: serde_json::Value = serde_json::from_slice(&out[20..20 + len]).unwrap();
+        assert_eq!(v["textures"][0]["source"], 3);
+        assert_eq!(v["extensionsRequired"], serde_json::json!([]));
+        assert!(out.ends_with(b"BINCHUNK"));
+        assert!(super::with_webp_sources(br#"{"asset":{}}"#).is_none());
+    }
 }

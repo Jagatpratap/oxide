@@ -21,6 +21,8 @@
 //! oxide::scripts! { Spinner => "Scripts/Spinner" }
 //! ```
 
+#[doc(hidden)]
+pub use oxide_derive::package_editor_extensions as __package_editor_extensions;
 pub use oxide_editor as editor;
 pub use oxide_engine::*;
 
@@ -115,6 +117,9 @@ macro_rules! scripts {
         #[unsafe(no_mangle)]
         pub fn oxide_register_editor_extensions(x: &mut $crate::EditorExtensions) {
             let _ = &x;
+            // The project's packages' extensions first (`"oxide": { "editorExtensions" }`
+            // in their package.json), then the Scripts' own.
+            $crate::__package_editor_extensions!(x);
             $($( $xf(x); )*)?
         }
     };

@@ -391,3 +391,66 @@ fn derive_enum(input: &DeriveInput, data: &syn::DataEnum) -> syn::Result<TokenSt
         }
     })
 }
+
+/// Calls the editor-extension registration functions of the project's packages:
+/// `package_editor_extensions!(x)` expands to `::pkg::register(x);` for every line of the
+/// Scripts crate's Package Manager block (in its `Cargo.toml`) that ends with
+/// `# oxide-editor-extensions: register`. `scripts!` expands to it, so a package's windows
+/// and tools appear without the user listing them. The block changes whenever the packages
+/// do, so Cargo rebuilds the Scripts crate (and re-expands this) then.
+#[proc_macro]
+pub fn package_editor_extensions(input: TokenStream) -> TokenStream {
+    let arg = proc_macro2::TokenStream::from(input);
+    let manifest = std::env::var("CARGO_MANIFEST_DIR")
+        .map(|d| std::path::Path::new(&d).join("Cargo.toml"))
+        .ok()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .unwrap_or_default();
+    let calls = package_extension_paths(&manifest)
+        .into_iter()
+        .filter_map(|path| syn::parse_str::<syn::Path>(&path).ok())
+        .map(|path| quote! { #path(#arg); });
+    quote! { #(#calls)* }.into()
+}
+
+/// `::crate_name::function` paths from the Package Manager block of a Cargo.toml.
+fn package_extension_paths(manifest: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut inside = false;
+    for line in manifest.lines() {
+        let l = line.trim();
+        if l == "# --- packages (managed by the Package Manager) ---" {
+            inside = true;
+        } else if l == "# --- end packages ---" {
+            inside = false;
+        } else if inside
+            && let Some((dep, f)) = l.split_once("# oxide-editor-extensions:")
+            && let Some(name) = dep.split('=').next()
+        {
+            let krate = name.trim().replace('-', "_");
+            let f = f.trim().trim_start_matches("crate::");
+            if !krate.is_empty() && !f.is_empty() {
+                out.push(format!("::{krate}::{f}"));
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn package_extension_paths_read_the_managed_block() {
+        let toml = r#"[dependencies]
+# --- packages (managed by the Package Manager) ---
+com-a = { path = "../a" } # oxide-editor-extensions: editor::register
+plain = { path = "../b" }
+# --- end packages ---
+other = "1" # oxide-editor-extensions: nope
+"#;
+        assert_eq!(
+            super::package_extension_paths(toml),
+            vec!["::com_a::editor::register".to_owned()]
+        );
+    }
+}

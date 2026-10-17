@@ -53,6 +53,7 @@ pub use app::{App, AppControl, EngineConfig, McpToolsFn};
 pub use custom_editor::{CustomEditor, CustomEditors, InspectorGui, MessageType};
 pub use editor_ext::{
     EditorContext, EditorExtensions, EditorTool, EditorWindow, Overlay, PropertyGui, SceneGui,
+    WindowDock,
 };
 pub use engine::{Engine, GameViewport, Plugin, Shell, init_world};
 

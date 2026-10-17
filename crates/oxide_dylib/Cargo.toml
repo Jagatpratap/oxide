@@ -11,6 +11,7 @@ crate-type = ["dylib"]
 [dependencies]
 oxide_engine.workspace = true
 oxide_editor.workspace = true
+oxide_derive.workspace = true
 
 [lints]
 workspace = true

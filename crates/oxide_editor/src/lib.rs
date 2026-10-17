@@ -481,6 +481,11 @@ pub struct EditorState {
     pub status: String,
     /// Commands from editor extensions, run after the frame's UI.
     pub(crate) ext_commands: Vec<oxide_engine::editor_ext::EditorCommand>,
+    /// Where each script window docks (from its registration), by title.
+    pub(crate) custom_docks: HashMap<String, oxide_engine::WindowDock>,
+    /// Script windows already opened once by `open_by_default` in this project (from
+    /// `UserSettings/OpenedWindows.txt`), loaded on first use.
+    pub(crate) auto_opened: Option<std::collections::BTreeSet<String>>,
     /// The active Scene view tool from an editor extension (replaces the built-in one).
     pub custom_tool: Option<String>,
     /// The project has a Scripts crate (Create > Rust Script is available).
@@ -564,6 +569,8 @@ impl EditorState {
             title: String::new(),
             status: String::new(),
             ext_commands: Vec::new(),
+            custom_docks: HashMap::new(),
+            auto_opened: None,
             custom_tool: None,
             scripts_available: false,
             builder: Default::default(),
@@ -950,8 +957,31 @@ impl Editor {
             self.dock.push_to_focused_leaf(tab);
             return;
         }
+        let custom_dock = match tab {
+            Tab::Custom(id) => self
+                .st
+                .custom_docks
+                .get(extensions::title(id))
+                .copied()
+                .unwrap_or_default(),
+            _ => oxide_engine::WindowDock::Floating,
+        };
+        let dock_beside = match custom_dock {
+            oxide_engine::WindowDock::Floating => None,
+            oxide_engine::WindowDock::Inspector => Some(Tab::Inspector),
+            oxide_engine::WindowDock::Hierarchy => Some(Tab::Hierarchy),
+            oxide_engine::WindowDock::Project => Some(Tab::Project),
+            oxide_engine::WindowDock::Scene => Some(Tab::Scene),
+        };
         if let Some(path) = found {
             let _ = self.dock.set_active_tab(path);
+        } else if let Some(beside) = dock_beside
+            && let Some(p) = self.dock.find_tab(&beside)
+        {
+            // A script window that asked to dock next to a built-in one (Unity
+            // `GetWindow<T>(typeof(InspectorWindow))`).
+            self.dock.set_focused_node_and_surface(p.node_path());
+            self.dock.push_to_focused_leaf(tab);
         } else if matches!(
             tab,
             Tab::ProjectSettings

@@ -53,6 +53,12 @@ pub use animator_controller::{
     Condition, ConditionMode, InterruptionSource, Motion, Parameter, ParameterType, StateBehaviour,
     StatePath, SyncedMotion, Transition, TransitionSource, TransitionTarget,
 };
+/// Third-party crates the engine builds with, for packages and scripts (using these instead of
+/// their own copies keeps the engine's dependency features, so it isn't recompiled).
+pub mod deps {
+    pub use {flate2, image, ruzstd, serde_json};
+}
+
 pub use asset_types::{AssetTypeInfo, AssetTypeRegistry, CreateKind, DataAsset, DataAssets};
 pub use cubemap::{CubemapFace, Texture2DArray, TextureCube};
 pub use handle::{Asset, AssetId, Assets, Handle};

@@ -1,0 +1,9 @@
+{
+  "name": "com.oxide.blenderkit",
+  "version": "1.0.0",
+  "displayName": "BlenderKit",
+  "description": "Search and import BlenderKit assets: glTF models, materials (textures read from the .blend) and HDRI skies. Free assets work without an account; add your BlenderKit API key for Full Plan assets. Window > BlenderKit opens it next to the Inspector.",
+  "author": { "name": "Oxide" },
+  "keywords": ["blenderkit", "assets", "models", "materials", "hdri"],
+  "oxide": { "editorExtensions": "register" }
+}

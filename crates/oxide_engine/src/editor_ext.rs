@@ -536,10 +536,49 @@ impl MenuItemBuilder<'_> {
 
 type Factory<T> = Box<dyn Fn() -> Box<T> + Send + Sync>;
 
+/// Where a custom window docks when it opens (Unity `GetWindow<T>(desiredDockNextTo)`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WindowDock {
+    /// Its own floating window (Unity's default for `GetWindow`).
+    #[default]
+    Floating,
+    /// A tab next to the Inspector (the right-hand panel).
+    Inspector,
+    /// A tab next to the Hierarchy.
+    Hierarchy,
+    /// A tab next to the Project window.
+    Project,
+    /// A tab beside the Scene view.
+    Scene,
+}
+
 pub struct WindowDef {
     pub title: String,
     pub menu: String,
+    /// Where the window docks when opened.
+    pub dock: WindowDock,
+    /// Opened the first time it is registered in a project (a package's main window).
+    pub open_by_default: bool,
     make: Factory<dyn EditorWindow>,
+}
+
+/// Options for a custom window (returned by [`EditorExtensions::window`]).
+pub struct WindowBuilder<'a>(&'a mut WindowDef);
+
+impl WindowBuilder<'_> {
+    /// Dock next to a built-in window instead of floating (Unity
+    /// `GetWindow<T>(typeof(InspectorWindow))`).
+    pub fn dock(self, dock: WindowDock) -> Self {
+        self.0.dock = dock;
+        self
+    }
+
+    /// Open the window the first time a project loads it (once: closing it keeps it closed;
+    /// its menu item opens it again).
+    pub fn open_by_default(self) -> Self {
+        self.0.open_by_default = true;
+        self
+    }
 }
 
 pub struct OverlayDef {
@@ -567,13 +606,28 @@ pub struct EditorExtensions {
 impl EditorExtensions {
     /// Unity `EditorWindow` with `[MenuItem("Window/...")]` calling `GetWindow`: `menu`
     /// opens it.
-    pub fn window<T: EditorWindow + Default>(&mut self, title: &str, menu: &str) {
+    pub fn window<T: EditorWindow + Default>(
+        &mut self,
+        title: &str,
+        menu: &str,
+    ) -> WindowBuilder<'_> {
         self.windows.retain(|w| w.title != title);
         self.windows.push(WindowDef {
             title: title.to_owned(),
             menu: menu.to_owned(),
+            dock: WindowDock::Floating,
+            open_by_default: false,
             make: Box::new(|| Box::new(T::default())),
         });
+        WindowBuilder(self.windows.last_mut().expect("pushed"))
+    }
+
+    /// Where a custom window docks.
+    pub fn window_dock(&self, title: &str) -> WindowDock {
+        self.windows
+            .iter()
+            .find(|w| w.title == title)
+            .map_or(WindowDock::Floating, |w| w.dock)
     }
 
     /// Unity `[MenuItem(path)]`.

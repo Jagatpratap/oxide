@@ -327,9 +327,61 @@ fn builtin_tool(name: &str) -> Option<Tool> {
     .find(|t| t.name().eq_ignore_ascii_case(name))
 }
 
+/// Records each script window's dock position, and opens the `open_by_default` windows the
+/// first time this project sees them.
+fn auto_open(st: &mut EditorState, engine: &mut Engine) -> Vec<Action> {
+    let Some(x) = engine.world.try_resource::<EditorExtensions>() else {
+        st.custom_docks.clear();
+        return Vec::new();
+    };
+    if x.windows().len() != st.custom_docks.len()
+        || x.windows()
+            .iter()
+            .any(|w| st.custom_docks.get(&w.title) != Some(&w.dock))
+    {
+        st.custom_docks = x
+            .windows()
+            .iter()
+            .map(|w| (w.title.clone(), w.dock))
+            .collect();
+    }
+    let wanted: Vec<String> = x
+        .windows()
+        .iter()
+        .filter(|w| w.open_by_default)
+        .map(|w| w.title.clone())
+        .collect();
+    if wanted.is_empty() {
+        return Vec::new();
+    }
+    let file = engine
+        .world
+        .resource::<oxide_assets::AssetServer>()
+        .root
+        .join("UserSettings/OpenedWindows.txt");
+    let opened = st.auto_opened.get_or_insert_with(|| {
+        std::fs::read_to_string(&file)
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    });
+    let new: Vec<String> = wanted.into_iter().filter(|t| !opened.contains(t)).collect();
+    if new.is_empty() {
+        return Vec::new();
+    }
+    opened.extend(new.iter().cloned());
+    let text: String = opened.iter().map(|t| format!("{t}\n")).collect();
+    if let Some(d) = file.parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    let _ = std::fs::write(&file, text);
+    new.iter().map(|t| Action::OpenTab(tab(t))).collect()
+}
+
 /// Turns queued extension commands into editor actions.
 pub fn take_actions(st: &mut EditorState, engine: &mut Engine) -> Vec<Action> {
-    let mut out = Vec::new();
+    let mut out = auto_open(st, engine);
     for c in std::mem::take(&mut st.ext_commands) {
         match c {
             EditorCommand::OpenWindow(t) => {

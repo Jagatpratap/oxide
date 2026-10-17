@@ -1,0 +1,22 @@
+[package]
+name = "oxide_blenderkit"
+version = "1.0.0"
+edition = "2024"
+publish = false
+description = "BlenderKit asset browser for the Oxide editor"
+
+[dependencies]
+oxide = { workspace = true }
+
+# The crate links the engine dylib. Cargo only builds a dylib with `-C prefer-dynamic` when
+# it isn't one of the selected packages, so under `cargo test --workspace` (which selects
+# oxide_dylib) nothing can link it. The tests are a plain program, run explicitly:
+#   cargo test -p oxide_blenderkit --test package [-- --ignored]
+[lib]
+test = false
+doctest = false
+
+[[test]]
+name = "package"
+harness = false
+test = false

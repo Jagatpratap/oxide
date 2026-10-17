@@ -3087,6 +3087,7 @@ dependencies = [
 name = "oxide_assets"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "flate2",
  "gltf",
  "image",
@@ -3114,6 +3115,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxide_blenderkit"
+version = "1.0.0"
+dependencies = [
+ "oxide_dylib",
+]
+
+[[package]]
 name = "oxide_core"
 version = "0.1.0"
 dependencies = [
@@ -3138,6 +3146,7 @@ dependencies = [
 name = "oxide_dylib"
 version = "0.1.0"
 dependencies = [
+ "oxide_derive",
  "oxide_editor",
  "oxide_engine",
 ]

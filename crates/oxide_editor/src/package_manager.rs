@@ -26,6 +26,10 @@ pub struct PackageManager {
     job: Option<mpsc::Receiver<Outcome>>,
     loaded: bool,
     message: Option<(bool, String)>,
+    /// Showing the engine's built-in packages (Unity's "Unity Registry") instead of the
+    /// project's.
+    builtin_view: bool,
+    builtin: Vec<PackageInfo>,
 }
 
 enum Job {
@@ -63,6 +67,7 @@ pub fn window_ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
     let project = engine.world.resource::<AssetServer>().root.clone();
     if !pm.loaded {
         pm.loaded = true;
+        pm.builtin = packages::builtin_packages(&project);
         start(pm, project.clone(), Job::Refresh);
     }
     if let Some(rx) = &pm.job {
@@ -107,10 +112,20 @@ pub fn window_ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
                 }
             });
             if ui.button("⟳ Refresh").clicked() {
+                pm.builtin = packages::builtin_packages(&project);
                 job = Some(Job::Refresh);
             }
         });
-        ui.label("Packages: In Project");
+        egui::ComboBox::from_id_salt("package_view")
+            .selected_text(if pm.builtin_view {
+                "Packages: Built-in"
+            } else {
+                "Packages: In Project"
+            })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut pm.builtin_view, false, "In Project");
+                ui.selectable_value(&mut pm.builtin_view, true, "Built-in");
+            });
         if busy {
             ui.spinner();
         }
@@ -185,10 +200,15 @@ pub fn window_ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
         .min_size(200.0)
         .show(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
-                if pm.packages.is_empty() && !busy {
-                    ui.weak("No packages. Use + to install one, or put a folder with a package.json in Packages/.");
+                let list = if pm.builtin_view { &pm.builtin } else { &pm.packages };
+                if list.is_empty() && !busy {
+                    ui.weak(if pm.builtin_view {
+                        "The engine has no built-in packages."
+                    } else {
+                        "No packages. Use + to install one, or put a folder with a package.json in Packages/."
+                    });
                 }
-                for p in &pm.packages {
+                for p in list {
                     if !q.is_empty()
                         && !p.name.to_lowercase().contains(&q)
                         && !p.display_name.to_lowercase().contains(&q)
@@ -201,7 +221,10 @@ pub fn window_ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
                     let weak = ui.visuals().weak_text_color();
                     let font = egui::TextStyle::Body.resolve(ui.style());
                     text.append(&p.display_name, 0.0, egui::TextFormat::simple(font.clone(), color));
-                    text.append(&p.version, 8.0, egui::TextFormat::simple(font, weak));
+                    text.append(&p.version, 8.0, egui::TextFormat::simple(font.clone(), weak));
+                    if pm.builtin_view && pm.packages.iter().any(|i| i.name == p.name) {
+                        text.append("✔", 8.0, egui::TextFormat::simple(font, weak));
+                    }
                     let r = ui.add(egui::Button::selectable(sel, text).min_size(egui::vec2(ui.available_width(), 0.0)));
                     let r = if p.direct {
                         r
@@ -215,12 +238,18 @@ pub fn window_ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
             });
         });
     egui::CentralPanel::default().show(ui, |ui| {
-        let Some(p) = pm
+        let installed = pm
             .selected
             .as_ref()
             .and_then(|n| pm.packages.iter().find(|p| &p.name == n))
-            .cloned()
-        else {
+            .cloned();
+        let Some(p) = installed.clone().or_else(|| {
+            pm.selected
+                .as_ref()
+                .filter(|_| pm.builtin_view)
+                .and_then(|n| pm.builtin.iter().find(|p| &p.name == n))
+                .cloned()
+        }) else {
             ui.weak("Select a package.");
             return;
         };
@@ -297,6 +326,14 @@ pub fn window_ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
             }
             ui.add_space(10.0);
             ui.add_enabled_ui(!busy, |ui| match p.source {
+                _ if installed.is_none() => {
+                    if ui.button("Install").clicked() {
+                        job = Some(Job::Add(AddRequest::Name {
+                            name: p.name.clone(),
+                            version: None,
+                        }));
+                    }
+                }
                 PackageSource::Embedded => {
                     ui.weak(
                         "Embedded package (a folder in Packages/): delete the folder to remove it.",

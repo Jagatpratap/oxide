@@ -24,6 +24,9 @@ pub enum PackageSource {
     },
     /// A registry version (unpacked into the package cache).
     Registry { registry: String },
+    /// Shipped with the engine in its `packages/` folder (copied into the package cache,
+    /// like Unity's built-in packages).
+    Builtin,
 }
 
 impl PackageSource {
@@ -33,6 +36,7 @@ impl PackageSource {
             Self::Local(_) => "Local",
             Self::Git { .. } => "Git",
             Self::Registry { .. } => "Registry",
+            Self::Builtin => "Built-in",
         }
     }
 }
@@ -64,6 +68,10 @@ pub struct PackageInfo {
     pub direct: bool,
     /// A Rust crate in the package (`Cargo.toml` at its root): (crate name, folder).
     pub rust_crate: Option<(String, PathBuf)>,
+    /// `"oxide": { "editorExtensions": "path::to::register" }` in `package.json`: a function
+    /// in the package's crate (`fn(&mut EditorExtensions)`) that the project's Scripts
+    /// library calls to register the package's editor windows, menus, tools and drawers.
+    pub editor_extensions: Option<String>,
 }
 
 /// A scoped registry: packages whose names start with one of `scopes` come from `url`.
@@ -243,6 +251,11 @@ pub fn read_package(root: &Path, source: PackageSource) -> Result<PackageInfo, S
                     .collect()
             })
             .unwrap_or_default(),
+        editor_extensions: v
+            .pointer("/oxide/editorExtensions")
+            .and_then(Value::as_str)
+            .filter(|p| !p.is_empty() && rust_crate.is_some())
+            .map(str::to_owned),
         name,
         source,
         root: root.to_path_buf(),
@@ -548,6 +561,11 @@ pub fn resolve(project: &Path, fetch: &mut dyn Fetcher) -> (Vec<PackageInfo>, Ve
                 };
                 fetched.and_then(|()| read_package(&dir, PackageSource::Git { url, revision }))
             }
+            DependencySpec::Version(v) if builtin_root(project, &name).is_some() => {
+                let dir = cache_dir(project, &name, &v);
+                copy_builtin(project, &name, &dir)
+                    .and_then(|()| read_package(&dir, PackageSource::Builtin))
+            }
             DependencySpec::Version(v) => {
                 let dir = cache_dir(project, &name, &v);
                 let registry = manifest.registry_for(&name).unwrap_or_default();
@@ -596,6 +614,7 @@ fn write_lock(project: &Path, packages: &[PackageInfo]) -> Result<(), String> {
                 PackageSource::Local(_) => "local".into(),
                 PackageSource::Git { .. } => "git".into(),
                 PackageSource::Registry { .. } => "registry".into(),
+                PackageSource::Builtin => "builtin".into(),
             };
             let mut v = serde_json::json!({
                 "version": p.version,
@@ -631,10 +650,12 @@ pub fn sync_script_dependencies(project: &Path, packages: &[PackageInfo]) -> Res
     for p in packages {
         if let Some((name, dir)) = &p.rust_crate {
             let rel = pathdiff(dir, &project.join("Scripts"));
-            lines.push(format!(
-                "{name} = {{ path = \"{}\" }}",
-                rel.replace('\\', "/")
-            ));
+            let mut line = format!("{name} = {{ path = \"{}\" }}", rel.replace('\\', "/"));
+            // Read by `scripts!` (see `oxide_derive::package_editor_extensions`).
+            if let Some(f) = &p.editor_extensions {
+                line.push_str(&format!(" # oxide-editor-extensions: {f}"));
+            }
+            lines.push(line);
         }
     }
     // Remove the old block.
@@ -777,6 +798,17 @@ pub fn add(
             }
             (info?.name, url.trim_start_matches("git+").to_owned())
         }
+        AddRequest::Name { name, version } if builtin_root(project, name).is_some() => {
+            let info = read_package(
+                &builtin_root(project, name).unwrap_or_default(),
+                PackageSource::Builtin,
+            )?;
+            let v = match version {
+                Some(v) if !v.is_empty() => v.clone(),
+                _ => info.version,
+            };
+            (name.clone(), v)
+        }
         AddRequest::Name { name, version } => {
             let registry = m
                 .registry_for(name)
@@ -805,6 +837,72 @@ pub fn remove(project: &Path, name: &str) -> Result<bool, String> {
         m.save(project)?;
     }
     Ok(had)
+}
+
+/// The engine's `packages/` folder (from `Library/Build/EngineRoot.txt`, which the editor
+/// writes when it opens the project), where its built-in packages live.
+pub fn builtin_dir(project: &Path) -> Option<PathBuf> {
+    let root = std::fs::read_to_string(project.join("Library/Build/EngineRoot.txt")).ok()?;
+    let dir = PathBuf::from(root.trim()).join("packages");
+    dir.is_dir().then_some(dir)
+}
+
+/// A built-in package's folder in the engine.
+pub fn builtin_root(project: &Path, name: &str) -> Option<PathBuf> {
+    let dir = builtin_dir(project)?.join(name);
+    dir.join("package.json").is_file().then_some(dir)
+}
+
+/// The engine's built-in packages (what the Package Manager offers to install).
+pub fn builtin_packages(project: &Path) -> Vec<PackageInfo> {
+    let Some(dir) = builtin_dir(project) else {
+        return Vec::new();
+    };
+    let mut out: Vec<PackageInfo> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| read_package(&e.path(), PackageSource::Builtin).ok())
+        .collect();
+    out.sort_by(|a, b| a.display_name.cmp(&b.display_name));
+    out
+}
+
+/// Copies a built-in package into the package cache when the engine's copy changed (newest
+/// file time), so its crate builds as a member of the project's workspace.
+fn copy_builtin(project: &Path, name: &str, dir: &Path) -> Result<(), String> {
+    let src = builtin_root(project, name).ok_or_else(|| format!("{name}: not built in"))?;
+    fn newest(p: &Path) -> u128 {
+        let Ok(rd) = std::fs::read_dir(p) else {
+            return 0;
+        };
+        rd.flatten()
+            .filter(|e| e.file_name() != "target" && e.file_name() != ".git")
+            .map(|e| {
+                let p = e.path();
+                if p.is_dir() {
+                    newest(&p)
+                } else {
+                    e.metadata()
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map_or(0, |d| d.as_nanos())
+                }
+            })
+            .max()
+            .unwrap_or(0)
+    }
+    let stamp = newest(&src).to_string();
+    let stamp_file = dir.join(".oxide-builtin-stamp");
+    if dir.join("package.json").is_file()
+        && std::fs::read_to_string(&stamp_file).ok().as_deref() == Some(stamp.as_str())
+    {
+        return Ok(());
+    }
+    let _ = std::fs::remove_dir_all(dir);
+    copy_filtered(&src, dir, false)?;
+    std::fs::write(stamp_file, stamp).map_err(|e| e.to_string())
 }
 
 fn git_key(url: &str) -> String {
@@ -851,7 +949,11 @@ fn copy_filtered(src: &Path, dst: &Path, filter: bool) -> Result<(), String> {
         let to = dst.join(e.file_name());
         let name = e.file_name().to_string_lossy().into_owned();
         if p.is_dir() {
-            if filter && (name.ends_with('~') || name.starts_with('.') || name == "target") {
+            // Build output and git data never travel with a package.
+            if name == "target"
+                || name == ".git"
+                || (filter && (name.ends_with('~') || name.starts_with('.')))
+            {
                 continue;
             }
             copy_filtered(&p, &to, filter)?;
@@ -1081,5 +1183,68 @@ mod tests {
             m.registry_for("com.other").as_deref(),
             Some("https://default")
         );
+    }
+
+    #[test]
+    fn builtin_packages_come_from_the_engine_and_register_extensions() {
+        let base = std::env::temp_dir().join(format!("oxide_builtin_pkg_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let engine = base.join("engine");
+        let project = base.join("project");
+        let pkg = engine.join("packages/com.oxide.thing");
+        write(
+            &pkg.join("package.json"),
+            r#"{"name":"com.oxide.thing","version":"1.2.0","displayName":"Thing",
+               "oxide":{"editorExtensions":"editor::register"}}"#,
+        );
+        write(
+            &pkg.join("Cargo.toml"),
+            "[package]\nname = \"oxide_thing\"\n",
+        );
+        write(&pkg.join("target/junk"), "build output");
+        write(
+            &project.join("Library/Build/EngineRoot.txt"),
+            &engine.display().to_string(),
+        );
+        write(
+            &project.join("Packages/manifest.json"),
+            r#"{"dependencies":{}}"#,
+        );
+        write(
+            &project.join("Scripts/Cargo.toml"),
+            "[package]\nname = \"scripts\"\n\n[dependencies]\n",
+        );
+        assert_eq!(builtin_packages(&project).len(), 1);
+        // Installing by name finds it without a registry.
+        let name = add(
+            &project,
+            &AddRequest::Name {
+                name: "com.oxide.thing".into(),
+                version: None,
+            },
+            &mut GitFetcher,
+        )
+        .unwrap();
+        assert_eq!(name, "com.oxide.thing");
+        let (list, errors) = resolve(&project, &mut GitFetcher);
+        assert!(errors.is_empty(), "{errors:?}");
+        let p = &list[0];
+        assert_eq!(p.source, PackageSource::Builtin);
+        assert_eq!(p.editor_extensions.as_deref(), Some("editor::register"));
+        // Copied inside the project (so its crate is a workspace member), without target/.
+        assert!(p.root.starts_with(project.join("Library/PackageCache")));
+        assert!(!p.root.join("target").exists());
+        sync_script_dependencies(&project, &list).unwrap();
+        let cargo = std::fs::read_to_string(project.join("Scripts/Cargo.toml")).unwrap();
+        assert!(
+            cargo.contains("oxide_thing = { path = \"../Library/PackageCache/com.oxide.thing@1.2.0\" } # oxide-editor-extensions: editor::register"),
+            "{cargo}"
+        );
+        // An engine-side change is copied again on the next resolve.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        write(&pkg.join("src/lib.rs"), "// new");
+        let (list, _) = resolve(&project, &mut GitFetcher);
+        assert!(list[0].root.join("src/lib.rs").is_file());
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
