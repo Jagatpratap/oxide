@@ -479,6 +479,16 @@ runner, native plugins.
   variants, Gradient/Matrix types, sampler states, Shader Graph-driven decals/sprites/terrain, Convert to Sub
   Graph
   ([Shader Graph](https://docs.unity3d.com/Packages/com.unity.shadergraph@17.0/manual/index.html))
+- ◐ ProBuilder: `ProBuilder Mesh` component (n-gon faces over shared positions, material slots, smoothing groups,
+  Auto UVs, vertex colours) rebuilt into the MeshFilter/MeshCollider whenever it changes and saved with the
+  scene; Shape tool with Unity's shapes (Cube, Plane, Cylinder, Cone, Prism, Stairs, Arch, Pipe, Torus, Sphere,
+  Door) whose parameters stay editable until the geometry is edited; ProBuilderize; Object/Vertex/Edge/Face
+  modes with Scene view picking (click, Shift to add), highlights and a move handle; Extrude, Inset, Subdivide,
+  Merge, Triangulate, Flip Normals, Delete, Detach faces, Bridge Edges, Weld/Collapse Vertices, Center Pivot,
+  Apply Material, Smoothing Group, Vertex Color, Export OBJ; undo; ProBuilder window and Scene view overlay;
+  `probuilder` MCP tool. Not yet: UV Editor (manual UVs), Poly Shape / Bezier Shape, Boolean, edge loops and
+  rings, rotate/scale handles for elements, Lightmap UV generation
+  ([ProBuilder](https://docs.unity3d.com/Packages/com.unity.probuilder@6.0/manual/index.html))
 - ◐ Editor extension API: custom inspectors ☑ (`CustomEditor` + `InspectorGui`); custom windows, property drawers,
   overlays, tools, menu items ☐
   ([Extending the Editor](https://docs.unity3d.com/Manual/extending-the-editor.html),

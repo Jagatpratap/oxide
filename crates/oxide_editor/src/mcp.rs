@@ -304,6 +304,7 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
             crate::Tab::VfxGraph,
             crate::Tab::UiBuilder,
             crate::Tab::LocalizationTables,
+            crate::Tab::ProBuilder,
         ])
         .map(|t| t.title())
         .collect();
@@ -341,6 +342,7 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
                     crate::Tab::VfxGraph,
                     crate::Tab::UiBuilder,
                     crate::Tab::LocalizationTables,
+                    crate::Tab::ProBuilder,
                 ]);
                 let Some(tab) = all
                     .into_iter()
@@ -679,6 +681,40 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
                 Ok(j) => ToolResult::json(j),
                 Err(err) => ToolResult::error(err),
             }
+        },
+    );
+
+    tool(
+        s,
+        bus,
+        ToolDef::new(
+            "probuilder",
+            "ProBuilder",
+            "Unity ProBuilder modeling. `create` {shape: Cube|Plane|Cylinder|Cone|Prism|Stairs|Arch|Pipe|Torus|Sphere|Door, \
+             size?: [x,y,z], sides?, segments?/steps?, thickness?, angle?, subdivisions?, smooth?, position?} makes a \
+             shape object; `object` selects one; `probuilderize: true` converts the selected mesh object. \
+             `operation` on the selected ProBuilder object: extrude|inset|subdivide|merge|delete|flip|triangulate \
+             (`faces` [ids], all if omitted; `amount`), weld|collapse (`vertices`), translate (`delta`, `faces` or \
+             `vertices`), smoothing (`amount` = group), material (`material` path). `mode` Object|Vertex|Edge|Face \
+             with `faces`/`vertices` sets the Scene view selection. Returns faces (vertices, normal, center, \
+             material) and counts.",
+            schema(
+                json!({
+                    "create": { "type": "object" }, "object": {}, "probuilderize": { "type": "boolean" },
+                    "operation": { "type": "string" }, "faces": { "type": "array" }, "vertices": { "type": "array" },
+                    "amount": { "type": "number" }, "delta": { "type": "array" }, "material": { "type": "string" },
+                    "mode": { "type": "string" }
+                }),
+                &[],
+            ),
+        ),
+        |args, e| {
+            with_editor(e, |ed, e| {
+                match crate::probuilder_window::mcp(&mut ed.st, e, args) {
+                    Ok(j) => ToolResult::json(j),
+                    Err(err) => ToolResult::error(err),
+                }
+            })
         },
     );
 

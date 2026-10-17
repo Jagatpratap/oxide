@@ -106,6 +106,7 @@ impl Plugin for UiPlugin {
         systems.push(oxide_ui::install(world));
         systems.push(oxide_uitk::install(world));
         systems.push(oxide_localization::install(world));
+        systems.push(oxide_probuilder::install(world));
         oxide_text::install(world);
     }
 }
@@ -238,6 +239,7 @@ pub mod prelude {
     pub use oxide_particles::{
         BlendMode, ParticleShape, ParticleSystem, ParticlesExt, SimulationSpace,
     };
+    pub use oxide_probuilder::{PbMesh, ProBuilderMesh, ShapeParams, ShapeType, create_shape};
     pub use oxide_terrain::{Terrain, create_terrain, sample_height, simple_tree_mesh};
     pub use oxide_text::{
         FontAsset, FontStyles, HorizontalAlignment, TextMaterial, TextMeshPro, TextOverflowModes,

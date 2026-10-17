@@ -125,6 +125,12 @@ fn create_items(prefix: &str) -> Vec<MenuItem> {
         &format!("{prefix}Effects/Particle System"),
         Action::Create(Create::ParticleSystem),
     ));
+    for s in oxide_probuilder::ShapeType::ALL {
+        v.push(item(
+            &format!("{prefix}ProBuilder/{}", s.name()),
+            Action::Create(Create::ProBuilderShape(s)),
+        ));
+    }
     v.push(item(
         &format!("{prefix}Visual Effects/Visual Effect"),
         Action::Create(Create::VisualEffect),
@@ -259,6 +265,10 @@ pub fn menu_items(world: &World, keymap: &Keymap) -> Vec<MenuItem> {
     v.push(item(
         "Window/Asset Management/Localization Tables",
         Action::OpenTab(Tab::LocalizationTables),
+    ));
+    v.push(item(
+        "Tools/ProBuilder/ProBuilder Window",
+        Action::OpenTab(Tab::ProBuilder),
     ));
     v.push(item(
         "Window/Rendering/Lighting/Generate Lighting",

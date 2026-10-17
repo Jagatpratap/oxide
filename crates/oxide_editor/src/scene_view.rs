@@ -200,6 +200,11 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
     if crate::tile_palette::scene_paint(st, engine, ui, &resp, &proj, &painter, palette_open) {
         return;
     }
+    // ProBuilder element editing (Vertex / Edge / Face modes).
+    crate::probuilder_window::scene_overlay(st, &engine.world, ui, rect);
+    if crate::probuilder_window::scene_edit(st, engine, ui, &resp, &proj, &painter) {
+        return;
+    }
     let over_handle = handles(st, engine, ui, &resp, &proj, &painter);
 
     // Click to select (Shift/Cmd adds or removes).

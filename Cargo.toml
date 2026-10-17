@@ -29,6 +29,7 @@ oxide_shadergraph = { path = "crates/oxide_shadergraph" }
 oxide_vfx = { path = "crates/oxide_vfx" }
 oxide_uitk = { path = "crates/oxide_uitk" }
 oxide_localization = { path = "crates/oxide_localization" }
+oxide_probuilder = { path = "crates/oxide_probuilder" }
 oxide_lightmapper = { path = "crates/oxide_lightmapper" }
 oxide_particles = { path = "crates/oxide_particles" }
 oxide_navigation = { path = "crates/oxide_navigation" }

@@ -30,6 +30,7 @@ mod node_canvas;
 pub mod player_build;
 pub mod prefs;
 mod previews;
+mod probuilder_window;
 mod project;
 pub mod project_files;
 mod scene_view;
@@ -86,6 +87,7 @@ pub enum Tab {
     VfxGraph,
     UiBuilder,
     LocalizationTables,
+    ProBuilder,
 }
 
 impl Tab {
@@ -124,6 +126,7 @@ impl Tab {
             Tab::VfxGraph => "VFX Graph",
             Tab::UiBuilder => "UI Builder",
             Tab::LocalizationTables => "Localization Tables",
+            Tab::ProBuilder => "ProBuilder",
         }
     }
 }
@@ -203,6 +206,8 @@ pub enum Create {
     UIDocument,
     /// GameObject → Effects → Particle System.
     ParticleSystem,
+    /// GameObject → ProBuilder → (shape).
+    ProBuilderShape(oxide_probuilder::ShapeType),
 }
 
 impl Create {
@@ -231,6 +236,7 @@ impl Create {
             Create::VisualEffect => "Visual Effect",
             Create::UIDocument => "UIDocument",
             Create::ParticleSystem => "Particle System",
+            Create::ProBuilderShape(s) => s.name(),
         }
     }
 }
@@ -371,6 +377,7 @@ pub struct EditorState {
     pub(crate) vfx_graph: vfx_graph_window::VfxGraphWindow,
     pub(crate) ui_builder: ui_builder_window::UiBuilderWindow,
     pub(crate) localization: localization_window::LocalizationWindow,
+    pub(crate) probuilder: probuilder_window::ProBuilderTool,
     mask: anim_inspectors::MaskState,
     audio_mixer: audio_mixer_window::AudioMixerWindow,
     sprite_editor: sprite_editor::SpriteEditorWindow,
@@ -438,6 +445,7 @@ impl EditorState {
             vfx_graph: Default::default(),
             ui_builder: Default::default(),
             localization: Default::default(),
+            probuilder: Default::default(),
             mask: Default::default(),
             audio_mixer: Default::default(),
             sprite_editor: Default::default(),
@@ -649,6 +657,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::VfxGraph => vfx_graph_window::window_ui(self.st, self.engine, ui),
             Tab::UiBuilder => ui_builder_window::window_ui(self.st, self.engine, ui),
             Tab::LocalizationTables => localization_window::window_ui(self.st, self.engine, ui),
+            Tab::ProBuilder => probuilder_window::window_ui(self.st, self.engine, ui),
         }
     }
 
@@ -1692,6 +1701,9 @@ fn create(w: &mut World, kind: Create, active: Option<GameObjectId>) -> GameObje
             let id = w.create("Visual Effect");
             w.add_component(id, oxide_vfx::VisualEffect::default());
             id
+        }
+        Create::ProBuilderShape(s) => {
+            oxide_probuilder::create_shape(w, oxide_probuilder::ShapeParams::new(s))
         }
         Create::ParticleSystem => {
             let id = w.create("Particle System");

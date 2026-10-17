@@ -2625,6 +2625,7 @@ dependencies = [
  "oxide_math",
  "oxide_mcp",
  "oxide_physics",
+ "oxide_probuilder",
  "oxide_render",
  "oxide_scene",
  "oxide_shadergraph",
@@ -2659,6 +2660,7 @@ dependencies = [
  "oxide_network",
  "oxide_particles",
  "oxide_physics",
+ "oxide_probuilder",
  "oxide_render",
  "oxide_scene",
  "oxide_shadergraph",
@@ -2797,6 +2799,17 @@ dependencies = [
  "oxide_engine",
  "serde",
  "serde_yaml_ng",
+]
+
+[[package]]
+name = "oxide_probuilder"
+version = "0.1.0"
+dependencies = [
+ "oxide_assets",
+ "oxide_core",
+ "oxide_math",
+ "oxide_physics",
+ "oxide_scene",
 ]
 
 [[package]]
