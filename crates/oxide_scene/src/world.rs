@@ -1730,6 +1730,7 @@ impl World {
                 }
             }
         }
+        self.sort_by_execution_order(&mut todo);
         for (id, cid) in todo {
             if let Some(e) = self.entry_mut(id, cid) {
                 if e.started {
@@ -1740,6 +1741,24 @@ impl World {
             self.call(id, cid, |c, ctx| c.start(ctx));
         }
         self.flush_destroyed();
+    }
+
+    /// Sorts `(object, component)` pairs by Script Execution Order (stable: equal orders
+    /// keep their order).
+    fn sort_by_execution_order(&self, todo: &mut [(GameObjectId, ComponentId)]) {
+        let orders = self.try_resource::<crate::execution_order::ScriptExecutionOrder>();
+        let order = |&(id, cid): &(GameObjectId, ComponentId)| {
+            self.entry(id, cid)
+                .and_then(|e| {
+                    e.comp
+                        .as_deref()
+                        .map(|c| (e.type_name, c.default_execution_order()))
+                })
+                .map_or(0, |(name, default)| {
+                    orders.map_or(default, |o| o.order_of(name, default))
+                })
+        };
+        todo.sort_by_cached_key(order);
     }
 
     /// Runs one message on every started, enabled component of every active object.
@@ -1758,6 +1777,7 @@ impl World {
                 }
             }
         }
+        self.sort_by_execution_order(&mut todo);
         for (id, cid) in todo {
             // Re-check: an earlier script may have disabled or deactivated this one.
             let ok = self.get(id).is_some_and(|o| o.active_in_hierarchy)
@@ -1893,15 +1913,19 @@ impl World {
         if let Some(c) = self.try_resource_mut::<crate::coroutines::Coroutines>() {
             c.clear();
         }
+        // Awake + OnEnable in Script Execution Order (then scene order).
+        let mut todo = Vec::new();
         for id in self.hierarchy_order() {
             if !self.get(id).is_some_and(|o| o.active_in_hierarchy) {
                 continue;
             }
-            let cids: Vec<ComponentId> = self
-                .get(id)
-                .map(|o| o.components.iter().map(|c| c.id).collect())
-                .unwrap_or_default();
-            for cid in cids {
+            if let Some(o) = self.get(id) {
+                todo.extend(o.components.iter().map(|c| (id, c.id)));
+            }
+        }
+        self.sort_by_execution_order(&mut todo);
+        for (id, cid) in todo {
+            if self.get(id).is_some_and(|o| o.active_in_hierarchy) {
                 self.activate_component(id, cid);
             }
         }

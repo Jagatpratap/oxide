@@ -170,10 +170,12 @@ pub struct ProjectSettings {
     pub preset_manager: oxide_assets::preset::PresetManager,
     /// Default render pipeline (Unity's Graphics Settings).
     pub graphics: oxide_scene::GraphicsSettings,
+    /// Script Execution Order.
+    pub script_execution_order: oxide_scene::ScriptExecutionOrder,
 }
 
 /// The pages and their files, for MCP and error messages.
-pub const SECTIONS: [(&str, &str); 10] = [
+pub const SECTIONS: [(&str, &str); 11] = [
     ("tags_and_layers", "TagManager.yaml"),
     ("time", "TimeManager.yaml"),
     ("physics", "DynamicsManager.yaml"),
@@ -184,6 +186,7 @@ pub const SECTIONS: [(&str, &str); 10] = [
     ("localization", "LocalizationSettings.yaml"),
     ("preset_manager", "PresetManager.yaml"),
     ("graphics", "GraphicsSettings.yaml"),
+    ("script_execution_order", "ScriptExecutionOrder.yaml"),
 ];
 
 fn read<T: DeserializeOwned + Default>(dir: &Path, file: &str, warnings: &mut Vec<String>) -> T {
@@ -214,6 +217,7 @@ impl ProjectSettings {
             localization: read(&dir, SECTIONS[7].1, &mut w),
             preset_manager: read(&dir, SECTIONS[8].1, &mut w),
             graphics: read(&dir, SECTIONS[9].1, &mut w),
+            script_execution_order: read(&dir, SECTIONS[10].1, &mut w),
         };
         (s, w)
     }
@@ -233,6 +237,7 @@ impl ProjectSettings {
             serde_yaml_ng::to_string(&self.localization),
             serde_yaml_ng::to_string(&self.preset_manager),
             serde_yaml_ng::to_string(&self.graphics),
+            serde_yaml_ng::to_string(&self.script_execution_order),
         ];
         for ((_, file), text) in SECTIONS.iter().zip(texts) {
             let text = text.map_err(|e| e.to_string())?;
@@ -298,6 +303,10 @@ impl ProjectSettings {
                 .unwrap_or_default(),
             graphics: world
                 .try_resource::<oxide_scene::GraphicsSettings>()
+                .cloned()
+                .unwrap_or_default(),
+            script_execution_order: world
+                .try_resource::<oxide_scene::ScriptExecutionOrder>()
                 .cloned()
                 .unwrap_or_default(),
         }
@@ -371,6 +380,7 @@ impl ProjectSettings {
         world.resources.insert(loc);
         world.resources.insert(self.preset_manager.clone());
         world.resources.insert(self.graphics.clone());
+        world.resources.insert(self.script_execution_order.clone());
         // The pipeline assets in use are loaded now so rendering can read them.
         let pipelines: Vec<_> = self
             .graphics
@@ -409,6 +419,7 @@ impl ProjectSettings {
                 "localization" => serde_json::to_value(&self.localization),
                 "preset_manager" => serde_json::to_value(&self.preset_manager),
                 "graphics" => serde_json::to_value(&self.graphics),
+                "script_execution_order" => serde_json::to_value(&self.script_execution_order),
                 _ => return None,
             }
             .unwrap_or_default(),
@@ -442,6 +453,7 @@ impl ProjectSettings {
             "localization" => self.localization = parse(current)?,
             "preset_manager" => self.preset_manager = parse(current)?,
             "graphics" => self.graphics = parse(current)?,
+            "script_execution_order" => self.script_execution_order = parse(current)?,
             _ => self.player = parse(current)?,
         }
         Ok(())
@@ -475,7 +487,8 @@ pub fn register(s: &mut oxide_mcp::McpServer, bus: &std::sync::Arc<crate::bus::B
             "project_settings",
             "Project Settings",
             "Unity Project Settings, saved in ProjectSettings/*.yaml. Without `section`: every page. With `section` \
-             (tags_and_layers, time, physics, quality, input, player): that page. With `values`: merges those keys \
+             (tags_and_layers, time, physics, quality, input, player, navigation, localization, preset_manager, \
+             graphics, script_execution_order {scripts: [{script, order}]}): that page. With `values`: merges those keys \
              into the page (e.g. section=time, values={\"fixed_timestep\": 0.01}; section=quality, \
              values={\"current\": 2}), applies it to the running engine and saves it. Physics \
              `layer_collision_matrix` is 32 rows of bits; input axes/buttons are replaced as whole lists.",

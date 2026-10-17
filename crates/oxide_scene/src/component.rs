@@ -87,6 +87,12 @@ pub trait Component: Reflect + ComponentClone {
 
     fn on_context_menu(&mut self, ctx: &mut Ctx, item: &str) {}
 
+    /// Where this script runs among others (Unity `[DefaultExecutionOrder(n)]`): lower first.
+    /// The Project Settings' Script Execution Order overrides it.
+    fn default_execution_order(&self) -> i32 {
+        0
+    }
+
     /// Runs `Update` and friends in Edit mode too (Unity `[ExecuteAlways]`).
     fn execute_always(&self) -> bool {
         false

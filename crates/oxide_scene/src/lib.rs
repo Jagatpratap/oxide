@@ -13,6 +13,7 @@ pub mod component;
 pub mod constraints;
 pub mod coroutines;
 pub mod ctx;
+pub mod execution_order;
 pub mod id;
 pub mod lens_flare;
 pub mod player_input;
@@ -40,6 +41,7 @@ pub use constraints::{
 };
 pub use coroutines::{Co, CoroutineId, Coroutines};
 pub use ctx::{Ctx, TransformRef};
+pub use execution_order::{ScriptExecutionOrder, ScriptOrder};
 pub use id::{ComponentId, GameObjectId};
 pub use lens_flare::{
     LensFlareBlendMode, LensFlareComponent, LensFlareData, LensFlareDataElement,

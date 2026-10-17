@@ -460,7 +460,10 @@ from the fixed edge and each object along its matching local axis).
   `stop_coroutine`, `stop_all_coroutines`; stopped when the object is deactivated or destroyed and on script
   reload; panics logged like exceptions
   ([Coroutines](https://docs.unity3d.com/Manual/coroutines-section.html))
-- ☐ Execution order control
+- ☑ Execution order control: Project Settings → Script Execution Order (list with orders around Default Time,
+  `ProjectSettings/ScriptExecutionOrder.yaml`, MCP `project_settings` section `script_execution_order`) and
+  `default_execution_order()` (Unity `[DefaultExecutionOrder]`); applies to Awake/OnEnable, Start, FixedUpdate,
+  Update and LateUpdate, scene order within equal orders
   ([Control when your code updates](https://docs.unity3d.com/Manual/managing-update-order.html))
 - ☐ Job system + parallel iteration
   ([Distribute work across threads](https://docs.unity3d.com/Manual/programming-distribute-work-threads.html))
@@ -478,8 +481,7 @@ crate is compiled in the background and hot-reloaded in Edit and Play mode; comp
 objects and physics state survive, scripts get OnDisable/OnEnable across the reload, compile
 errors go to the Console, panics are caught and logged, and scripts that fail to load keep
 their data as Missing Script. The engine is one shared library (`oxide_dylib`) that the
-project's editor and its Scripts both link. Not yet: execution order, jobs, test runner, native
-plugins.
+project's editor and its Scripts both link. Not yet: jobs, test runner, native plugins.
 
 ### P7 — Physics, Input, 2D
 - ◐ 3D: Rigidbody, Box/Sphere/Capsule/Mesh colliders, triggers, layers collision matrix, raycasts/overlaps, physics materials, joints (Fixed/Hinge/Character ☑), CharacterController, articulations, ragdoll wizard ☑, cloth (later)

@@ -25,9 +25,10 @@ pub enum Page {
     Localization,
     PresetManager,
     Graphics,
+    ScriptExecutionOrder,
 }
 
-pub const PAGES: [(Page, &str); 9] = [
+pub const PAGES: [(Page, &str); 10] = [
     (Page::Graphics, "Graphics"),
     (Page::Input, "Input Manager"),
     (Page::Localization, "Localization"),
@@ -35,6 +36,7 @@ pub const PAGES: [(Page, &str); 9] = [
     (Page::Player, "Player"),
     (Page::PresetManager, "Preset Manager"),
     (Page::Quality, "Quality"),
+    (Page::ScriptExecutionOrder, "Script Execution Order"),
     (Page::TagsAndLayers, "Tags and Layers"),
     (Page::Time, "Time"),
 ];
@@ -122,6 +124,7 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
         Page::Localization => crate::localization_window::settings_page(ui, &mut s.localization),
         Page::PresetManager => preset_manager(ui, w, &mut s.preset_manager),
         Page::Graphics => graphics(ui, w, &mut s.graphics),
+        Page::ScriptExecutionOrder => script_execution_order(ui, w, &mut s.script_execution_order),
     });
     ss.page = page;
     if *build != build_before
@@ -834,6 +837,82 @@ fn preset_manager(
 
 /// Unity's Graphics settings: the default Render Pipeline Asset (Quality levels can override
 /// it on the Quality page).
+/// Unity's Script Execution Order page: scripts listed here run before (negative) or after
+/// (positive) the Default Time (0), in that order.
+fn script_execution_order(
+    ui: &mut egui::Ui,
+    w: &oxide_scene::World,
+    o: &mut oxide_scene::ScriptExecutionOrder,
+) {
+    ui.weak(
+        "Scripts with a lower number get Awake, OnEnable, Start and their updates first. \
+         Scripts not listed run at Default Time (0, or their own default_execution_order).",
+    );
+    ui.add_space(6.0);
+    let mut remove = None;
+    let mut changed = false;
+    let mut listed: Vec<_> = o.scripts.clone();
+    listed.sort_by_key(|s| s.order);
+    let default_shown = !listed.iter().any(|s| s.order == 0);
+    egui::Grid::new("script-order")
+        .num_columns(3)
+        .striped(true)
+        .spacing([12.0, 4.0])
+        .show(ui, |ui| {
+            let mut default_drawn = false;
+            for s in &listed {
+                if default_shown && !default_drawn && s.order > 0 {
+                    ui.weak("Default Time");
+                    ui.label("");
+                    ui.label("");
+                    ui.end_row();
+                    default_drawn = true;
+                }
+                ui.label(&s.script);
+                let mut v = s.order;
+                if ui.add(egui::DragValue::new(&mut v).speed(10)).changed() {
+                    if let Some(e) = o.scripts.iter_mut().find(|e| e.script == s.script) {
+                        e.order = v;
+                    }
+                    changed = true;
+                }
+                if ui.small_button("−").on_hover_text("Remove").clicked() {
+                    remove = Some(s.script.clone());
+                }
+                ui.end_row();
+            }
+            if default_shown && !default_drawn {
+                ui.weak("Default Time");
+                ui.end_row();
+            }
+        });
+    if let Some(r) = remove {
+        o.remove(&r);
+    } else if changed {
+        o.scripts.sort_by_key(|s| s.order);
+    }
+    ui.add_space(6.0);
+    let mut names: Vec<&str> = w
+        .registry
+        .iter()
+        .map(|r| r.info.name)
+        .filter(|n| !o.scripts.iter().any(|s| s.script == *n))
+        .collect();
+    names.sort_unstable();
+    egui::ComboBox::from_id_salt("script-order-add")
+        .selected_text("+ Add script…")
+        .width(220.0)
+        .show_ui(ui, |ui| {
+            for n in names {
+                if ui.selectable_label(false, n).clicked() {
+                    // Unity adds new entries after the last one, 100 apart.
+                    let next = o.scripts.iter().map(|s| s.order).max().unwrap_or(0).max(0) + 100;
+                    o.set(n, next);
+                }
+            }
+        });
+}
+
 fn graphics(ui: &mut egui::Ui, w: &oxide_scene::World, g: &mut oxide_scene::GraphicsSettings) {
     let assets = w.resource::<oxide_assets::AssetServer>();
     let pipelines = assets.paths_of_type("UniversalRenderPipelineAsset");
