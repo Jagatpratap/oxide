@@ -19,6 +19,15 @@ pub enum Ty {
     Dyn,
     /// A VFX Graph flow connection between contexts (connects only to Flow).
     Flow,
+    /// Unity's Matrix 2x2 / 3x3 / 4x4.
+    M2,
+    M3,
+    M4,
+    /// Unity's Gradient: compiled inline; its expression is a template with `@T@` for the
+    /// time Sample Gradient reads it at.
+    Gradient,
+    /// Unity's Sampler State: a compile-time description (`S:<filter>:<wrap>`).
+    Sampler,
 }
 
 impl Ty {
@@ -49,7 +58,10 @@ impl Ty {
             Ty::F4 => "vec4f",
             Ty::Bool => "bool",
             Ty::Tex => "texture_2d<f32>",
-            Ty::Flow => "",
+            Ty::M2 => "mat2x2f",
+            Ty::M3 => "mat3x3f",
+            Ty::M4 => "mat4x4f",
+            Ty::Flow | Ty::Gradient | Ty::Sampler => "",
         }
     }
 
@@ -64,12 +76,120 @@ impl Ty {
             Ty::Tex => "Texture 2D",
             Ty::Flow => "Flow",
             Ty::Dyn => "Dynamic Vector",
+            Ty::M2 => "Matrix 2",
+            Ty::M3 => "Matrix 3",
+            Ty::M4 => "Matrix 4",
+            Ty::Gradient => "Gradient",
+            Ty::Sampler => "Sampler State",
         }
     }
 
     pub fn is_vector(self) -> bool {
         matches!(self, Ty::F1 | Ty::F2 | Ty::F3 | Ty::F4 | Ty::Dyn)
     }
+
+    pub fn is_matrix(self) -> bool {
+        matches!(self, Ty::M2 | Ty::M3 | Ty::M4)
+    }
+
+    /// Values that aren't stored in WGSL `let`s (resources and compile-time descriptions).
+    pub fn is_opaque(self) -> bool {
+        matches!(self, Ty::Tex | Ty::Gradient | Ty::Sampler | Ty::Flow)
+    }
+
+    /// A matrix's size (2, 3 or 4).
+    pub fn matrix_size(self) -> u32 {
+        match self {
+            Ty::M2 => 2,
+            Ty::M3 => 3,
+            _ => 4,
+        }
+    }
+
+    pub fn matrix(size: u32) -> Ty {
+        match size {
+            2 => Ty::M2,
+            3 => Ty::M3,
+            _ => Ty::M4,
+        }
+    }
+}
+
+/// The default gradient (white to black, Unity's new Gradient) as a template.
+pub const DEFAULT_GRADIENT: &str =
+    "mix(vec4f(1.0), vec4f(0.0, 0.0, 0.0, 1.0), clamp(@T@, 0.0, 1.0))";
+/// The material's own sampler.
+pub const DEFAULT_SAMPLER: &str = "S:Default:Default";
+
+/// An identity matrix of `size`.
+pub fn identity(size: u32) -> String {
+    let cols: Vec<String> = (0..size)
+        .map(|c| {
+            let v: Vec<&str> = (0..size)
+                .map(|r| if r == c { "1.0" } else { "0.0" })
+                .collect();
+            format!("vec{size}f({})", v.join(", "))
+        })
+        .collect();
+    format!("mat{size}x{size}f({})", cols.join(", "))
+}
+
+/// Unity's gradient keys: colors (r, g, b, time) and alphas (alpha, time), each sorted by time.
+/// `fixed` is Unity's Fixed mode (steps instead of blends). Returns a `@T@` template.
+pub fn gradient_template(colors: &[[f32; 4]], alphas: &[[f32; 2]], fixed: bool) -> String {
+    let blend = |prev_t: f32, t: f32| {
+        let pos = format!(
+            "clamp((@T@ - {}) / {}, 0.0, 1.0)",
+            lit(prev_t),
+            lit((t - prev_t).max(1e-5))
+        );
+        if fixed {
+            format!("step(0.01, {pos})")
+        } else {
+            pos
+        }
+    };
+    let mut rgb = match colors.first() {
+        Some(c) => format!("vec3f({}, {}, {})", lit(c[0]), lit(c[1]), lit(c[2])),
+        None => "vec3f(1.0)".into(),
+    };
+    for w in colors.windows(2) {
+        rgb = format!(
+            "mix({rgb}, vec3f({}, {}, {}), {})",
+            lit(w[1][0]),
+            lit(w[1][1]),
+            lit(w[1][2]),
+            blend(w[0][3], w[1][3])
+        );
+    }
+    let mut a = alphas.first().map_or("1.0".into(), |x| lit(x[0]));
+    for w in alphas.windows(2) {
+        a = format!("mix({a}, {}, {})", lit(w[1][0]), blend(w[0][1], w[1][1]));
+    }
+    format!("vec4f({rgb}, {a})")
+}
+
+/// Parses Gradient node keys: `r,g,b@t;...` (colors) or `a@t;...` (alphas), sorted by time.
+pub fn parse_keys<const N: usize>(text: &str) -> Vec<[f32; N]> {
+    let mut keys: Vec<[f32; N]> = text
+        .split(';')
+        .filter_map(|k| {
+            let (vals, t) = k.trim().split_once('@')?;
+            let nums: Vec<f32> = vals
+                .split(',')
+                .filter_map(|x| x.trim().parse().ok())
+                .collect();
+            let t: f32 = t.trim().parse().ok()?;
+            let mut out = [0.0; N];
+            for (i, v) in nums.iter().take(N - 1).enumerate() {
+                out[i] = *v;
+            }
+            out[N - 1] = t.clamp(0.0, 1.0);
+            (nums.len() == N - 1).then_some(out)
+        })
+        .collect();
+    keys.sort_by(|a, b| a[N - 1].total_cmp(&b[N - 1]));
+    keys
 }
 
 /// What an unconnected input reads when it has no inline value (Unity's slot bindings:
@@ -277,6 +397,44 @@ impl<'a> Call<'a> {
         }
     }
 
+    /// Samples a texture through a Sampler State (`S:<filter>:<wrap>`): the wrap mode is
+    /// applied to the UV and Point filtering snaps to texel centres (keeping the UV's own
+    /// derivatives for mip selection), so no extra sampler binding is needed.
+    pub fn sample_with(&mut self, tex: &str, uv: &str, sampler: &str, lod: Option<&str>) -> String {
+        let mut parts = sampler.split(':').skip(1);
+        let (filter, wrap) = (
+            parts.next().unwrap_or("Default"),
+            parts.next().unwrap_or("Default"),
+        );
+        if filter == "Default" && wrap == "Default" {
+            return match lod {
+                Some(l) => format!("textureSampleLevel({tex}, mat_sampler, sample_uv({uv}), {l})"),
+                None => self.sample(tex, uv),
+            };
+        }
+        let base = self.temp("vec2f", format!("sample_uv({uv})"));
+        let wrapped = match wrap {
+            "Clamp" => format!("clamp({base}, vec2f(0.0), vec2f(1.0))"),
+            "Mirror" => format!("(vec2f(1.0) - abs(fract({base} * 0.5) * 2.0 - vec2f(1.0)))"),
+            "MirrorOnce" => format!("clamp(abs({base}), vec2f(0.0), vec2f(1.0))"),
+            "Repeat" => format!("fract({base})"),
+            _ => base.clone(),
+        };
+        let mut st = self.temp("vec2f", wrapped);
+        if filter == "Point" {
+            let size = self.temp("vec2f", format!("vec2f(textureDimensions({tex}))"));
+            st = self.temp("vec2f", format!("(floor({st} * {size}) + 0.5) / {size}"));
+        }
+        match lod {
+            Some(l) => format!("textureSampleLevel({tex}, mat_sampler, {st}, {l})"),
+            None if !self.fragment => format!("textureSampleLevel({tex}, mat_sampler, {st}, 0.0)"),
+            // Gradients of the unwrapped UV keep mip selection smooth across seams.
+            None => {
+                format!("textureSampleGrad({tex}, mat_sampler, {st}, dpdx({base}), dpdy({base}))")
+            }
+        }
+    }
+
     /// Samples a texture (`textureSample` in the fragment stage, mip 0 in the vertex stage).
     pub fn sample(&self, tex: &str, uv: &str) -> String {
         if self.fragment {
@@ -316,6 +474,9 @@ pub fn constant(ty: Ty, v: [f32; 4]) -> String {
         Ty::Bool => (v[0] != 0.0).to_string(),
         Ty::Tex => "base_map".into(),
         Ty::Flow => String::new(),
+        Ty::M2 | Ty::M3 | Ty::M4 => identity(ty.matrix_size()),
+        Ty::Gradient => DEFAULT_GRADIENT.into(),
+        Ty::Sampler => DEFAULT_SAMPLER.into(),
     }
 }
 
@@ -328,8 +489,35 @@ pub fn convert(e: &str, from: Ty, to: Ty) -> Option<String> {
     if from == to {
         return Some(e.to_owned());
     }
+    if from.is_matrix() && to.is_matrix() {
+        // Unity truncates bigger matrices and pads smaller ones with the identity.
+        let (n, m) = (from.matrix_size(), to.matrix_size());
+        let cols: Vec<String> = (0..m)
+            .map(|c| {
+                if c < n {
+                    let col = format!("({e})[{c}]");
+                    match m.cmp(&n) {
+                        std::cmp::Ordering::Less => format!("{col}.{}", &"xyzw"[..m as usize]),
+                        std::cmp::Ordering::Equal => col,
+                        std::cmp::Ordering::Greater => {
+                            let pad: Vec<&str> =
+                                (n..m).map(|r| if r == c { "1.0" } else { "0.0" }).collect();
+                            format!("vec{m}f({col}, {})", pad.join(", "))
+                        }
+                    }
+                } else {
+                    let v: Vec<&str> = (0..m).map(|r| if r == c { "1.0" } else { "0.0" }).collect();
+                    format!("vec{m}f({})", v.join(", "))
+                }
+            })
+            .collect();
+        return Some(format!("mat{m}x{m}f({})", cols.join(", ")));
+    }
     Some(match (from, to) {
         (Tex, _) | (_, Tex) | (Flow, _) | (_, Flow) => return None,
+        (Gradient | Sampler | M2 | M3 | M4, _) | (_, Gradient | Sampler | M2 | M3 | M4) => {
+            return None;
+        }
         (Bool, t) => format!("{}(select(0.0, 1.0, {e}))", t.wgsl()),
         (F1, Bool) => format!("({e} != 0.0)"),
         (_, Bool) => format!("(({e}).x != 0.0)"),
@@ -354,7 +542,12 @@ pub fn to_color(e: &str, ty: Ty) -> String {
         Ty::F4 => format!("vec4f(({e}).xyz, 1.0)"),
         Ty::Bool => format!("vec4f(vec3f(select(0.0, 1.0, {e})), 1.0)"),
         Ty::Tex => format!("textureSample({e}, mat_sampler, sample_uv(i.uv0))"),
-        Ty::Flow => "vec4f(0.0, 0.0, 0.0, 1.0)".into(),
+        Ty::Flow | Ty::Sampler => "vec4f(0.0, 0.0, 0.0, 1.0)".into(),
+        // A matrix previews its first three columns' diagonal; a gradient across U.
+        Ty::M2 => format!("vec4f(({e})[0].x, ({e})[1].y, 0.0, 1.0)"),
+        Ty::M3 => format!("vec4f(({e})[0].x, ({e})[1].y, ({e})[2].z, 1.0)"),
+        Ty::M4 => format!("vec4f(({e})[0].x, ({e})[1].y, ({e})[2].z, 1.0)"),
+        Ty::Gradient => format!("vec4f(({}).rgb, 1.0)", e.replace("@T@", "i.uv0.x")),
     }
 }
 
@@ -777,12 +970,14 @@ fn build() -> Vec<NodeDef> {
             s("A", F1),
         ]
     };
-    fn sample_gen(c: &mut Call, lod: Option<String>) -> Vec<String> {
+    fn sample_gen(c: &mut Call, lod: Option<String>, sampler: usize) -> Vec<String> {
         let (tex, uv) = (c.ins[0].clone(), c.ins[1].clone());
-        let raw = match lod {
-            Some(l) => format!("textureSampleLevel({tex}, mat_sampler, sample_uv({uv}), {l})"),
-            None => c.sample(&tex, &uv),
-        };
+        let samp = c
+            .ins
+            .get(sampler)
+            .cloned()
+            .unwrap_or_else(|| DEFAULT_SAMPLER.into());
+        let raw = c.sample_with(&tex, &uv, &samp, lod.as_deref());
         let v = c.temp("vec4f", raw);
         let v = if c.opt("Type") == "Normal" {
             c.temp("vec4f", format!("vec4f(sg_unpack_normal({v}), 1.0)"))
@@ -799,9 +994,13 @@ fn build() -> Vec<NodeDef> {
     }
     b.node(
         "Sample Texture 2D",
-        vec![s("Texture", Tex), s("UV", F2).bind(Bind::Uv0)],
+        vec![
+            s("Texture", Tex),
+            s("UV", F2).bind(Bind::Uv0),
+            s("Sampler", Sampler),
+        ],
         sample_outs(),
-        Gen::Fun(|c| sample_gen(c, None)),
+        Gen::Fun(|c| sample_gen(c, None, 2)),
     )
     .opts(vec![
         opt("Type", &["Default", "Normal"], "Default"),
@@ -809,11 +1008,16 @@ fn build() -> Vec<NodeDef> {
     ]);
     b.node(
         "Sample Texture 2D LOD",
-        vec![s("Texture", Tex), s("UV", F2).bind(Bind::Uv0), s("LOD", F1)],
+        vec![
+            s("Texture", Tex),
+            s("UV", F2).bind(Bind::Uv0),
+            s("LOD", F1),
+            s("Sampler", Sampler),
+        ],
         sample_outs(),
         Gen::Fun(|c| {
             let l = c.ins[2].clone();
-            sample_gen(c, Some(l))
+            sample_gen(c, Some(l), 3)
         }),
     )
     .opts(vec![
@@ -837,6 +1041,182 @@ fn build() -> Vec<NodeDef> {
             "f32(textureDimensions({0}).y)",
         ]),
     );
+    b.node(
+        "Sampler State",
+        vec![],
+        vec![s("Out", Sampler)],
+        Gen::Fun(|c| vec![format!("S:{}:{}", c.opt("Filter"), c.opt("Wrap"))]),
+    )
+    .opts(vec![
+        opt("Filter", &["Linear", "Point", "Trilinear"], "Linear"),
+        opt(
+            "Wrap",
+            &["Repeat", "Clamp", "Mirror", "MirrorOnce"],
+            "Repeat",
+        ),
+    ])
+    .no_preview();
+
+    // ---- Input/Gradient
+    b.1 = "Input/Gradient";
+    b.node(
+        "Gradient",
+        vec![],
+        vec![s("Out", Gradient)],
+        Gen::Fun(|c| {
+            let colors = parse_keys::<4>(c.opt("Colors"));
+            let alphas = parse_keys::<2>(c.opt("Alphas"));
+            vec![gradient_template(
+                &colors,
+                &alphas,
+                c.opt("Mode") == "Fixed",
+            )]
+        }),
+    )
+    .opts(vec![
+        opt("Mode", &["Blend", "Fixed"], "Blend"),
+        Opt {
+            name: "Colors",
+            choices: &[],
+            default: "1,1,1@0; 0,0,0@1",
+            multiline: false,
+        },
+        Opt {
+            name: "Alphas",
+            choices: &[],
+            default: "1@0; 1@1",
+            multiline: false,
+        },
+    ]);
+    b.node(
+        "Sample Gradient",
+        vec![s("Gradient", Gradient), s("Time", F1)],
+        vec![s("Out", F4)],
+        Gen::Fun(|c| {
+            let t = c.temp("f32", c.ins[1].clone());
+            vec![c.ins[0].replace("@T@", &t)]
+        }),
+    );
+
+    // ---- Input/Matrix
+    b.1 = "Input/Matrix";
+    for (kind, n) in [("Matrix 2x2", 2u32), ("Matrix 3x3", 3), ("Matrix 4x4", 4)] {
+        let rows: Vec<Slot> = (0..n)
+            .map(|r| {
+                let mut v = [0.0; 4];
+                v[r as usize] = 1.0;
+                Slot::new(
+                    ["Row 0", "Row 1", "Row 2", "Row 3"][r as usize],
+                    Ty::vector(n),
+                )
+                .val(v)
+                .value_only()
+            })
+            .collect();
+        b.node(
+            kind,
+            rows,
+            vec![s("Out", Ty::matrix(n))],
+            Gen::Fun(|c| {
+                // Rows given; WGSL matrices take columns.
+                let n = c.ins.len();
+                vec![format!("transpose(mat{n}x{n}f({}))", c.ins.join(", "))]
+            }),
+        );
+    }
+    b.node(
+        "Transformation Matrix",
+        vec![],
+        vec![s("Out", M4)],
+        Gen::Fun(|c| {
+            vec![match c.opt("Matrix") {
+                "Model" => "i.object_to_world".into(),
+                "InverseModel" => "sg_inverse4(i.object_to_world)".into(),
+                "View" => "sg_view_matrix()".into(),
+                "InverseView" => "sg_inverse4(sg_view_matrix())".into(),
+                "Projection" => "(sg_view_proj_matrix() * sg_inverse4(sg_view_matrix()))".into(),
+                "InverseProjection" => {
+                    "(sg_view_matrix() * sg_inverse4(sg_view_proj_matrix()))".into()
+                }
+                "InverseViewProjection" => "sg_inverse4(sg_view_proj_matrix())".into(),
+                _ => "sg_view_proj_matrix()".into(),
+            }]
+        }),
+    )
+    .opts(vec![opt(
+        "Matrix",
+        &[
+            "Model",
+            "InverseModel",
+            "View",
+            "InverseView",
+            "Projection",
+            "InverseProjection",
+            "ViewProjection",
+            "InverseViewProjection",
+        ],
+        "Model",
+    )]);
+
+    // ---- Math/Matrix
+    b.1 = "Math/Matrix";
+    b.node(
+        "Matrix Construction",
+        vec![s("M0", F4), s("M1", F4), s("M2", F4), s("M3", F4)],
+        vec![s("4x4", M4), s("3x3", M3), s("2x2", M2)],
+        Gen::Fun(|c| {
+            let v = c.ins.clone();
+            let t = if c.opt("Mode") == "Row" {
+                "transpose"
+            } else {
+                ""
+            };
+            vec![
+                format!("{t}(mat4x4f({}, {}, {}, {}))", v[0], v[1], v[2], v[3]),
+                format!(
+                    "{t}(mat3x3f(({}).xyz, ({}).xyz, ({}).xyz))",
+                    v[0], v[1], v[2]
+                ),
+                format!("{t}(mat2x2f(({}).xy, ({}).xy))", v[0], v[1]),
+            ]
+        }),
+    )
+    .opts(vec![opt("Mode", &["Row", "Column"], "Row")]);
+    b.node(
+        "Matrix Split",
+        vec![s("In", M4)],
+        vec![s("M0", F4), s("M1", F4), s("M2", F4), s("M3", F4)],
+        Gen::Fun(|c| {
+            let m = c.temp("mat4x4f", c.ins[0].clone());
+            let m = if c.opt("Mode") == "Row" {
+                c.temp("mat4x4f", format!("transpose({m})"))
+            } else {
+                m
+            };
+            (0..4).map(|k| format!("{m}[{k}]")).collect()
+        }),
+    )
+    .opts(vec![opt("Mode", &["Row", "Column"], "Row")]);
+    b.node(
+        "Matrix Transpose",
+        vec![s("In", M4)],
+        vec![s("Out", M4)],
+        Gen::Tpl(&["transpose({0})"]),
+    );
+    b.node(
+        "Matrix Determinant",
+        vec![s("In", M4)],
+        vec![s("Out", F1)],
+        Gen::Tpl(&["determinant({0})"]),
+    );
+    b.node(
+        "Multiply Matrix Vector",
+        vec![s("Matrix", M4), s("Vector", F4).val([0.0, 0.0, 0.0, 1.0])],
+        vec![s("Out", F4)],
+        Gen::Tpl(&["({0} * {1})"]),
+    );
+
+    b.1 = "Input/Texture";
     b.node(
         "Triplanar",
         vec![
@@ -1837,6 +2217,27 @@ fn sg_inverse3(m: mat3x3f) -> mat3x3f {
     let det = dot(a, r0);
     let inv = select(1.0 / det, 0.0, abs(det) < 1e-12);
     return transpose(mat3x3f(r0, r1, r2)) * inv;
+}
+
+fn sg_inverse4(m: mat4x4f) -> mat4x4f {
+    let a00 = m[0][0]; let a01 = m[0][1]; let a02 = m[0][2]; let a03 = m[0][3];
+    let a10 = m[1][0]; let a11 = m[1][1]; let a12 = m[1][2]; let a13 = m[1][3];
+    let a20 = m[2][0]; let a21 = m[2][1]; let a22 = m[2][2]; let a23 = m[2][3];
+    let a30 = m[3][0]; let a31 = m[3][1]; let a32 = m[3][2]; let a33 = m[3][3];
+    let b00 = a00 * a11 - a01 * a10; let b01 = a00 * a12 - a02 * a10;
+    let b02 = a00 * a13 - a03 * a10; let b03 = a01 * a12 - a02 * a11;
+    let b04 = a01 * a13 - a03 * a11; let b05 = a02 * a13 - a03 * a12;
+    let b06 = a20 * a31 - a21 * a30; let b07 = a20 * a32 - a22 * a30;
+    let b08 = a20 * a33 - a23 * a30; let b09 = a21 * a32 - a22 * a31;
+    let b10 = a21 * a33 - a23 * a31; let b11 = a22 * a33 - a23 * a32;
+    let det = b00 * b11 - b01 * b10 + b02 * b09 + b03 * b08 - b04 * b07 + b05 * b06;
+    let inv = select(1.0 / det, 0.0, abs(det) < 1e-20);
+    return mat4x4f(
+        vec4f(a11 * b11 - a12 * b10 + a13 * b09, a02 * b10 - a01 * b11 - a03 * b09, a31 * b05 - a32 * b04 + a33 * b03, a22 * b04 - a21 * b05 - a23 * b03),
+        vec4f(a12 * b08 - a10 * b11 - a13 * b07, a00 * b11 - a02 * b08 + a03 * b07, a32 * b02 - a30 * b05 - a33 * b01, a20 * b05 - a22 * b02 + a23 * b01),
+        vec4f(a10 * b10 - a11 * b08 + a13 * b06, a01 * b08 - a00 * b10 - a03 * b06, a30 * b04 - a31 * b02 + a33 * b00, a21 * b02 - a20 * b04 - a23 * b00),
+        vec4f(a11 * b07 - a10 * b09 - a12 * b06, a00 * b09 - a01 * b07 + a02 * b06, a31 * b01 - a30 * b03 - a32 * b00, a20 * b03 - a21 * b01 + a22 * b00)
+    ) * inv;
 }
 
 fn sg_world_to_object(i: SurfaceInput, v: vec3f, w: f32) -> vec3f {

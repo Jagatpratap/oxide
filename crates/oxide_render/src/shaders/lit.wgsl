@@ -36,6 +36,10 @@ fn sg_view_matrix() -> mat4x4f {
     return frame.view;
 }
 
+fn sg_view_proj_matrix() -> mat4x4f {
+    return frame.view_proj;
+}
+
 // What the surface hook sees for one pixel.
 struct SurfaceInput {
     uv0: vec2f,             // mesh UV0, Unity convention (origin bottom-left), untiled

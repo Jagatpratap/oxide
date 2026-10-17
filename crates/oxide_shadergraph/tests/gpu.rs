@@ -307,3 +307,124 @@ fn keyword_variants_pick_per_material_and_global() {
         );
     }
 }
+
+/// Base Color from a node chain built by `f` (Unlit), rendered at the cube's centre.
+fn render_chain(f: impl FnOnce(&mut ShaderGraph) -> (u32, &'static str)) -> Option<[u8; 4]> {
+    let gpu = Gpu::headless()?;
+    let mut g = ShaderGraph::default();
+    g.settings.material = GraphMaterial::Unlit;
+    let (node, out) = f(&mut g);
+    let frag = g.graph.find("Fragment").unwrap().id;
+    g.graph.connect(node, out, frag, "Base Color");
+    let mut assets = AssetServer::new(".");
+    register_assets(&mut assets);
+    let path = "test:chain.shadergraph";
+    assets.data.insert(path, "ShaderGraph", Box::new(g));
+    assert!(compile_asset(&mut assets, path));
+    let mut m = Material::lit("chain", Color::WHITE);
+    m.shader_graph = Some(Handle::from_path(path.to_owned()));
+    let mat = assets.materials.insert("test:chain.mat", m).id();
+    let mut r = SceneRenderer::new(&gpu);
+    let fmt = wgpu::TextureFormat::Rgba8UnormSrgb;
+    let scope = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let img = capture_frame(&gpu, fmt, SIZE, SIZE, |view, _| {
+        r.render(&gpu, &assets, &frame(mat), view, fmt, SIZE, SIZE);
+    })
+    .unwrap();
+    if let Some(e) = pollster::block_on(scope.pop()) {
+        panic!("GPU validation error: {e}");
+    }
+    Some(img.pixel(SIZE / 2, SIZE / 2))
+}
+
+#[test]
+fn gradient_and_matrix_values_render() {
+    // Red → blue sampled at 0.25 (Blend): 75% red, 25% blue in linear space.
+    let Some(c) = render_chain(|g| {
+        let grad = g.graph.add(
+            GraphNode::new(0, "Gradient", Vector2::ZERO).with_option("Colors", "1,0,0@0; 0,0,1@1"),
+        );
+        let s = g.graph.add(
+            GraphNode::new(0, "Sample Gradient", Vector2::ZERO)
+                .with_value("Time", Vector4::splat(0.25)),
+        );
+        g.graph.connect(grad, "Out", s, "Gradient");
+        (s, "Out")
+    }) else {
+        eprintln!("no GPU; skipped");
+        return;
+    };
+    let srgb = |x: f32| (x.powf(1.0 / 2.4) * 1.055 - 0.055) * 255.0;
+    assert!((c[0] as f32 - srgb(0.75)).abs() < 4.0, "{c:?}");
+    assert!((c[2] as f32 - srgb(0.25)).abs() < 4.0, "{c:?}");
+    assert!(c[1] < 5, "{c:?}");
+
+    // A matrix that swaps red and blue, times red: blue.
+    let c = render_chain(|g| {
+        let m = g.graph.add(
+            GraphNode::new(0, "Matrix 4x4", Vector2::ZERO)
+                .with_value("Row 0", Vector4::new(0.0, 0.0, 1.0, 0.0))
+                .with_value("Row 2", Vector4::new(1.0, 0.0, 0.0, 0.0)),
+        );
+        let red = g.graph.add(
+            GraphNode::new(0, "Vector 4", Vector2::ZERO)
+                .with_value("X", Vector4::splat(1.0))
+                .with_value("W", Vector4::splat(1.0)),
+        );
+        let mul = g.graph.add(GraphNode::new(0, "Multiply", Vector2::ZERO));
+        g.graph.connect(m, "Out", mul, "A");
+        g.graph.connect(red, "Out", mul, "B");
+        (mul, "Out")
+    })
+    .unwrap();
+    assert!(c[2] > 240 && c[0] < 10 && c[1] < 10, "{c:?}");
+}
+
+#[test]
+fn converted_sub_graph_renders_the_same() {
+    let Some(gpu) = Gpu::headless() else {
+        eprintln!("no GPU; skipped");
+        return;
+    };
+    let mut g = ShaderGraph::default();
+    g.settings.material = GraphMaterial::Unlit;
+    let color = g.graph.add(
+        GraphNode::new(0, "Color", Vector2::ZERO)
+            .with_value("Color", Vector4::new(0.9, 0.5, 0.1, 1.0)),
+    );
+    let mul = g
+        .graph
+        .add(GraphNode::new(0, "Multiply", Vector2::ZERO).with_value("B", Vector4::splat(0.5)));
+    let one_minus = g.graph.add(GraphNode::new(0, "One Minus", Vector2::ZERO));
+    g.graph.connect(color, "Out", mul, "A");
+    g.graph.connect(mul, "Out", one_minus, "In");
+    let frag = g.graph.find("Fragment").unwrap().id;
+    g.graph.connect(one_minus, "Out", frag, "Base Color");
+    let mut assets = AssetServer::new(".");
+    register_assets(&mut assets);
+    let mut m = Material::lit("conv", Color::WHITE);
+    m.shader_graph = Some(Handle::from_path("test:conv.shadergraph".to_owned()));
+    let mat = assets.materials.insert("test:conv.mat", m).id();
+    let mut r = SceneRenderer::new(&gpu);
+    let mut shot = |assets: &mut AssetServer, g: &ShaderGraph| {
+        assets
+            .data
+            .insert("test:conv.shadergraph", "ShaderGraph", Box::new(g.clone()));
+        compile_asset(assets, "test:conv.shadergraph");
+        let fmt = wgpu::TextureFormat::Rgba8UnormSrgb;
+        capture_frame(&gpu, fmt, SIZE, SIZE, |view, _| {
+            r.render(&gpu, assets, &frame(mat), view, fmt, SIZE, SIZE);
+        })
+        .unwrap()
+        .pixel(SIZE / 2, SIZE / 2)
+    };
+    let before = shot(&mut assets, &g);
+    let sub_path = "test:conv.shadersubgraph";
+    let (sub, _) = convert_to_sub_graph(&mut g, &[mul, one_minus], &|_| None, sub_path).unwrap();
+    assets
+        .data
+        .insert(sub_path, "ShaderSubGraph", Box::new(sub));
+    let after = shot(&mut assets, &g);
+    assert_eq!(before, after);
+    assert!(before[0] > 100, "not black: {before:?}");
+}

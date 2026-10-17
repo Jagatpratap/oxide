@@ -38,6 +38,10 @@ fn sg_view_matrix() -> mat4x4f {
     return mat4x4f(vec4f(1.0, 0.0, 0.0, 0.0), vec4f(0.0, 1.0, 0.0, 0.0), vec4f(0.0, 0.0, 1.0, 0.0), vec4f(0.0, 0.0, 0.0, 1.0));
 }
 
+fn sg_view_proj_matrix() -> mat4x4f {
+    return shadow_view.view_proj;
+}
+
 struct SurfaceInput {
     uv0: vec2f,
     uv1: vec2f,

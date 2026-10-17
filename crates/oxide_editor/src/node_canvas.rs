@@ -69,6 +69,9 @@ pub fn port_color(ty: Ty) -> Color32 {
         Ty::Bool => Color32::from_rgb(148, 129, 230),
         Ty::Tex => Color32::from_rgb(255, 139, 139),
         Ty::Flow => Color32::from_rgb(200, 200, 200),
+        Ty::M2 | Ty::M3 | Ty::M4 => Color32::from_rgb(143, 196, 255),
+        Ty::Gradient => Color32::from_rgb(130, 130, 130),
+        Ty::Sampler => Color32::from_rgb(158, 158, 158),
     }
 }
 
@@ -710,7 +713,7 @@ pub fn show(
                 Color32::from_gray(200),
             );
             // Unconnected inputs show their value to the left of the node (Unity).
-            if !connected && show_fields && ty != Ty::Tex && ty != Ty::Flow {
+            if !connected && show_fields && !ty.is_opaque() && !ty.is_matrix() {
                 let w = match (p.color, ty) {
                     (true, _) => 40.0,
                     (_, Ty::Bool) => 20.0,
@@ -1219,6 +1222,11 @@ fn short(ty: Ty) -> &'static str {
         Ty::Tex => "T2",
         Ty::Flow => "",
         Ty::Dyn => "n",
+        Ty::M2 => "2x2",
+        Ty::M3 => "3x3",
+        Ty::M4 => "4x4",
+        Ty::Gradient => "G",
+        Ty::Sampler => "SS",
     }
 }
 

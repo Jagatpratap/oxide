@@ -141,6 +141,7 @@ pub fn vfx_operators() -> &'static [NodeDef] {
 pub fn operator_allowed(def: &NodeDef) -> bool {
     let menu = def.menu;
     if def.fragment_only
+        || menu == "Math/Matrix"
         || matches!(
             def.kind,
             "Transform"

@@ -462,6 +462,18 @@ pub fn window_ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
                 st.project.folder = dir.to_owned();
             }
         }
+        let can_convert = matches!(st.shader_graph.doc, Some(Doc::Graph(_)))
+            && !st.shader_graph.canvas.selected.is_empty();
+        if ui
+            .add_enabled(can_convert, egui::Button::new("Convert To Sub Graph"))
+            .on_hover_text("Moves the selected nodes into a new Sub Graph asset")
+            .clicked()
+        {
+            st.status = match convert_selection(&mut st.shader_graph, engine, &path) {
+                Ok(p) => format!("Converted to {p}"),
+                Err(e) => e,
+            };
+        }
         ui.separator();
         let w = &mut st.shader_graph;
         for (hidden, label) in [
@@ -1369,6 +1381,17 @@ pub fn mcp(
             .push(crate::Action::OpenTab(crate::Tab::ShaderGraph));
     }
     let w = &mut st.shader_graph;
+    // Convert To Sub Graph (with `select` naming the nodes).
+    if args.get("convert_to_sub_graph").and_then(Json::as_bool) == Some(true) {
+        if let Some(sel) = args.get("select").and_then(Json::as_array) {
+            w.canvas.selected = sel
+                .iter()
+                .filter_map(|v| v.as_u64().map(|x| x as u32))
+                .collect();
+        }
+        let path = w.path.clone().ok_or("open a Shader Graph")?;
+        convert_selection(w, engine, &path)?;
+    }
     let mut edited = false;
     if let Some(doc) = w.doc.as_mut() {
         // Blackboard.
@@ -1677,4 +1700,33 @@ pub fn library_json() -> Json {
             "options": d.options.iter().map(|o| json!({"name": o.name, "choices": o.choices, "default": o.default})).collect::<Vec<_>>(),
         }))
         .collect::<Vec<_>>())
+}
+
+/// Unity's Convert To Sub Graph: saves the selection as `<graph> Sub Graph.shadersubgraph`
+/// next to the graph and puts a Sub Graph node in its place (one undo step).
+fn convert_selection(
+    w: &mut ShaderGraphWindow,
+    engine: &mut Engine,
+    graph_path: &str,
+) -> Result<String, String> {
+    let Some(Doc::Graph(g)) = &mut w.doc else {
+        return Err("open a Shader Graph".into());
+    };
+    let dir = graph_path.rsplit_once('/').map_or("Assets", |(d, _)| d);
+    let assets = engine.world.resource_mut::<AssetServer>();
+    let mut sub_path = format!("{dir}/{} Sub Graph.shadersubgraph", stem(graph_path));
+    let mut k = 1;
+    while assets.full_path(&sub_path).exists() {
+        k += 1;
+        sub_path = format!("{dir}/{} Sub Graph {k}.shadersubgraph", stem(graph_path));
+    }
+    let subs = &w.subs;
+    let lookup = |p: &str| subs.get(p).cloned();
+    let selection = w.canvas.selected.clone();
+    let (sub, node) = oxide_shadergraph::convert_to_sub_graph(g, &selection, &lookup, &sub_path)?;
+    assets.save_data(&sub_path, Box::new(sub.clone()))?;
+    w.subs.insert(sub_path.clone(), sub);
+    w.canvas.selected = vec![node];
+    w.commit();
+    Ok(sub_path)
 }

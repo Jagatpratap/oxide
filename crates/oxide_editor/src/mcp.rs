@@ -594,7 +594,11 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
              node added by this call), or \"Fragment\" / \"Vertex\" / \"Output\". Fragment inputs: Base Color, \
              Normal, Metallic, Smoothness, Ambient Occlusion, Emission, Alpha, Alpha Clip Threshold; Vertex: \
              Position, Normal, Tangent. Values are numbers or [x,y,z,w]; colours are sRGB. `save: true` writes the \
-             file (materials using it update); `wgsl: true` returns the compiled code; `undo`/`redo`; `frame`.",
+             file (materials using it update); `wgsl: true` returns the compiled code; `undo`/`redo`; `frame`. \
+             `convert_to_sub_graph: true` with `select` [nodes] moves them into a new Sub Graph next to the graph \
+             (Unity's Convert To Sub Graph). Node types include Matrix 2x2/3x3/4x4, Transformation Matrix, Matrix \
+             Construction/Split/Transpose/Determinant, Gradient (options Colors `r,g,b@t; ...`, Alphas `a@t; ...`, \
+             Mode Blend|Fixed), Sample Gradient and Sampler State (Filter, Wrap) for Sample Texture 2D's Sampler.",
             schema(
                 json!({
                     "open": { "type": "string" }, "library": { "type": "boolean" },
@@ -605,7 +609,8 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
                     "connect": { "type": "array" }, "disconnect": { "type": "array" },
                     "delete": { "type": "array" }, "select": { "type": "array" },
                     "save": { "type": "boolean" }, "wgsl": { "type": "boolean" },
-                    "undo": { "type": "boolean" }, "redo": { "type": "boolean" }, "frame": { "type": "boolean" }
+                    "undo": { "type": "boolean" }, "redo": { "type": "boolean" }, "frame": { "type": "boolean" },
+                    "convert_to_sub_graph": { "type": "boolean" }
                 }),
                 &[],
             ),

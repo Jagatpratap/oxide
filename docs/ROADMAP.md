@@ -596,8 +596,11 @@ project's editor and its Scripts both link.
   shadows, normal space), Blackboard properties (Float/Vector/Color/Boolean/Texture2D, sliders, HDR, exposed),
   compiled to WGSL hooks of the Lit shader (shadow and depth passes included), magenta error shader, live node
   previews (2D quads / 3D spheres like Unity) and Main Preview, materials with Unity's Shader dropdown and
-  Surface Inputs, Create Material from a graph, `editor_shader_graph` MCP tool. Not yet: Gradient/Matrix types, sampler states, Shader Graph-driven decals/sprites/terrain, Convert to Sub
-  Graph
+  Surface Inputs, Create Material from a graph, `editor_shader_graph` MCP tool; Matrix 2x2/3x3/4x4 types (Matrix nodes, Transformation Matrix, Matrix
+  Construction/Split/Transpose/Determinant, Multiply with matrices), Gradient type (Gradient node with Blend/Fixed
+  keys, Sample Gradient), Sampler State (filter and wrap for Sample Texture 2D, emulated in the shader), master
+  stack type errors, Convert To Sub Graph. Not yet: Shader Graph-driven decals/sprites/terrain, Gradient and
+  Matrix Blackboard properties
   ([Shader Graph](https://docs.unity3d.com/Packages/com.unity.shadergraph@17.0/manual/index.html))
 - ☑ ProBuilder: `ProBuilder Mesh` component (n-gon faces over shared positions, material slots, smoothing groups,
   Auto UVs, vertex colours) rebuilt into the MeshFilter/MeshCollider whenever it changes and saved with the

@@ -11,8 +11,8 @@ pub mod graph;
 pub mod nodes;
 
 pub use compile::{
-    Compiled, ERROR_HOOKS, PREVIEW_PROPERTY, PortCx, Target, compile, options, ports, property_ty,
-    sub_graph_as_graph, sub_graph_paths,
+    Compiled, ERROR_HOOKS, PREVIEW_PROPERTY, PortCx, Target, compile, convert_to_sub_graph,
+    options, ports, property_ty, sub_graph_as_graph, sub_graph_paths,
 };
 pub use graph::*;
 pub use nodes::{NodeDef, Slot, Ty, library};

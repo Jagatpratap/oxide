@@ -684,7 +684,8 @@ fn build() -> Vec<BlockDef> {
             ),
         ],
     );
-    color_life.gradient = Some(|| Gradient::two(Color::WHITE, Color::new(1.0, 1.0, 1.0, 0.0)));
+    color_life.gradient =
+        Some(|| oxide_core::curves::Gradient::two(Color::WHITE, Color::new(1.0, 1.0, 1.0, 0.0)));
     v.push(color_life);
     for (kind, attr) in [
         ("Set Size over Life", "q.size"),

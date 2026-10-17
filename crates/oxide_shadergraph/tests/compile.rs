@@ -62,7 +62,7 @@ fn every_node_generates_valid_wgsl_in_both_stages() {
             subgraphs: &none,
         };
         let outs = ports(&node, &cx).expect("ports").1;
-        let Some(out) = outs.iter().find(|s| s.ty != Ty::Tex) else {
+        let Some(out) = outs.iter().find(|s| s.ty.is_vector() || s.ty == Ty::Bool) else {
             continue;
         };
         let frag = stack(&g, "Fragment");
@@ -487,4 +487,185 @@ fn variant_keywords_become_override_constants() {
     assert_eq!(m.keywords, vec!["_MODE_GREEN".to_owned()]);
     m.set_keyword_state("_MODE", &g.keywords[0].entries, 0);
     assert_eq!(m.keywords, vec!["_MODE_RED".to_owned()]);
+}
+
+/// Wires `node`'s output into Base Color (and the vertex Position unless fragment-only)
+/// through `adapt` (a chain that turns it into a vector) and checks the WGSL.
+fn check_new(g: &mut ShaderGraph, from: (u32, &str), vertex: bool) -> Compiled {
+    let frag = stack(g, "Fragment");
+    g.graph.connect(from.0, from.1, frag, "Base Color");
+    if vertex {
+        let vert = stack(g, "Vertex");
+        g.graph.connect(from.0, from.1, vert, "Position");
+    }
+    let c = check(g, &none);
+    assert!(c.errors.is_empty(), "{:?}", c.errors);
+    c
+}
+
+#[test]
+fn matrix_nodes_compile_in_both_stages() {
+    for option in [
+        "Model",
+        "InverseModel",
+        "View",
+        "InverseView",
+        "Projection",
+        "InverseProjection",
+        "ViewProjection",
+        "InverseViewProjection",
+    ] {
+        let mut g = ShaderGraph::default();
+        let tm = g.graph.add(
+            GraphNode::new(0, "Transformation Matrix", Vector2::ZERO).with_option("Matrix", option),
+        );
+        let pos = g
+            .graph
+            .add(GraphNode::new(0, "Position", Vector2::ZERO).with_option("Space", "Object"));
+        let mul = g.graph.add(GraphNode::new(0, "Multiply", Vector2::ZERO));
+        g.graph.connect(tm, "Out", mul, "A");
+        g.graph.connect(pos, "Out", mul, "B");
+        check_new(&mut g, (mul, "Out"), true);
+    }
+    // Matrix 3x3 × Matrix 3x3, split, transposed, determinant; Construction to 2x2.
+    let mut g = ShaderGraph::default();
+    let a = g.graph.add(GraphNode::new(0, "Matrix 3x3", Vector2::ZERO));
+    let b = g.graph.add(GraphNode::new(0, "Matrix 3x3", Vector2::ZERO));
+    let mul = g.graph.add(GraphNode::new(0, "Multiply", Vector2::ZERO));
+    g.graph.connect(a, "Out", mul, "A");
+    g.graph.connect(b, "Out", mul, "B");
+    let tr = g
+        .graph
+        .add(GraphNode::new(0, "Matrix Transpose", Vector2::ZERO));
+    g.graph.connect(mul, "Out", tr, "In");
+    let split = g
+        .graph
+        .add(GraphNode::new(0, "Matrix Split", Vector2::ZERO).with_option("Mode", "Column"));
+    g.graph.connect(tr, "Out", split, "In");
+    let det = g
+        .graph
+        .add(GraphNode::new(0, "Matrix Determinant", Vector2::ZERO));
+    g.graph.connect(tr, "Out", det, "In");
+    let add = g.graph.add(GraphNode::new(0, "Add", Vector2::ZERO));
+    g.graph.connect(split, "M1", add, "A");
+    g.graph.connect(det, "Out", add, "B");
+    let c = check_new(&mut g, (add, "Out"), true);
+    assert!(
+        c.hooks.contains("mat3x3f") && c.hooks.contains("determinant("),
+        "{}",
+        c.hooks
+    );
+    // Wiring a matrix straight into Base Color is reported, like Unity.
+    let mut g = ShaderGraph::default();
+    let m = g.graph.add(GraphNode::new(0, "Matrix 4x4", Vector2::ZERO));
+    let frag = stack(&g, "Fragment");
+    g.graph.connect(m, "Out", frag, "Base Color");
+    let c = compile(&g, &none, Target::Material);
+    assert!(
+        c.errors.iter().any(|e| e.1.contains("Matrix 4")),
+        "{:?}",
+        c.errors
+    );
+}
+
+#[test]
+fn gradients_and_sampler_states() {
+    // Gradient → Sample Gradient (time from UV.x).
+    let mut g = ShaderGraph::default();
+    let grad = g.graph.add(
+        GraphNode::new(0, "Gradient", Vector2::ZERO)
+            .with_option("Colors", "0,0,1@1; 1,0,0@0; 0,1,0@0.5")
+            .with_option("Alphas", "1@0; 0.5@1"),
+    );
+    let uv = g.graph.add(GraphNode::new(0, "UV", Vector2::ZERO));
+    let split = g.graph.add(GraphNode::new(0, "Split", Vector2::ZERO));
+    g.graph.connect(uv, "Out", split, "In");
+    let sample = g
+        .graph
+        .add(GraphNode::new(0, "Sample Gradient", Vector2::ZERO));
+    g.graph.connect(grad, "Out", sample, "Gradient");
+    g.graph.connect(split, "R", sample, "Time");
+    let c = check_new(&mut g, (sample, "Out"), true);
+    assert!(!c.hooks.contains("@T@"), "the time is filled in");
+    // Keys are sorted by time: red first, then green, then blue.
+    let keys = oxide_shadergraph::nodes::parse_keys::<4>("0,0,1@1; 1,0,0@0; 0,1,0@0.5");
+    assert_eq!(keys[0], [1.0, 0.0, 0.0, 0.0]);
+    assert_eq!(keys[2], [0.0, 0.0, 1.0, 1.0]);
+
+    // Every Sampler State filter and wrap feeds Sample Texture 2D (and its LOD variant).
+    for filter in ["Linear", "Point", "Trilinear"] {
+        for wrap in ["Repeat", "Clamp", "Mirror", "MirrorOnce"] {
+            for kind in ["Sample Texture 2D", "Sample Texture 2D LOD"] {
+                let mut g = ShaderGraph::default();
+                let ss = g.graph.add(
+                    GraphNode::new(0, "Sampler State", Vector2::ZERO)
+                        .with_option("Filter", filter)
+                        .with_option("Wrap", wrap),
+                );
+                let tex = g.graph.add(GraphNode::new(0, kind, Vector2::ZERO));
+                g.graph.connect(ss, "Out", tex, "Sampler");
+                let c = check_new(&mut g, (tex, "RGBA"), kind.ends_with("LOD"));
+                if filter == "Point" {
+                    assert!(c.hooks.contains("floor("), "point snaps to texels");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn convert_to_sub_graph_keeps_the_connections() {
+    let mut g = ShaderGraph::default();
+    g.properties.push(GraphProperty {
+        name: "Tint".into(),
+        reference: "_Tint".into(),
+        kind: PropertyType::Color,
+        ..Default::default()
+    });
+    let tint = g
+        .graph
+        .add(GraphNode::new(0, "Property", Vector2::ZERO).with_option("Property", "_Tint"));
+    let time = g.graph.add(GraphNode::new(0, "Time", Vector2::ZERO));
+    let sine = g.graph.add(GraphNode::new(0, "Sine", Vector2::ZERO));
+    let mul = g.graph.add(GraphNode::new(0, "Multiply", Vector2::ZERO));
+    g.graph.connect(time, "Time", sine, "In");
+    g.graph.connect(tint, "Out", mul, "A");
+    g.graph.connect(sine, "Out", mul, "B");
+    let frag = stack(&g, "Fragment");
+    g.graph.connect(mul, "Out", frag, "Base Color");
+    g.graph.connect(sine, "Out", frag, "Emission");
+    let before = check(&g, &none);
+    assert!(before.errors.is_empty());
+
+    // The Property node stays (it's the graph's), so it's an input like Time.
+    let (sub, node) = convert_to_sub_graph(
+        &mut g,
+        &[sine, mul, tint],
+        &none,
+        "Assets/Pulse.shadersubgraph",
+    )
+    .unwrap();
+    assert_eq!(sub.properties.len(), 2, "{:?}", sub.properties);
+    assert_eq!(sub.outputs.len(), 2);
+    assert!(
+        g.graph.node(sine).is_none() && g.graph.node(mul).is_none() && g.graph.node(tint).is_some()
+    );
+    assert_eq!(g.graph.input_edge(frag, "Base Color").unwrap().from, node);
+    assert_eq!(g.graph.input_edge(frag, "Emission").unwrap().from, node);
+    let sub2 = sub.clone();
+    let lookup = move |p: &str| (p == "Assets/Pulse.shadersubgraph").then(|| sub2.clone());
+    let after = check(&g, &lookup);
+    assert!(after.errors.is_empty(), "{:?}", after.errors);
+    // Master stacks can't move; a matrix crossing the boundary can't be an input.
+    assert!(convert_to_sub_graph(&mut g, &[frag], &none, "x").is_err());
+    let m = g.graph.add(GraphNode::new(0, "Matrix 4x4", Vector2::ZERO));
+    let t = g
+        .graph
+        .add(GraphNode::new(0, "Matrix Transpose", Vector2::ZERO));
+    g.graph.connect(m, "Out", t, "In");
+    assert!(
+        convert_to_sub_graph(&mut g, &[t], &lookup, "y")
+            .unwrap_err()
+            .contains("Matrix")
+    );
 }

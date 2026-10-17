@@ -8,6 +8,7 @@
 use crate::graph::*;
 use crate::nodes::{self, Gen, HELPERS, Slot, Ty, constant, convert};
 use oxide_assets::{Handle, ShaderProperty, Texture2D};
+use oxide_math::Vector2;
 use std::collections::{HashMap, HashSet};
 
 /// Uniform slots for property values (the last one is the preview index).
@@ -428,6 +429,38 @@ impl Emit<'_> {
                 }
             })
             .collect();
+        // Unity's Multiply takes matrices too: matrix × matrix, matrix × vector, vector × matrix.
+        if node.kind == "Multiply" && raw.iter().any(|(_, t)| t.is_matrix()) {
+            let (a, b) = (&raw[0], &raw[1]);
+            let size = raw
+                .iter()
+                .filter(|(_, t)| t.is_matrix())
+                .map(|(_, t)| t.matrix_size())
+                .max()
+                .unwrap_or(4);
+            let as_operand = |(e, t): &(String, Ty)| -> Option<(String, Ty)> {
+                if t.is_matrix() {
+                    let m = Ty::matrix(size);
+                    convert(e, *t, m).map(|c| (c, m))
+                } else {
+                    let v = Ty::vector(size);
+                    convert(e, *t, v).map(|c| (c, v))
+                }
+            };
+            let (Some((ea, ta)), Some((eb, tb))) = (as_operand(a), as_operand(b)) else {
+                self.error(sc, node.id, "Multiply: can't combine these types".into());
+                return zeros(outs);
+            };
+            let ty = if ta.is_matrix() && tb.is_matrix() {
+                Ty::matrix(size)
+            } else {
+                Ty::vector(size)
+            };
+            let name = format!("{}n{}_0", sc.prefix, node.id);
+            self.lines
+                .push(format!("let {name}: {} = ({ea} * {eb});", ty.wgsl()));
+            return vec![(name, ty)];
+        }
         // Dynamic vectors: the narrowest connected vector wider than a float.
         let width = ins
             .iter()
@@ -494,7 +527,7 @@ impl Emit<'_> {
             .enumerate()
             .map(|(k, (s, e))| {
                 let ty = if s.ty == Ty::Dyn { dyn_ty } else { s.ty };
-                if ty == Ty::Tex {
+                if ty.is_opaque() {
                     return (e, ty);
                 }
                 let name = format!("{prefix}{k}");
@@ -733,7 +766,14 @@ impl Emit<'_> {
             .and_then(|p| p.0.into_iter().find(|s| s.id == id))
             .expect("master stack block");
         let (e, t) = self.input(sc, stack, &slot);
-        convert(&e, t, slot.ty).unwrap_or_else(|| Self::zero(slot.ty))
+        convert(&e, t, slot.ty).unwrap_or_else(|| {
+            self.error(
+                sc,
+                stack.id,
+                format!("{id}: can't use a {} as a {}", t.label(), slot.ty.label()),
+            );
+            Self::zero(slot.ty)
+        })
     }
 }
 
@@ -1083,4 +1123,182 @@ pub fn sub_graph_as_graph(sub: &ShaderSubGraph) -> ShaderGraph {
             .connect(e.from, &e.output.clone(), frag, "Base Color");
     }
     g
+}
+
+/// The Blackboard type for a port type (Sub Graph inputs and outputs).
+fn port_property(ty: Ty) -> Option<PropertyType> {
+    Some(match ty {
+        Ty::F1 => PropertyType::Float,
+        Ty::F2 => PropertyType::Vector2,
+        Ty::F3 => PropertyType::Vector3,
+        Ty::F4 | Ty::Dyn => PropertyType::Vector4,
+        Ty::Bool => PropertyType::Boolean,
+        Ty::Tex => PropertyType::Texture2D,
+        _ => return None,
+    })
+}
+
+/// Unity's Convert To Sub Graph: moves the `selection` out of `graph` into a new Sub Graph
+/// (saved at `sub_path` by the caller). Connections coming in become the Sub Graph's
+/// properties, connections going out its outputs, and a Sub Graph node takes the
+/// selection's place with the same connections. Master stacks, Property and Keyword nodes
+/// stay in the graph (their values come in as inputs).
+pub fn convert_to_sub_graph(
+    graph: &mut ShaderGraph,
+    selection: &[u32],
+    subgraphs: SubGraphs,
+    sub_path: &str,
+) -> Result<(ShaderSubGraph, u32), String> {
+    let movable =
+        |n: &GraphNode| !is_stack(&n.kind) && !matches!(n.kind.as_str(), "Property" | "Keyword");
+    let sel: HashSet<u32> = selection
+        .iter()
+        .copied()
+        .filter(|id| graph.graph.node(*id).is_some_and(movable))
+        .collect();
+    if sel.is_empty() {
+        return Err("select the nodes to convert (not the master stack or properties)".into());
+    }
+    let cx = PortCx {
+        properties: &graph.properties,
+        keywords: &graph.keywords,
+        sub_outputs: &[],
+        subgraphs,
+    };
+    let out_ty = |node: u32, output: &str| -> Result<Ty, String> {
+        let n = graph.graph.node(node).ok_or("missing node")?;
+        let (_, outs) = ports(n, &cx)?;
+        outs.iter()
+            .find(|s| s.id == output)
+            .map(|s| s.ty)
+            .ok_or_else(|| format!("{} has no output {output}", n.kind))
+    };
+    let name_of = |node: u32, output: &str| {
+        let kind = graph.graph.node(node).map_or("In", |n| n.kind.as_str());
+        if output == "Out" {
+            kind.to_owned()
+        } else {
+            format!("{kind} {output}")
+        }
+    };
+    let mut sub = ShaderSubGraph::default();
+    sub.outputs.clear();
+    let out_node = sub
+        .graph
+        .find("SubGraphOutput")
+        .map(|n| n.id)
+        .expect("default output");
+    // Inputs: one property per outside source.
+    let mut inputs: Vec<((u32, String), String)> = Vec::new();
+    for e in &graph.graph.edges {
+        if sel.contains(&e.to) && !sel.contains(&e.from) {
+            let key = (e.from, e.output.clone());
+            if inputs.iter().any(|(k, _)| *k == key) {
+                continue;
+            }
+            let ty = out_ty(e.from, &e.output)?;
+            let kind = port_property(ty)
+                .ok_or_else(|| format!("a {} can't be a Sub Graph input", ty.label()))?;
+            let name = name_of(e.from, &e.output);
+            let reference = unique_reference(&sub.properties, &[], &name);
+            sub.properties.push(GraphProperty {
+                name,
+                reference: reference.clone(),
+                kind,
+                ..Default::default()
+            });
+            inputs.push((key, reference));
+        }
+    }
+    // Outputs: one per inside source used outside.
+    let mut outputs: Vec<((u32, String), String)> = Vec::new();
+    for e in &graph.graph.edges {
+        if sel.contains(&e.from) && !sel.contains(&e.to) {
+            let key = (e.from, e.output.clone());
+            if outputs.iter().any(|(k, _)| *k == key) {
+                continue;
+            }
+            let ty = out_ty(e.from, &e.output)?;
+            let kind = port_property(ty)
+                .ok_or_else(|| format!("a {} can't be a Sub Graph output", ty.label()))?;
+            let name = if outputs.is_empty() {
+                "Out".to_owned()
+            } else {
+                format!("Out {}", outputs.len() + 1)
+            };
+            sub.outputs.push(SubGraphOutput {
+                name: name.clone(),
+                kind,
+            });
+            outputs.push((key, name));
+        }
+    }
+    if sub.outputs.is_empty() {
+        sub.outputs.push(SubGraphOutput::default());
+    }
+    // The nodes move over with new ids, laid out to the left of the Output node.
+    let center = sel
+        .iter()
+        .filter_map(|id| graph.graph.node(*id))
+        .map(|n| n.position)
+        .fold(Vector2::ZERO, |a, b| a + b)
+        / sel.len() as f32;
+    let mut remap = HashMap::new();
+    for id in &sel {
+        let mut n = graph.graph.node(*id).expect("selected").clone();
+        n.position -= center;
+        let new = sub.graph.add(n);
+        remap.insert(*id, new);
+    }
+    if let Some(o) = sub.graph.node_mut(out_node) {
+        o.position = Vector2::new(400.0, 0.0);
+    }
+    for e in graph.graph.edges.clone() {
+        match (sel.contains(&e.from), sel.contains(&e.to)) {
+            (true, true) => sub
+                .graph
+                .connect(remap[&e.from], &e.output, remap[&e.to], &e.input),
+            (false, true) => {
+                let reference = &inputs
+                    .iter()
+                    .find(|(k, _)| *k == (e.from, e.output.clone()))
+                    .expect("collected")
+                    .1;
+                let p = sub.graph.add(
+                    GraphNode::new(0, "Property", Vector2::new(-400.0, 0.0))
+                        .with_option("Property", reference),
+                );
+                sub.graph.connect(p, "Out", remap[&e.to], &e.input);
+            }
+            _ => {}
+        }
+    }
+    for ((from, output), name) in &outputs {
+        sub.graph.connect(remap[from], output, out_node, name);
+    }
+    // In the graph: a Sub Graph node with the same connections.
+    let node = graph
+        .graph
+        .add(GraphNode::new(0, "Sub Graph", center).with_option("Sub Graph", sub_path));
+    let edges = graph.graph.edges.clone();
+    for e in &edges {
+        if sel.contains(&e.to) && !sel.contains(&e.from) {
+            let reference = &inputs
+                .iter()
+                .find(|(k, _)| *k == (e.from, e.output.clone()))
+                .expect("collected")
+                .1;
+            graph.graph.connect(e.from, &e.output, node, reference);
+        } else if sel.contains(&e.from) && !sel.contains(&e.to) {
+            let name = &outputs
+                .iter()
+                .find(|(k, _)| *k == (e.from, e.output.clone()))
+                .expect("collected")
+                .1;
+            graph.graph.connect(node, name, e.to, &e.input);
+        }
+    }
+    let ids: Vec<u32> = sel.into_iter().collect();
+    graph.graph.remove(&ids);
+    Ok((sub, node))
 }
