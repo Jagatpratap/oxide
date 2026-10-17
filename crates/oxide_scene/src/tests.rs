@@ -471,3 +471,41 @@ fn scene_guid_table_finds_assets_moved_outside_the_editor() {
     assert_eq!(back.asset_paths(), vec!["Assets/Art/Blue.mat".to_owned()]);
     assert!(back.guids.contains_key("Assets/Art/Blue.mat"));
 }
+
+#[test]
+fn prefab_edited_on_disk_updates_instances_keeping_overrides() {
+    let dir = std::env::temp_dir().join(format!("oxide_prefab_watch_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("Assets")).unwrap();
+    let mut w = world();
+    w.resources.insert(oxide_assets::AssetServer::new(&dir));
+    let src = w.create("Crate");
+    w.transform_mut(src).unwrap().local_scale = Vector3::splat(2.0);
+    w.create_prefab(src, "Assets/Crate.prefab").unwrap();
+    let a = w.instantiate_prefab("Assets/Crate.prefab", None).unwrap();
+    let b = w.instantiate_prefab("Assets/Crate.prefab", None).unwrap();
+    // An override on one instance.
+    w.set_position(b, Vector3::new(5.0, 0.0, 0.0));
+    // Someone edits the prefab file: new scale.
+    let path = dir.join("Assets/Crate.prefab");
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let text = std::fs::read_to_string(&path).unwrap();
+    let edited = text.replacen("- 2.0\n  - 2.0\n  - 2.0", "- 3.0\n  - 3.0\n  - 3.0", 1);
+    assert_ne!(edited, text, "{text}");
+    std::fs::write(&path, edited).unwrap();
+    // The original object became an instance too (Unity), so three.
+    assert_eq!(w.reload_prefab_file("Assets/Crate.prefab"), 3);
+    let _ = a;
+    for id in w.hierarchy_order() {
+        if w.get(id).unwrap().prefab_source.as_deref() == Some("Assets/Crate.prefab") {
+            assert_eq!(w.transform(id).unwrap().local_scale, Vector3::splat(3.0));
+        }
+    }
+    let b = w
+        .hierarchy_order()
+        .into_iter()
+        .filter(|&id| w.get(id).unwrap().name == "Crate")
+        .next_back()
+        .unwrap();
+    assert_eq!(w.position(b), Vector3::new(5.0, 0.0, 0.0));
+}

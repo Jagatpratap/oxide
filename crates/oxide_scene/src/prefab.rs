@@ -624,6 +624,9 @@ impl World {
                 if let Some(fixed) = self.with_moved_assets_fixed(&f) {
                     f = fixed;
                 }
+                if let Some(a) = self.try_resource::<oxide_assets::AssetServer>() {
+                    a.watch(path);
+                }
                 self.resource_mut::<PrefabCache>()
                     .files
                     .insert(path.to_owned(), (mtime, f.clone()));
@@ -686,6 +689,10 @@ impl World {
         self.record_guids(&mut file);
         std::fs::write(&full, file.to_yaml()?)
             .map_err(|e| format!("cannot write {}: {e}", full.display()))?;
+        // Our own write isn't an outside edit.
+        if let Some(a) = self.try_resource::<oxide_assets::AssetServer>() {
+            a.watch(path);
+        }
         if let Some(c) = self.try_resource_mut::<PrefabCache>() {
             c.files.remove(path);
         }
@@ -876,6 +883,20 @@ impl World {
             }
         }
         out
+    }
+
+    /// A prefab file changed on disk: its instances in the open scenes are updated from the
+    /// new content, keeping their overrides (from what they were built from). Returns how
+    /// many instances changed.
+    pub fn reload_prefab_file(&mut self, path: &str) -> usize {
+        let Some(old) = self
+            .try_resource::<PrefabCache>()
+            .and_then(|c| c.files.get(path))
+            .map(|(_, f)| f.clone())
+        else {
+            return 0;
+        };
+        self.update_prefab_instances(&BTreeMap::from([(path.to_owned(), old)]))
     }
 
     /// After loading a scene: updates outermost prefab instances whose prefab changed since

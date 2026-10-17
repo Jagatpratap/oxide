@@ -274,8 +274,12 @@ from the fixed edge and each object along its matching local axis).
   importer with path filters and per component, applied on first import / Add Component)
   ([Texture Importer](https://docs.unity3d.com/Manual/class-TextureImporter.html),
   [Presets](https://docs.unity3d.com/Manual/Presets.html))
-- ◐ File watching: textures (and their .meta), materials, shaders and render textures re-import
-  when edited on disk (polled twice a second); models/audio, background re-import ☐. Asset Labels ☑
+- ☑ File watching: every asset type re-imports when edited on disk (polled twice a second): textures
+  (and their .meta) in the background (the old texture stays until the worker finishes), materials,
+  shaders, render textures, models, audio, animation assets, terrain data, data assets, fonts (their
+  Font Assets rebuild); prefabs update their instances in the open scenes keeping overrides; an open scene
+  changed on disk reloads (or warns when it has unsaved changes); our own saves aren't mistaken for
+  outside edits. Asset Labels ☑
   (in `.meta`, searchable with `l:`)
 - ◐ Runtime loading: multi-scene (`SceneHandle`, additive scenes, `MoveGameObjectToScene`),
   `LoadSceneAsync` / `UnloadSceneAsync` with `allowSceneActivation` (files parsed on a background

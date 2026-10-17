@@ -460,7 +460,10 @@ impl FontLibrary {
             None => None,
             Some(f) if f.path() == BUILTIN_FONT => None,
             Some(f) => match std::fs::read(assets.full_path(f.path())) {
-                Ok(b) => Some(b),
+                Ok(b) => {
+                    assets.watch(f.path());
+                    Some(b)
+                }
                 Err(e) => {
                     self.errors
                         .insert(key.clone(), format!("{}: {e}", f.path()));

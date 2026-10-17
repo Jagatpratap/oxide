@@ -72,6 +72,10 @@ pub fn init_world(world: &mut World, project_root: std::path::PathBuf) {
 /// Background-loaded scenes activated per frame at most (spreads streaming hitches).
 const MAX_SCENE_ACTIVATIONS: usize = 1;
 
+/// Open scene files that changed on disk (the editor reloads or warns).
+#[derive(Default)]
+pub struct ChangedScenes(pub Vec<String>);
+
 pub struct Engine {
     pub gui: crate::gui::GuiLayer,
     pub window: Arc<Window>,
@@ -239,6 +243,10 @@ impl Engine {
                 Err(e) => oxide_core::debug_log_error!("Lighting bake failed: {e}"),
             }
         }
+        // Textures re-imported in the background swap in when ready.
+        for p in self.world.resource_mut::<AssetServer>().poll_background() {
+            oxide_core::debug_log!("Reimported {p}");
+        }
         // Pick up asset files edited outside the engine (twice a second).
         if self.auto_refresh
             && self
@@ -250,6 +258,24 @@ impl Engine {
             let reloaded = self.world.resource_mut::<AssetServer>().reload_changed();
             for p in reloaded {
                 oxide_core::debug_log!("Reloaded {p}");
+            }
+            // Prefabs and scenes edited outside: update prefab instances now; the open scene is
+            // left to the editor (it knows about unsaved changes).
+            let files = std::mem::take(&mut self.world.resource_mut::<AssetServer>().world_reloads);
+            for p in files {
+                if p.ends_with(".prefab") {
+                    let n = self.world.reload_prefab_file(&p);
+                    if n > 0 {
+                        oxide_core::debug_log!("{p} changed on disk: updated {n} instance(s)");
+                    }
+                } else if self.world.find_scene(&p).is_some_and(|h| {
+                    self.world.scene_info(h).and_then(|s| s.path).as_deref() == Some(p.as_str())
+                }) {
+                    if !self.world.resources.contains::<ChangedScenes>() {
+                        self.world.resources.insert(ChangedScenes::default());
+                    }
+                    self.world.resource_mut::<ChangedScenes>().0.push(p);
+                }
             }
         }
         let vsync = self

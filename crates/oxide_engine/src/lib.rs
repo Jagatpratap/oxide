@@ -322,6 +322,7 @@ pub fn load_scene(
     let text = std::fs::read_to_string(&full)
         .map_err(|e| format!("cannot read {}: {e}", full.display()))?;
     let file = oxide_scene::SceneFile::from_yaml(&text)?;
+    world.resource::<oxide_assets::AssetServer>().watch(path);
     let (_, warnings) = world.activate_scene_file(&file, path, additive);
     for w in &warnings {
         oxide_core::debug_log_warning!("{w}");
@@ -369,6 +370,7 @@ pub fn save_scene_as(
     world.record_guids(&mut file);
     let yaml = file.to_yaml()?;
     std::fs::write(&full, yaml).map_err(|e| format!("cannot write {}: {e}", full.display()))?;
+    world.resource::<oxide_assets::AssetServer>().watch(path);
     world.set_scene_path(scene, &name, path);
     Ok(file.objects.len())
 }

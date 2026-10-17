@@ -795,7 +795,9 @@ fn build_mesh(
     let to_unity = fbx.conv * geometric;
     let normal_m = DMat3::from_mat4(to_unity).inverse().transpose();
     let points: Vec<DVec3> = cps
-        .as_chunks::<3>().0.iter()
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|c| DVec3::new(c[0], c[1], c[2]))
         .collect();
 

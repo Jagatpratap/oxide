@@ -955,11 +955,15 @@ impl Editor {
                 if st.playing() {
                     return Err("stop Play mode first".into());
                 }
+                // Reopening the same scene (changed on disk) keeps the unloaded scenes listed.
+                let reopen = w.scene_path.as_deref() == Some(path.as_str());
                 let warnings = oxide_engine::load_scene(w, &path, false)?;
                 st.selection.clear();
                 st.undo.clear();
                 st.clear_dirty();
-                st.unloaded_scenes.clear();
+                if !reopen {
+                    st.unloaded_scenes.clear();
+                }
                 launch::remember_scene_setup(w, &st.unloaded_scenes);
                 engine.start_systems();
                 format!("Opened {path} ({} warnings)", warnings.len())
@@ -2106,6 +2110,46 @@ impl Shell for Editor {
         project::sync_asset_types(&engine.world.resource::<oxide_assets::AssetServer>().types);
         // Terrain tool edits queued by the Inspector.
         terrain_tools::apply_commands(&mut self.st, engine);
+        // Open scenes edited outside the editor: reload them unless they have unsaved changes.
+        if let Some(changed) = engine
+            .world
+            .resources
+            .remove::<oxide_engine::engine::ChangedScenes>()
+            && self.st.play == PlayState::Edit
+        {
+            for path in changed.0 {
+                let w = &engine.world;
+                let Some(h) = w.find_scene(&path) else {
+                    continue;
+                };
+                if self.st.scene_dirty(w, h) {
+                    debug_log_warning!(
+                        "{path} changed on disk, but it has unsaved changes here: saving will overwrite \
+                         the file; reopen it to load the disk version"
+                    );
+                    continue;
+                }
+                debug_log!("{path} changed on disk: reloading");
+                if h == SceneHandle::MAIN {
+                    // Reopen the main scene, then the additive scenes around it.
+                    let additive: Vec<String> = w
+                        .loaded_scenes()
+                        .into_iter()
+                        .skip(1)
+                        .filter_map(|s| s.path)
+                        .collect();
+                    self.st.actions.push(Action::OpenScene(path.clone()));
+                    for p in additive {
+                        self.st.actions.push(Action::OpenSceneAdditive(p));
+                    }
+                } else {
+                    self.st.actions.push(Action::RemoveScene(Some(h), None));
+                    self.st
+                        .actions
+                        .push(Action::OpenSceneAdditive(path.clone()));
+                }
+            }
+        }
         // AssetDatabase: GUIDs for new assets, references to assets moved outside the editor.
         let now = oxide_core::time::realtime_since_startup();
         if let Some(r) = engine.world.resources.remove::<launch::StartupRefresh>() {

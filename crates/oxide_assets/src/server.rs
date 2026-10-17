@@ -70,8 +70,21 @@ pub struct AssetServer {
     /// GUIDs of every asset under `Assets/` (Unity's AssetDatabase). Scanned by the editor
     /// ([`AssetDatabase::refresh`](crate::database::AssetDatabase::refresh)); empty in players.
     pub database: crate::database::AssetDatabase,
+    /// Background re-imports: in flight and finished (see `load_texture_background`).
+    background: std::sync::Arc<std::sync::Mutex<BackgroundImports>>,
+    /// Prefab and scene files that changed on disk; the engine updates the World from them
+    /// (prefab instances, the open scene).
+    pub world_reloads: Vec<String>,
     /// Modification times of files read, for [`AssetServer::reload_changed`].
     mtimes: std::sync::Mutex<std::collections::HashMap<String, std::time::SystemTime>>,
+}
+
+type PreparedTexture = Result<(Texture2D, (u32, u32), crate::TextureImporter), String>;
+
+#[derive(Default)]
+struct BackgroundImports {
+    in_flight: std::collections::HashSet<String>,
+    done: Vec<(String, PreparedTexture)>,
 }
 
 pub const DEFAULT_MATERIAL: &str = "builtin:Default-Material";
@@ -83,6 +96,8 @@ impl AssetServer {
         let root: PathBuf = root.into();
         let mut s = Self {
             database: crate::database::AssetDatabase::new(root.clone()),
+            world_reloads: Vec::new(),
+            background: Default::default(),
             root,
             meshes: Assets::default(),
             materials: Assets::default(),
@@ -224,6 +239,17 @@ impl AssetServer {
         Ok(())
     }
 
+    /// Watches a file read outside the asset server (prefabs, scenes, fonts): its next change
+    /// on disk is reported by [`reload_changed`](Self::reload_changed).
+    pub fn watch(&self, path: &str) {
+        if let Ok(t) = std::fs::metadata(self.full_path(path)).and_then(|m| m.modified()) {
+            self.mtimes
+                .lock()
+                .expect("mtimes lock")
+                .insert(path.to_owned(), t);
+        }
+    }
+
     fn read(&self, path: &str) -> Result<Vec<u8>, String> {
         let full = self.full_path(path);
         let bytes =
@@ -268,7 +294,7 @@ impl AssetServer {
                 .to_ascii_lowercase();
             let result = match ext.as_str() {
                 "png" | "jpg" | "jpeg" | "tga" | "bmp" | "hdr" | "exr" | "ktx2" | "psd" | "psb"
-                | "tif" | "tiff" | "gif" | "webp" => self.load_texture(&path).map(|_| ()),
+                | "tif" | "tiff" | "gif" | "webp" => self.load_texture_background(&path),
                 "mat" => self.load_material(&path).map(|_| ()),
                 "wgsl" => self.load_shader(&path).map(|_| ()),
                 "rendertexture" => self.load_render_texture(&path).map(|_| ()),
@@ -277,6 +303,31 @@ impl AssetServer {
                 "overridecontroller" => self.load_override_controller(&path).map(|_| ()),
                 "mask" => self.load_avatar_mask(&path).map(|_| ()),
                 "terraindata" => self.load_terrain_data(&path).map(|_| ()),
+                "glb" | "gltf" | "fbx" | "obj" => self.load_model(&path).map(|_| ()),
+                "wav" | "ogg" | "mp3" | "flac" => self.load_audio(&path).map(|_| ()),
+                // Font Assets made from this font rebuild their atlas (new data version).
+                "ttf" | "otf" => {
+                    self.watch(&path);
+                    let users: Vec<String> = self
+                        .data
+                        .iter()
+                        .filter(|(_, t)| *t == "FontAsset")
+                        .map(|(p, _)| p.to_owned())
+                        .filter(|p| {
+                            self.data.get_dyn(p).is_some_and(|d| {
+                                d.as_reflect().get_field("source_font_file")
+                                    == Some(Value::Asset(path.clone()))
+                            })
+                        })
+                        .collect();
+                    users.iter().try_for_each(|p| self.load_data(p))
+                }
+                // The World applies these (prefab instances, the open scene).
+                "prefab" | "scene" => {
+                    self.watch(&path);
+                    self.world_reloads.push(path.clone());
+                    Ok(())
+                }
                 _ if self
                     .types
                     .for_path(&path)
@@ -461,29 +512,72 @@ impl AssetServer {
             tex.filter_mode = imp.filter_mode;
             return Ok(self.textures.insert(path.to_owned(), tex));
         }
-        let mut tex = Texture2D::decode(name, &bytes, imp.srgb)?;
-        // Sprite rects are in the source image's pixels, whatever the import size.
-        let source_size = (tex.width, tex.height);
-        tex.limit_size(imp.max_size);
-        if !imp.generate_mip_maps {
-            tex.mips.truncate(1);
-        }
-        tex.wrap_mode = imp.wrap_mode;
-        tex.filter_mode = imp.filter_mode;
-        tex.aniso_level = imp.aniso_level.clamp(1, 16) as u8;
-        let has_alpha = tex.mips[0].as_chunks::<4>().0.iter().any(|p| p[3] < 255);
-        let format =
-            crate::texture_compress::choose_format(imp.compression, imp.texture_type, has_alpha);
-        if let Some(format) = format
-            && tex.width % 4 == 0
-            && tex.height % 4 == 0
-        {
-            tex.compressed = Some(self.compressed_cached(&bytes, &imp, format, &tex));
-        }
-        let (w, h) = source_size;
+        let (tex, (w, h)) = prepare_texture(&self.root, name, &bytes, &imp)?;
         let handle = self.textures.insert(path.to_owned(), tex);
         self.make_sprites(path, &imp, w, h);
         Ok(handle)
+    }
+
+    /// Re-imports a texture on a worker thread (decode, resize, mipmaps, GPU compression);
+    /// the old texture stays in use until [`poll_background`](Self::poll_background) swaps
+    /// the new one in. Unity's background re-import.
+    pub fn load_texture_background(&mut self, path: &str) -> Result<(), String> {
+        if path.to_ascii_lowercase().ends_with(".ktx2") || self.textures.handle_of(path).is_none() {
+            return self.load_texture(path).map(drop);
+        }
+        {
+            let mut q = self.background.lock().expect("background lock");
+            if q.in_flight.contains(path) {
+                return Ok(());
+            }
+            q.in_flight.insert(path.to_owned());
+        }
+        let bytes = self.read(path)?;
+        let imp = self.texture_importer(path);
+        let root = self.root.clone();
+        let queue = self.background.clone();
+        let path = path.to_owned();
+        std::thread::Builder::new()
+            .name(format!("import {path}"))
+            .spawn(move || {
+                let name = Path::new(&path)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("texture")
+                    .to_owned();
+                let r = prepare_texture(&root, &name, &bytes, &imp).map(|(t, size)| (t, size, imp));
+                let mut q = queue.lock().expect("background lock");
+                q.in_flight.remove(&path);
+                q.done.push((path, r));
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Swaps in textures finished by background re-imports. Returns their paths.
+    pub fn poll_background(&mut self) -> Vec<String> {
+        let done = std::mem::take(&mut self.background.lock().expect("background lock").done);
+        let mut out = Vec::new();
+        for (path, r) in done {
+            match r {
+                Ok((tex, (w, h), imp)) => {
+                    self.textures.insert(path.clone(), tex);
+                    self.make_sprites(&path, &imp, w, h);
+                    out.push(path);
+                }
+                Err(e) => oxide_core::debug_log_error!("{e}"),
+            }
+        }
+        out
+    }
+
+    /// Background re-imports still running.
+    pub fn background_imports(&self) -> usize {
+        self.background
+            .lock()
+            .expect("background lock")
+            .in_flight
+            .len()
     }
 
     /// Sprite sub-assets of a texture imported as Sprite: the whole texture (Single) or
@@ -573,49 +667,6 @@ impl AssetServer {
         }
         out.sort();
         out.dedup();
-        out
-    }
-
-    fn compressed_cached(
-        &self,
-        source: &[u8],
-        imp: &crate::TextureImporter,
-        format: crate::CompressedFormat,
-        tex: &Texture2D,
-    ) -> crate::CompressedMips {
-        use crate::texture_compress::{compress_mips, level_size};
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        source.hash(&mut h);
-        format!(
-            "{imp:?} {format:?} {}x{} {} v1",
-            tex.width,
-            tex.height,
-            tex.mips.len()
-        )
-        .hash(&mut h);
-        let cache = self
-            .full_path("Library/TextureCache")
-            .join(format!("{:016x}.bin", h.finish()));
-        let sizes: Vec<usize> = (0..tex.mips.len())
-            .map(|i| level_size(format, (tex.width >> i).max(1), (tex.height >> i).max(1)))
-            .collect();
-        if let Ok(data) = std::fs::read(&cache)
-            && data.len() == sizes.iter().sum::<usize>()
-        {
-            let mut mips = Vec::with_capacity(sizes.len());
-            let mut at = 0;
-            for s in sizes {
-                mips.push(data[at..at + s].to_vec());
-                at += s;
-            }
-            return crate::CompressedMips { format, mips };
-        }
-        let out = compress_mips(format, imp.compression, &tex.mips, tex.width, tex.height);
-        if let Some(dir) = cache.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        let _ = std::fs::write(&cache, out.mips.concat());
         out
     }
 
@@ -996,5 +1047,116 @@ mod reload_tests {
         a.set_asset_labels("Assets/x.mat", &[]).unwrap();
         assert!(!dir.join("Assets/x.mat.meta").exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// Texture import (Unity's TextureImporter pipeline) without the asset server, so it can run
+/// on a worker thread: decode, size limit, mipmaps, sampler settings and GPU compression
+/// (cached in `Library/TextureCache`). Returns the texture and the source image size.
+fn prepare_texture(
+    root: &Path,
+    name: &str,
+    bytes: &[u8],
+    imp: &crate::TextureImporter,
+) -> Result<(Texture2D, (u32, u32)), String> {
+    let mut tex = Texture2D::decode(name, bytes, imp.srgb)?;
+    // Sprite rects are in the source image's pixels, whatever the import size.
+    let source_size = (tex.width, tex.height);
+    tex.limit_size(imp.max_size);
+    if !imp.generate_mip_maps {
+        tex.mips.truncate(1);
+    }
+    tex.wrap_mode = imp.wrap_mode;
+    tex.filter_mode = imp.filter_mode;
+    tex.aniso_level = imp.aniso_level.clamp(1, 16) as u8;
+    let has_alpha = tex.mips[0].as_chunks::<4>().0.iter().any(|p| p[3] < 255);
+    let format =
+        crate::texture_compress::choose_format(imp.compression, imp.texture_type, has_alpha);
+    if let Some(format) = format
+        && tex.width % 4 == 0
+        && tex.height % 4 == 0
+    {
+        tex.compressed = Some(compressed_cached(root, bytes, imp, format, &tex));
+    }
+    Ok((tex, source_size))
+}
+
+fn compressed_cached(
+    root: &Path,
+    source: &[u8],
+    imp: &crate::TextureImporter,
+    format: crate::CompressedFormat,
+    tex: &Texture2D,
+) -> crate::CompressedMips {
+    use crate::texture_compress::{compress_mips, level_size};
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    source.hash(&mut h);
+    format!(
+        "{imp:?} {format:?} {}x{} {} v1",
+        tex.width,
+        tex.height,
+        tex.mips.len()
+    )
+    .hash(&mut h);
+    let cache = root
+        .join("Library/TextureCache")
+        .join(format!("{:016x}.bin", h.finish()));
+    let sizes: Vec<usize> = (0..tex.mips.len())
+        .map(|i| level_size(format, (tex.width >> i).max(1), (tex.height >> i).max(1)))
+        .collect();
+    if let Ok(data) = std::fs::read(&cache)
+        && data.len() == sizes.iter().sum::<usize>()
+    {
+        let mut mips = Vec::with_capacity(sizes.len());
+        let mut at = 0;
+        for s in sizes {
+            mips.push(data[at..at + s].to_vec());
+            at += s;
+        }
+        return crate::CompressedMips { format, mips };
+    }
+    let out = compress_mips(format, imp.compression, &tex.mips, tex.width, tex.height);
+    if let Some(dir) = cache.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(&cache, out.mips.concat());
+    out
+}
+
+#[cfg(test)]
+mod background_tests {
+    use super::*;
+
+    fn png(w: u32, h: u32) -> Vec<u8> {
+        let img = image::RgbaImage::from_pixel(w, h, image::Rgba([200, 30, 30, 255]));
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    }
+
+    #[test]
+    fn textures_reimport_in_the_background() {
+        let dir = std::env::temp_dir().join(format!("oxide-bg-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("Assets")).unwrap();
+        std::fs::write(dir.join("Assets/t.png"), png(8, 8)).unwrap();
+        let mut a = AssetServer::new(&dir);
+        let h = a.load_texture("Assets/t.png").unwrap();
+        assert_eq!(a.textures.get(&h).unwrap().width, 8);
+        std::fs::write(dir.join("Assets/t.png"), png(16, 16)).unwrap();
+        a.load_texture_background("Assets/t.png").unwrap();
+        // The old texture stays until the worker finishes.
+        let mut swapped = Vec::new();
+        for _ in 0..500 {
+            swapped = a.poll_background();
+            if !swapped.is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(swapped, vec!["Assets/t.png".to_owned()]);
+        assert_eq!(a.textures.get(&h).unwrap().width, 16);
+        assert_eq!(a.background_imports(), 0);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
