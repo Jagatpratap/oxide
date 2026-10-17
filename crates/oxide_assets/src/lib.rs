@@ -52,7 +52,7 @@ pub use animator_controller::{
 };
 pub use asset_types::{AssetTypeInfo, AssetTypeRegistry, CreateKind, DataAsset, DataAssets};
 pub use handle::{Asset, AssetId, Assets, Handle};
-pub use material::{Material, MaterialProperty, ShaderKind, SurfaceType};
+pub use material::{Material, MaterialProperty, ShaderKind, SurfaceType, WorkflowMode};
 pub use mesh::Mesh;
 pub use model::{Model, ModelNode, ModelSkin};
 pub use preset::Preset;

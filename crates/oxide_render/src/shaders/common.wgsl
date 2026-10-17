@@ -52,6 +52,23 @@ struct ReflectionProbe {
 
 const PI: f32 = 3.14159265;
 
+// Octahedral unit-vector encoding (deferred G-buffer normals).
+fn oct_encode(n: vec3f) -> vec2f {
+    let p = n.xy / (abs(n.x) + abs(n.y) + abs(n.z));
+    if (n.z >= 0.0) {
+        return p;
+    }
+    return (1.0 - abs(p.yx)) * select(vec2f(-1.0), vec2f(1.0), p >= vec2f(0.0));
+}
+
+fn oct_decode(e: vec2f) -> vec3f {
+    var n = vec3f(e, 1.0 - abs(e.x) - abs(e.y));
+    if (n.z < 0.0) {
+        n = vec3f((1.0 - abs(n.yx)) * select(vec2f(-1.0), vec2f(1.0), n.xy >= vec2f(0.0)), n.z);
+    }
+    return normalize(n);
+}
+
 fn sun_to_light() -> vec3f {
     return -frame.sun_dir.xyz;
 }

@@ -134,8 +134,9 @@ fn f_schlick(f0: vec3f, vh: f32) -> vec3f {
 }
 
 // Radiance reflected towards `v` from a light arriving along `l` (URP scale: Lambert
-// without 1/PI, so a white surface facing an intensity-1 light is white).
-fn brdf(n: vec3f, v: vec3f, l: vec3f, albedo: vec3f, f0: vec3f, rough: f32, metallic: f32) -> vec3f {
+// without 1/PI, so a white surface facing an intensity-1 light is white). `diffuse` is the
+// Lambert colour, `f0` the specular reflectance at normal incidence.
+fn brdf_df(n: vec3f, v: vec3f, l: vec3f, diffuse: vec3f, f0: vec3f, rough: f32) -> vec3f {
     let nl = max(dot(n, l), 0.0);
     if (nl <= 0.0) {
         return vec3f(0.0);
@@ -147,8 +148,31 @@ fn brdf(n: vec3f, v: vec3f, l: vec3f, albedo: vec3f, f0: vec3f, rough: f32, meta
     let a = max(rough * rough, 0.002);
     let f = f_schlick(f0, vh);
     let spec = d_ggx(nh, a) * v_smith(nv, nl, a) * f;
-    let kd = (1.0 - f) * (1.0 - metallic);
-    return (kd * albedo / PI + spec) * nl * PI;
+    return ((1.0 - f) * diffuse / PI + spec) * nl * PI;
+}
+
+// Metallic workflow.
+fn brdf(n: vec3f, v: vec3f, l: vec3f, albedo: vec3f, f0: vec3f, rough: f32, metallic: f32) -> vec3f {
+    return brdf_df(n, v, l, albedo * (1.0 - metallic), f0, rough);
+}
+
+// URP Simple Lit: Lambert plus a Blinn-Phong highlight in the specular colour.
+fn blinn_phong(n: vec3f, v: vec3f, l: vec3f, diffuse: vec3f, spec: vec3f, smoothness: f32) -> vec3f {
+    let nl = max(dot(n, l), 0.0);
+    if (nl <= 0.0) {
+        return vec3f(0.0);
+    }
+    let nh = max(dot(n, normalize(v + l)), 0.0);
+    let shininess = exp2(10.0 * smoothness + 1.0);
+    return (diffuse + spec * pow(nh, shininess)) * nl;
+}
+
+// Lighting models: 0 physically based (Lit), 1 Blinn-Phong (Simple Lit), 2 baked only.
+fn light_brdf(model: u32, n: vec3f, v: vec3f, l: vec3f, diffuse: vec3f, f0: vec3f, rough: f32) -> vec3f {
+    if (model == 1u) {
+        return blinn_phong(n, v, l, diffuse, f0, 1.0 - rough);
+    }
+    return brdf_df(n, v, l, diffuse, f0, rough);
 }
 
 fn shadow_tap(layer: i32, uv: vec2f, depth: f32) -> f32 {
@@ -263,8 +287,11 @@ fn env_specular(r: vec3f, pos: vec3f, rough: f32, sel: vec2u) -> vec3f {
 }
 
 // Direct light: the sun (with cascaded shadows) and the clustered point/spot lights.
-fn direct_light(world_pos: vec3f, n: vec3f, geo_n: vec3f, albedo: vec3f, metallic: f32, rough: f32, receive_shadows: bool, frag_xy: vec2f) -> vec3f {
-    let f0 = mix(vec3f(0.04), albedo, metallic);
+// Baked Lit (model 2) gets none.
+fn direct_light(world_pos: vec3f, n: vec3f, geo_n: vec3f, diffuse: vec3f, f0: vec3f, rough: f32, model: u32, receive_shadows: bool, frag_xy: vec2f) -> vec3f {
+    if (model == 2u) {
+        return vec3f(0.0);
+    }
     // URP: AO also darkens direct light by "Direct Lighting Strength".
     let direct_ao = mix(1.0, screen_ao(frag_xy), frame.ssao.y);
     let v = normalize(frame.camera_pos.xyz - world_pos);
@@ -275,7 +302,7 @@ fn direct_light(world_pos: vec3f, n: vec3f, geo_n: vec3f, albedo: vec3f, metalli
         if (receive_shadows) {
             shadow = sun_shadow(world_pos, geo_n, view_depth);
         }
-        color += brdf(n, v, sun_to_light(), albedo, f0, rough, metallic) * frame.sun_color.rgb * shadow * direct_ao;
+        color += light_brdf(model, n, v, sun_to_light(), diffuse, f0, rough) * frame.sun_color.rgb * shadow * direct_ao;
     }
     let view_z = (frame.view * vec4f(world_pos, 1.0)).z;
     let cluster = cluster_of(frag_xy, view_z);
@@ -300,29 +327,33 @@ fn direct_light(world_pos: vec3f, n: vec3f, geo_n: vec3f, albedo: vec3f, metalli
         if (L.spot.z > 0.5 && receive_shadows && atten > 0.0) {
             atten *= punctual_shadow(L, world_pos, geo_n, sqrt(d2));
         }
-        color += brdf(n, v, l, albedo, f0, rough, metallic) * L.color.rgb * atten * direct_ao;
+        color += light_brdf(model, n, v, l, diffuse, f0, rough) * L.color.rgb * atten * direct_ao;
     }
     return color;
 }
 
-// Indirect light: baked or ambient diffuse (lightmaps, light probes, sky SH) and reflections
-// (probes / sky), with material and screen-space AO.
-fn indirect_light(world_pos: vec3f, n: vec3f, geo_n: vec3f, albedo: vec3f, metallic: f32, rough: f32, ao_in: f32, probe_sel: vec2u, frag_xy: vec2f, gi: u32, lm_uv: vec2f) -> vec3f {
-    let f0 = mix(vec3f(0.04), albedo, metallic);
+// Indirect light: baked or ambient diffuse (lightmaps, light probes, sky SH) and, for the
+// physically based model, reflections (probes / sky), with material and screen-space AO.
+fn indirect_light(world_pos: vec3f, n: vec3f, geo_n: vec3f, diffuse: vec3f, f0: vec3f, rough: f32, ao_in: f32, model: u32, probe_sel: vec2u, frag_xy: vec2f, gi: u32, lm_uv: vec2f) -> vec3f {
     let ao = min(ao_in, screen_ao(frag_xy));
+    let diffuse_amb = diffuse_light(n, gi, lm_uv) * diffuse;
+    if (model != 0u) {
+        return diffuse_amb * ao;
+    }
     let v = normalize(frame.camera_pos.xyz - world_pos);
     let nv = max(dot(n, v), 1e-4);
-    let diffuse_amb = diffuse_light(n, gi, lm_uv) * albedo * (1.0 - metallic);
     let r = reflect(-v, n);
     let spec_env = env_specular(r, world_pos, rough, probe_sel);
     let horizon_occ = clamp(1.0 + dot(r, geo_n), 0.0, 1.0);
     return (diffuse_amb + spec_env * env_brdf_approx(f0, rough, nv) * frame.fog_params.w * horizon_occ * horizon_occ) * ao;
 }
 
-// Full surface shading (forward): direct + indirect.
+// Full surface shading (forward, metallic workflow): direct + indirect.
 fn shade(world_pos: vec3f, n: vec3f, geo_n: vec3f, albedo: vec3f, metallic: f32, rough: f32, ao_in: f32, receive_shadows: bool, probe_sel: vec2u, frag_xy: vec2f, gi: u32, lm_uv: vec2f) -> vec3f {
-    return direct_light(world_pos, n, geo_n, albedo, metallic, rough, receive_shadows, frag_xy)
-        + indirect_light(world_pos, n, geo_n, albedo, metallic, rough, ao_in, probe_sel, frag_xy, gi, lm_uv);
+    let diffuse = albedo * (1.0 - metallic);
+    let f0 = mix(vec3f(0.04), albedo, metallic);
+    return direct_light(world_pos, n, geo_n, diffuse, f0, rough, 0u, receive_shadows, frag_xy)
+        + indirect_light(world_pos, n, geo_n, diffuse, f0, rough, ao_in, 0u, probe_sel, frag_xy, gi, lm_uv);
 }
 
 // Scene view debug views (frame.misc.y): 1 albedo, 2 normals, 3 lighting only,

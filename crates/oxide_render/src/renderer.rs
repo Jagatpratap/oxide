@@ -195,18 +195,20 @@ struct Targets {
     depth: wgpu::TextureView,
 }
 
-/// The deferred G-buffer: albedo + metallic, normal + roughness, geometric normal + flags,
-/// indirect light + emission (HDR); with the depth target, read by the lighting pass.
+/// The deferred G-buffer (see `GBUFFER_FORMATS`); with the depth target, read by the
+/// lighting pass.
 struct GBuffer {
     views: [wgpu::TextureView; 4],
     group: wgpu::BindGroup,
 }
 
+/// In the shader's location order: both normals (octahedral), indirect light, diffuse +
+/// model/flags code, F0 + roughness (32 bytes per sample, the GPU's limit).
 const GBUFFER_FORMATS: [wgpu::TextureFormat; 4] = [
-    wgpu::TextureFormat::Rgba8Unorm,
-    wgpu::TextureFormat::Rgba16Float,
     wgpu::TextureFormat::Rgba16Float,
     HDR_FORMAT,
+    wgpu::TextureFormat::Rgba8Unorm,
+    wgpu::TextureFormat::Rgba8Unorm,
 ];
 
 fn grow_buffer(
@@ -1286,6 +1288,7 @@ impl SceneRenderer {
                 })
                 .create_view(&Default::default())
         });
+        // Shader bindings 0-3: the targets in order; 4: depth.
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("gbuffer group"),
             layout: &self.gbuffer_layout,

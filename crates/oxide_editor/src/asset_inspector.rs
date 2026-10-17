@@ -533,10 +533,24 @@ fn material(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: 
             );
         });
     } else {
-        // Shader Graph fields only apply to graph materials.
+        // Shader Graph fields only apply to graph materials; each built-in shader shows only
+        // its own inputs (Unity's per-shader material GUI).
+        use oxide_assets::{ShaderKind as K, WorkflowMode as Wm};
+        let (kind, workflow) = (m.shader, m.workflow_mode);
         changed |=
             crate::inspector::reflect_grid_where(ui, &engine.world, &mut m, "material", &|f| {
-                !matches!(f, "shader" | "shader_graph" | "properties")
+                let shown_for_kind = match f {
+                    "workflow_mode" => kind == K::Lit,
+                    "metallic" => kind == K::Lit && workflow == Wm::Metallic,
+                    "specular_color" => {
+                        kind == K::SimpleLit || (kind == K::Lit && workflow == Wm::Specular)
+                    }
+                    "smoothness" | "metallic_gloss_map" => matches!(kind, K::Lit | K::SimpleLit),
+                    "normal_map" | "normal_scale" => kind != K::Unlit,
+                    "occlusion_map" | "occlusion_strength" => kind == K::Lit,
+                    _ => true,
+                };
+                shown_for_kind && !matches!(f, "shader" | "shader_graph" | "properties")
             });
     }
     if changed {
@@ -844,7 +858,9 @@ fn shader_picker(
     let current = match (&m.shader_graph, m.shader) {
         (Some(g), _) => format!("Shader Graphs/{}", stem(g.path())),
         (None, ShaderKind::Unlit) => "Universal Render Pipeline/Unlit".into(),
-        (None, _) => "Universal Render Pipeline/Lit".into(),
+        (None, ShaderKind::SimpleLit) => "Universal Render Pipeline/Simple Lit".into(),
+        (None, ShaderKind::BakedLit) => "Universal Render Pipeline/Baked Lit".into(),
+        (None, ShaderKind::Lit) => "Universal Render Pipeline/Lit".into(),
     };
     let mut changed = false;
     ui.horizontal(|ui| {
@@ -855,6 +871,11 @@ fn shader_picker(
             .show_ui(ui, |ui| {
                 for (label, kind) in [
                     ("Universal Render Pipeline/Lit", ShaderKind::Lit),
+                    (
+                        "Universal Render Pipeline/Simple Lit",
+                        ShaderKind::SimpleLit,
+                    ),
+                    ("Universal Render Pipeline/Baked Lit", ShaderKind::BakedLit),
                     ("Universal Render Pipeline/Unlit", ShaderKind::Unlit),
                 ] {
                     if ui.selectable_label(current == label, label).clicked() {

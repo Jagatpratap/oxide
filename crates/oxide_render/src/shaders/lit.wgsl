@@ -11,6 +11,7 @@ struct Material {
     pbr: vec4f,           // metallic, roughness, normal scale, occlusion strength
     tiling_offset: vec4f,
     flags: vec4f,         // alpha cutoff, unlit, cutout, transparent
+    spec: vec4f,          // specular colour, w = model: 0 Lit, 1 Lit specular, 2 Simple Lit, 3 Baked Lit
 };
 
 @group(1) @binding(0) var<uniform> material: Material;
@@ -59,6 +60,7 @@ struct Surface {
     alpha: f32,
     normal_ts: vec3f,       // tangent space
     metallic: f32,
+    specular: vec3f,        // specular workflow / Simple Lit
     smoothness: f32,
     occlusion: f32,
     emission: vec3f,
@@ -243,6 +245,37 @@ fn surface_input(in: VertexOut, front: bool) -> SurfaceInput {
     return i;
 }
 
+// The lighting inputs for the material's model: Lambert colour, specular F0 and the lighting
+// model (0 physically based, 1 Blinn-Phong, 2 baked only).
+struct MaterialTerms {
+    diffuse: vec3f,
+    f0: vec3f,
+    model: u32,
+};
+
+fn material_terms(albedo: vec3f, metallic: f32, specular: vec3f) -> MaterialTerms {
+    var t: MaterialTerms;
+    let m = u32(material.spec.w + 0.5);
+    if (m == 1u) {
+        t.f0 = specular;
+        t.diffuse = albedo * (1.0 - max(specular.r, max(specular.g, specular.b)));
+        t.model = 0u;
+    } else if (m == 2u) {
+        t.f0 = specular;
+        t.diffuse = albedo;
+        t.model = 1u;
+    } else if (m == 3u) {
+        t.f0 = vec3f(0.0);
+        t.diffuse = albedo;
+        t.model = 2u;
+    } else {
+        t.f0 = mix(vec3f(0.04), albedo, metallic);
+        t.diffuse = albedo * (1.0 - metallic);
+        t.model = 0u;
+    }
+    return t;
+}
+
 // Depth prepass of alpha-cutout materials: only the alpha test.
 @fragment
 fn fs_depth_cutout(in: VertexOut, @builtin(front_facing) front: bool) {
@@ -278,7 +311,9 @@ fn fs_main(in: VertexOut, @builtin(front_facing) front: bool) -> FragOut {
         out.color = vec4f(c, 1.0);
         return out;
     }
-    var color = shade(in.world_pos, n, geo, albedo, metallic, rough, ao, in.receive_shadows != 0u, in.probes, in.clip.xy, in.gi, in.lm_uv);
+    let t = material_terms(albedo, metallic, s.specular);
+    var color = direct_light(in.world_pos, n, geo, t.diffuse, t.f0, rough, t.model, in.receive_shadows != 0u, in.clip.xy)
+        + indirect_light(in.world_pos, n, geo, t.diffuse, t.f0, rough, ao, t.model, in.probes, in.clip.xy, in.gi, in.lm_uv);
     color += s.emission;
     out.color = vec4f(apply_fog(color, in.world_pos), alpha);
     return out;
@@ -288,11 +323,14 @@ fn fs_main(in: VertexOut, @builtin(front_facing) front: bool) -> FragOut {
 // computed here, per object (lightmaps, light probes, reflection probes); the lighting pass
 // adds the sun and the punctual lights. Unlit materials store their colour as "indirect"
 // and are flagged so the lighting pass adds nothing.
+// Four targets (the GPU allows 32 bytes per sample): both normals octahedral-encoded,
+// indirect light + emission, diffuse with the lighting model and flags, specular F0 with
+// roughness.
 struct GBufferOut {
-    @location(0) albedo_metallic: vec4f,
-    @location(1) normal_rough: vec4f,
-    @location(2) geo_flags: vec4f,     // geometric normal, w = 0 no shadows, 1 shadows, 2 unlit
-    @location(3) indirect: vec4f,
+    @location(0) normals: vec4f,     // oct(normal), oct(geometric normal)
+    @location(1) indirect: vec4f,
+    @location(2) diffuse_code: vec4f, // a = (model * 3 + flags) / 15; flags 0 no shadows, 1 shadows, 2 unlit
+    @location(3) f0_rough: vec4f,
 };
 
 @fragment
@@ -305,10 +343,10 @@ fn fs_gbuffer(in: VertexOut, @builtin(front_facing) front: bool) -> GBufferOut {
     var out: GBufferOut;
     let geo = normalize(in.normal) * select(-1.0, 1.0, front);
     if (material.flags.y > 0.5) {
-        out.albedo_metallic = vec4f(0.0);
-        out.normal_rough = vec4f(geo, 1.0);
-        out.geo_flags = vec4f(geo, 2.0);
+        out.normals = vec4f(oct_encode(geo), oct_encode(geo));
         out.indirect = vec4f(s.base_color + s.emission, 1.0);
+        out.diffuse_code = vec4f(0.0, 0.0, 0.0, 2.0 / 15.0);
+        out.f0_rough = vec4f(0.0, 0.0, 0.0, 1.0);
         return out;
     }
     let tn = s.normal_ts;
@@ -317,11 +355,13 @@ fn fs_gbuffer(in: VertexOut, @builtin(front_facing) front: bool) -> GBufferOut {
     let rough = clamp(1.0 - s.smoothness, 0.045, 1.0);
     let ao = clamp(s.occlusion, 0.0, 1.0);
     let albedo = max(s.base_color, vec3f(0.0));
-    out.albedo_metallic = vec4f(albedo, metallic);
-    out.normal_rough = vec4f(n, rough);
-    out.geo_flags = vec4f(geo, select(0.0, 1.0, in.receive_shadows != 0u));
-    let indirect = indirect_light(in.world_pos, n, geo, albedo, metallic, rough, ao, in.probes, in.clip.xy, in.gi, in.lm_uv);
+    let t = material_terms(albedo, metallic, s.specular);
+    let flags = select(0u, 1u, in.receive_shadows != 0u);
+    out.normals = vec4f(oct_encode(n), oct_encode(geo));
+    let indirect = indirect_light(in.world_pos, n, geo, t.diffuse, t.f0, rough, ao, t.model, in.probes, in.clip.xy, in.gi, in.lm_uv);
     out.indirect = vec4f(indirect + s.emission, 1.0);
+    out.diffuse_code = vec4f(t.diffuse, f32(t.model * 3u + flags) / 15.0);
+    out.f0_rough = vec4f(t.f0, rough);
     return out;
 }
 

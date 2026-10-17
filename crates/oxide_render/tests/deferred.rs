@@ -226,3 +226,94 @@ fn custom_pipeline_steps_replace_the_universal_order() {
     assert!(greens > 100, "the cube is drawn green ({greens} px)");
     assert_eq!(other, 0, "nothing else is drawn: no floor, sphere or sky");
 }
+
+#[test]
+fn simple_lit_baked_lit_and_specular_workflow() {
+    let Some(gpu) = Gpu::headless() else {
+        eprintln!("no GPU; skipped");
+        return;
+    };
+    let mut assets = AssetServer::new(std::env::temp_dir());
+    let mut r = SceneRenderer::new(&gpu);
+    let mut f = scene(&mut assets);
+    // The cube's pixels: the clearly red ones in the Lit render.
+    let lit_img = render(&gpu, &mut r, &assets, &f);
+    let cube_px: Vec<(u32, u32)> = (0..W * H)
+        .map(|i| (i % W, i / W))
+        .filter(|&(x, y)| {
+            let p = lit_img.pixel(x, y);
+            p[0] > 60 && p[0] as u32 > p[1] as u32 * 2 && p[0] as u32 > p[2] as u32 * 2
+        })
+        .collect();
+    assert!(cube_px.len() > 30, "cube found ({} px)", cube_px.len());
+    let cube_center = |img: &CapturedImage| {
+        let mut sum = [0u32; 3];
+        for &(x, y) in &cube_px {
+            let p = img.pixel(x, y);
+            for c in 0..3 {
+                sum[c] += p[c] as u32;
+            }
+        }
+        sum.map(|s| s / cube_px.len() as u32)
+    };
+    let lit = cube_center(&lit_img);
+    fn set(
+        assets: &mut AssetServer,
+        f: &mut RenderFrame,
+        kind: oxide_assets::ShaderKind,
+        workflow: oxide_assets::WorkflowMode,
+        path: &str,
+    ) {
+        let mut m = Material::lit("m", Color::rgb(0.8, 0.1, 0.1));
+        m.shader = kind;
+        m.workflow_mode = workflow;
+        m.specular_color = Color::rgb(0.5, 0.5, 0.5);
+        m.smoothness = 0.7;
+        f.draws[1].material = assets.materials.insert(path, m).id();
+    }
+    set(
+        &mut assets,
+        &mut f,
+        oxide_assets::ShaderKind::BakedLit,
+        oxide_assets::WorkflowMode::Metallic,
+        "test:baked",
+    );
+    let baked = cube_center(&render(&gpu, &mut r, &assets, &f));
+    // No sun on Baked Lit: only the ambient remains.
+    assert!(baked[0] + 20 < lit[0], "baked {baked:?} vs lit {lit:?}");
+    for (kind, workflow, path) in [
+        (
+            oxide_assets::ShaderKind::SimpleLit,
+            oxide_assets::WorkflowMode::Metallic,
+            "test:simple",
+        ),
+        (
+            oxide_assets::ShaderKind::Lit,
+            oxide_assets::WorkflowMode::Specular,
+            "test:specular",
+        ),
+        (
+            oxide_assets::ShaderKind::BakedLit,
+            oxide_assets::WorkflowMode::Metallic,
+            "test:baked2",
+        ),
+    ] {
+        set(&mut assets, &mut f, kind, workflow, path);
+        f.rendering_path = RenderingPath::ForwardPlus;
+        let fwd = render(&gpu, &mut r, &assets, &f);
+        f.rendering_path = RenderingPath::Deferred;
+        let def = render(&gpu, &mut r, &assets, &f);
+        let c = cube_center(&fwd);
+        assert!(c[0] > c[1] + 20, "{kind:?}: the cube is still red {c:?}");
+        let differ = (0..W * H)
+            .filter(|i| {
+                let (a, b) = (fwd.pixel(i % W, i / W), def.pixel(i % W, i / W));
+                (0..3).any(|c| a[c].abs_diff(b[c]) > 6)
+            })
+            .count();
+        assert!(
+            differ < (W * H / 200) as usize,
+            "{kind:?} {workflow:?}: deferred differs in {differ} px"
+        );
+    }
+}

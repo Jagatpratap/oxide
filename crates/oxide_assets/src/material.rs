@@ -14,6 +14,21 @@ pub enum ShaderKind {
     Lit,
     /// No lighting (URP "Unlit").
     Unlit,
+    /// Blinn-Phong: diffuse plus a specular highlight in Specular Color (URP "Simple Lit"),
+    /// cheaper than Lit on low-end GPUs.
+    SimpleLit,
+    /// Baked lighting only: lightmaps and light probes, no realtime lights (URP "Baked Lit").
+    BakedLit,
+}
+
+/// URP Lit "Workflow Mode".
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Reflect)]
+pub enum WorkflowMode {
+    /// Metallic and smoothness (metallic map: G roughness, B metallic).
+    #[default]
+    Metallic,
+    /// A specular colour instead of metallic (specular map: RGB specular, A smoothness).
+    Specular,
 }
 
 /// URP "Surface Type" + "Alpha Clipping".
@@ -53,6 +68,10 @@ pub struct Material {
     /// `_BaseMap` tiling and offset.
     pub tiling: Vector2,
     pub offset: Vector2,
+    /// Lit: metallic or specular workflow.
+    pub workflow_mode: WorkflowMode,
+    /// `_SpecColor`: Lit's Specular workflow and Simple Lit's highlight (sRGB).
+    pub specular_color: Color,
     #[reflect(range(0, 1))]
     pub metallic: f32,
     /// `_Smoothness` = 1 - roughness.
@@ -97,6 +116,8 @@ impl Default for Material {
             base_map: None,
             tiling: Vector2::ONE,
             offset: Vector2::ZERO,
+            workflow_mode: WorkflowMode::Metallic,
+            specular_color: Color::rgb(0.2, 0.2, 0.2),
             metallic: 0.0,
             smoothness: 0.5,
             metallic_gloss_map: None,

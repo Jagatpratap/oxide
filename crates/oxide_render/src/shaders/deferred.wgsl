@@ -2,10 +2,10 @@
 // viewport reads the G-buffer and adds the sun and the clustered punctual lights to the
 // indirect light the G-buffer pass stored, then fog. Sky pixels (depth 0) are left alone.
 
-@group(1) @binding(0) var gb_albedo_metallic: texture_2d<f32>;
-@group(1) @binding(1) var gb_normal_rough: texture_2d<f32>;
-@group(1) @binding(2) var gb_geo_flags: texture_2d<f32>;
-@group(1) @binding(3) var gb_indirect: texture_2d<f32>;
+@group(1) @binding(0) var gb_normals: texture_2d<f32>;
+@group(1) @binding(1) var gb_indirect: texture_2d<f32>;
+@group(1) @binding(2) var gb_diffuse_code: texture_2d<f32>;
+@group(1) @binding(3) var gb_f0_rough: texture_2d<f32>;
 @group(1) @binding(4) var gb_depth: texture_depth_2d;
 
 @vertex
@@ -26,12 +26,15 @@ fn fs_light(@builtin(position) p: vec4f) -> @location(0) vec4f {
     let ndc = vec2f((p.x - vp.x) / vp.z * 2.0 - 1.0, 1.0 - (p.y - vp.y) / vp.w * 2.0);
     let h = frame.inv_view_proj * vec4f(ndc, depth, 1.0);
     let world_pos = h.xyz / h.w;
-    let am = textureLoad(gb_albedo_metallic, xy, 0);
-    let nr = textureLoad(gb_normal_rough, xy, 0);
-    let gf = textureLoad(gb_geo_flags, xy, 0);
+    let normals = textureLoad(gb_normals, xy, 0);
+    let dc = textureLoad(gb_diffuse_code, xy, 0);
+    let fr = textureLoad(gb_f0_rough, xy, 0);
+    let code = u32(dc.a * 15.0 + 0.5);
+    let model = code / 3u;
+    let flags = code % 3u;
     var color = textureLoad(gb_indirect, xy, 0).rgb;
-    if (gf.w < 1.5) {
-        color += direct_light(world_pos, normalize(nr.xyz), normalize(gf.xyz), am.rgb, am.a, nr.w, gf.w > 0.5, p.xy);
+    if (flags != 2u) {
+        color += direct_light(world_pos, oct_decode(normals.xy), oct_decode(normals.zw), dc.rgb, fr.rgb, fr.a, model, flags == 1u, p.xy);
     }
     return vec4f(apply_fog(color, world_pos), 1.0);
 }

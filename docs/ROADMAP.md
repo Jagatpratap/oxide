@@ -332,7 +332,9 @@ from the fixed edge and each object along its matching local axis).
 - ◐ Materials & shader property system, keywords/variants, shader import + reflection
   ([Materials](https://docs.unity3d.com/Manual/Materials.html),
   [Custom shaders](https://docs.unity3d.com/Manual/Shaders.html))
-- ◐ Built-in shaders: Lit (metallic/specular PBR), Simple Lit, Unlit, Particles, Sprite, Skybox
+- ☑ Built-in shaders: Lit (Metallic and Specular workflows), Simple Lit (Blinn-Phong), Baked Lit (lightmaps and
+  probes only), Unlit, Particles, Sprite, Skybox; all work in Forward+ and Deferred; the material Inspector shows
+  each shader's own inputs
   ([Prebuilt materials and shaders](https://docs.unity3d.com/Manual/built-in-materials-and-shaders.html))
 - ◐ Textures: mipmaps, import-time BC7/BC5/BC1/BC3 compression (Intel ISPC, cached in
   `Library/TextureCache`), KTX2 load/save (BC1–7, ASTC 4×4, RGBA8, Zstandard), sampler states,

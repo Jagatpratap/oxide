@@ -63,6 +63,9 @@ pub struct MaterialUniform {
     pub pbr: [f32; 4],
     pub tiling_offset: [f32; 4],
     pub flags: [f32; 4],
+    /// Specular colour (linear), w = model: 0 Lit metallic, 1 Lit specular, 2 Simple Lit,
+    /// 3 Baked Lit.
+    pub spec: [f32; 4],
 }
 
 /// Vec4 slots of a Shader Graph material's property uniform.
@@ -482,6 +485,17 @@ impl GpuAssets {
                     (m.surface_type == SurfaceType::Cutout) as u32 as f32,
                     (m.surface_type == SurfaceType::Transparent) as u32 as f32,
                 ],
+            },
+            spec: {
+                let sc = m.specular_color.linear();
+                let model = match (graph.is_some(), m.shader, m.workflow_mode) {
+                    (true, ..) => 0.0,
+                    (_, ShaderKind::SimpleLit, _) => 2.0,
+                    (_, ShaderKind::BakedLit, _) => 3.0,
+                    (_, _, oxide_assets::WorkflowMode::Specular) => 1.0,
+                    _ => 0.0,
+                };
+                [sc.r, sc.g, sc.b, model]
             },
         };
         // Shader Graph property values by slot (material values, else the graph defaults).
