@@ -188,7 +188,13 @@ fn main() -> ExitCode {
             .mcp_tools(oxide_editor::mcp::register);
     }
 
-    if let Some(path) = args.scene {
+    if args.sample.is_none() && !args.player {
+        // The editor reopens the last scene setup, like a project editor.
+        let project = app.config.project_root.clone();
+        let scene = args.scene;
+        app = app
+            .setup(move |world| oxide_editor::launch::load_initial_scenes(world, &project, scene));
+    } else if let Some(path) = args.scene {
         app = app.setup(move |world| {
             if let Err(e) = oxide_engine::load_scene(world, &path, false) {
                 debug_log_error!("{e}");

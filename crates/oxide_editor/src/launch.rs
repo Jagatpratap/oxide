@@ -21,25 +21,96 @@ pub fn last_scene_file(project: &Path) -> PathBuf {
     project.join("Library/Oxide/LastScene.txt")
 }
 
-pub fn remember_scene(project: &Path, scene: &str) {
-    let f = last_scene_file(project);
+/// Scenes listed in the Hierarchy but not loaded, handed from the launcher to the editor.
+pub struct PendingUnloadedScenes(pub Vec<String>);
+
+/// Remembers the open scenes for the next launch (Unity's scene setup): the main scene on
+/// the first line, then `+path` for additive scenes, `-path` for unloaded ones and
+/// `*path` for the active scene.
+pub fn remember_scene_setup(world: &oxide_scene::World, unloaded: &[String]) {
+    let Some(main) = world.scene_path.clone() else {
+        return;
+    };
+    let project = world.resource::<oxide_assets::AssetServer>().full_path("");
+    let mut text = main;
+    for sc in world.loaded_scenes().into_iter().skip(1) {
+        if let Some(p) = sc.path {
+            text.push_str(&format!("\n+{p}"));
+        }
+    }
+    for p in unloaded {
+        text.push_str(&format!("\n-{p}"));
+    }
+    if let Some(p) = world.scene_info(world.active_scene()).and_then(|s| s.path) {
+        text.push_str(&format!("\n*{p}"));
+    }
+    let f = last_scene_file(&project);
     if let Some(d) = f.parent() {
         let _ = std::fs::create_dir_all(d);
     }
-    let _ = std::fs::write(f, scene);
+    let _ = std::fs::write(f, text);
+}
+
+/// The saved scene setup: (additive, unloaded, active).
+fn saved_setup(project: &Path) -> (Vec<String>, Vec<String>, Option<String>) {
+    let text = std::fs::read_to_string(last_scene_file(project)).unwrap_or_default();
+    let mut add = Vec::new();
+    let mut unloaded = Vec::new();
+    let mut active = None;
+    for line in text.lines().skip(1).map(str::trim) {
+        let exists = |p: &str| project.join(p).is_file();
+        if let Some(p) = line.strip_prefix('+').filter(|p| exists(p)) {
+            add.push(p.to_owned());
+        } else if let Some(p) = line.strip_prefix('-').filter(|p| exists(p)) {
+            unloaded.push(p.to_owned());
+        } else if let Some(p) = line.strip_prefix('*') {
+            active = Some(p.to_owned());
+        }
+    }
+    (add, unloaded, active)
 }
 
 fn initial_scene(project: &Path, arg: Option<String>) -> Option<String> {
     arg.or_else(|| {
         std::fs::read_to_string(last_scene_file(project))
             .ok()
-            .map(|s| s.trim().to_owned())
+            .and_then(|s| s.lines().next().map(|l| l.trim().to_owned()))
             .filter(|s| project.join(s).is_file())
     })
     .or_else(|| {
         let main = "Assets/Scenes/Main.scene";
         project.join(main).is_file().then(|| main.to_owned())
     })
+}
+
+/// Opens the editor's first scene: `scene` if given, otherwise the scene setup from the
+/// last session (main scene, additive and unloaded scenes, active scene), otherwise
+/// `Assets/Scenes/Main.scene`, otherwise a new default scene.
+pub fn load_initial_scenes(world: &mut oxide_scene::World, project: &Path, scene: Option<String>) {
+    // The saved multi-scene setup applies only when reopening the last scene.
+    let (additive, unloaded, active) = if scene.is_none() {
+        saved_setup(project)
+    } else {
+        Default::default()
+    };
+    let Some(path) = initial_scene(project, scene) else {
+        objects::create_default_scene(world);
+        return;
+    };
+    if let Err(e) = oxide_engine::load_scene(world, &path, false) {
+        debug_log_error!("{e}");
+        objects::create_default_scene(world);
+        return;
+    }
+    for p in &additive {
+        if let Err(e) = oxide_engine::load_scene(world, p, true) {
+            debug_log_error!("{e}");
+        }
+    }
+    if let Some(h) = active.as_deref().and_then(|p| world.find_scene(p)) {
+        let _ = world.set_active_scene(h);
+    }
+    world.resources.insert(PendingUnloadedScenes(unloaded));
 }
 
 /// Runs the editor on a project whose Scripts link the same engine library (`build_id`).
@@ -87,20 +158,12 @@ pub fn run_project_editor(build_id: &'static str) -> ExitCode {
     }
     // List it in the Hub, however it was opened.
     crate::hub::remember_project(&project);
-    let scene = initial_scene(&project, scene);
+    let project_dir = project.clone();
     let editor = Editor::new().with_scripts(ScriptHost::new(project.clone(), build_id));
     let app = App::with_config(config)
         .shell(Box::new(editor))
         .mcp_tools(crate::mcp::register)
-        .setup(move |world| match scene {
-            Some(path) => {
-                if let Err(e) = oxide_engine::load_scene(world, &path, false) {
-                    debug_log_error!("{e}");
-                    objects::create_default_scene(world);
-                }
-            }
-            None => objects::create_default_scene(world),
-        });
+        .setup(move |world| load_initial_scenes(world, &project_dir, scene));
     match app.run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {

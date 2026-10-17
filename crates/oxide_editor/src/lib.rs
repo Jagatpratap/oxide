@@ -59,9 +59,9 @@ use oxide_core::{Time, debug_log, debug_log_warning};
 use oxide_engine::{Engine, GameViewport, Shell, objects};
 use oxide_input::{CursorLockMode, Input};
 use oxide_math::{Color, Quaternion, QuaternionExt, Vector3};
-use oxide_scene::{GameObjectId, Light, LightType, World};
+use oxide_scene::{GameObjectId, Light, LightType, SceneHandle, World};
 use oxide_ui::Gui;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// A dockable editor window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -254,6 +254,24 @@ pub enum Action {
     /// Asks for a path, then saves.
     SaveSceneAsDialog,
     OpenSceneDialog,
+    /// Unity's Open Scene Additive (Project window, or a scene dragged into the Hierarchy).
+    OpenSceneAdditive(String),
+    /// Hierarchy scene menu: Add New Scene (an untitled additive scene).
+    NewSceneAdditive,
+    SetActiveScene(SceneHandle),
+    /// Saves one scene (asks for a path if it has none).
+    SaveOneScene(SceneHandle),
+    SaveOneSceneAsDialog(SceneHandle),
+    /// Unloads an additive scene but keeps it in the Hierarchy (Unity's Unload Scene).
+    UnloadScene(SceneHandle),
+    /// Loads a scene that was unloaded (still listed in the Hierarchy).
+    LoadUnloadedScene(String),
+    /// Removes a scene from the Hierarchy (unloading it if loaded).
+    RemoveScene(Option<SceneHandle>, Option<String>),
+    /// Selects an asset in the Project window and opens its folder (Unity's ping).
+    PingAsset(String),
+    /// Moves root objects into another loaded scene (drag onto a scene header).
+    MoveToScene(Vec<GameObjectId>, SceneHandle),
     Undo,
     Redo,
     TogglePlay,
@@ -357,8 +375,14 @@ pub struct EditorState {
     game_view: view::ViewTarget,
     /// The Game view has keyboard focus (game input is live).
     pub game_focused: bool,
-    /// Unsaved changes in the open scene.
+    /// Unsaved changes in any open scene.
     pub dirty: bool,
+    /// Which loaded scenes have unsaved changes (multi-scene editing).
+    pub dirty_scenes: HashSet<SceneHandle>,
+    /// Scenes listed in the Hierarchy but not loaded (Unity's greyed "(not loaded)" rows).
+    pub unloaded_scenes: Vec<String>,
+    /// The scene the Save Scene As dialog saves.
+    save_as_scene: SceneHandle,
     /// Requested from inside window code; applied after the UI pass.
     pub actions: Vec<Action>,
     /// Scene view NavMesh display options (Navigation window).
@@ -431,6 +455,9 @@ impl EditorState {
             game_view: view::ViewTarget::default(),
             game_focused: false,
             dirty: false,
+            dirty_scenes: HashSet::new(),
+            unloaded_scenes: Vec::new(),
+            save_as_scene: SceneHandle::MAIN,
             actions: Vec::new(),
             nav_display: Default::default(),
             nav_window: Default::default(),
@@ -524,7 +551,44 @@ impl EditorState {
             .record(world, label, &self.selection, coalesce, now)
         {
             self.dirty = true;
+            self.mark_scenes_dirty(world);
         }
+    }
+
+    /// Marks the scenes an edit can touch: the active scene (new objects) and the scenes of
+    /// the selected objects.
+    pub fn mark_scenes_dirty(&mut self, world: &World) {
+        self.dirty_scenes.insert(world.active_scene());
+        for &id in &self.selection {
+            if let Some(o) = world.get(id) {
+                self.dirty_scenes.insert(o.scene());
+            }
+        }
+    }
+
+    /// Makes the next Save Scene As save scene `h` (MCP `editor_scenes` save_as).
+    pub(crate) fn save_as_scene_for_mcp(&mut self, h: SceneHandle) {
+        self.save_as_scene = h;
+    }
+
+    /// Whether scene `h` has unsaved changes.
+    pub fn scene_dirty(&self, world: &World, h: SceneHandle) -> bool {
+        self.dirty_scenes.contains(&h)
+            || (self.dirty && self.dirty_scenes.is_empty() && h == world.active_scene())
+    }
+
+    fn clear_dirty(&mut self) {
+        self.dirty = false;
+        self.dirty_scenes.clear();
+    }
+
+    /// After saving one scene: the editor stays dirty while another scene still is.
+    fn scene_saved(&mut self, world: &World, h: SceneHandle) {
+        if self.dirty && self.dirty_scenes.is_empty() {
+            self.dirty_scenes.insert(world.active_scene());
+        }
+        self.dirty_scenes.remove(&h);
+        self.dirty = !self.dirty_scenes.is_empty();
     }
 
     fn playing(&self) -> bool {
@@ -875,7 +939,8 @@ impl Editor {
                 objects::create_default_scene(w);
                 st.selection.clear();
                 st.undo.clear();
-                st.dirty = false;
+                st.clear_dirty();
+                st.unloaded_scenes.clear();
                 engine.start_systems();
                 "New scene".into()
             }
@@ -884,34 +949,48 @@ impl Editor {
                     return Err("stop Play mode first".into());
                 }
                 let warnings = oxide_engine::load_scene(w, &path, false)?;
-                launch::remember_scene(&w.resource::<AssetServer>().full_path(""), &path);
                 st.selection.clear();
                 st.undo.clear();
-                st.dirty = false;
+                st.clear_dirty();
+                st.unloaded_scenes.clear();
+                launch::remember_scene_setup(w, &st.unloaded_scenes);
                 engine.start_systems();
                 format!("Opened {path} ({} warnings)", warnings.len())
             }
-            Action::SaveScene => match w.scene_path.clone() {
-                Some(path) => {
-                    terrain_tools::save_dirty(&mut st.terrain, w);
-                    let n = oxide_engine::save_scene(w, &path)?;
-                    launch::remember_scene(&w.resource::<AssetServer>().full_path(""), &path);
-                    st.dirty = false;
-                    format!("Saved {n} objects to {path}")
+            Action::SaveScene => {
+                // Unity's File > Save: every open scene with changes (the main one always).
+                terrain_tools::save_dirty(&mut st.terrain, w);
+                let mut saved = Vec::new();
+                for sc in w.loaded_scenes() {
+                    let dirty = st.scene_dirty(w, sc.handle);
+                    if sc.handle != SceneHandle::MAIN && !dirty {
+                        continue;
+                    }
+                    let Some(path) = sc.path.clone() else {
+                        st.save_as_scene = sc.handle;
+                        st.modal = Some(Modal::SaveAs(format!("Assets/Scenes/{}.scene", sc.name)));
+                        return Ok(format!("Choose where to save {}", sc.name));
+                    };
+                    oxide_engine::save_scene_as(w, sc.handle, &path)?;
+                    st.scene_saved(w, sc.handle);
+                    saved.push(path);
                 }
-                None => {
-                    st.modal = Some(Modal::SaveAs(format!(
-                        "Assets/Scenes/{}.scene",
-                        w.scene_name
-                    )));
-                    "Choose where to save".into()
-                }
-            },
+                st.clear_dirty();
+                launch::remember_scene_setup(w, &st.unloaded_scenes);
+                format!("Saved {}", saved.join(", "))
+            }
             Action::SaveSceneAs(path) => {
                 terrain_tools::save_dirty(&mut st.terrain, w);
-                let n = oxide_engine::save_scene(w, &path)?;
-                launch::remember_scene(&w.resource::<AssetServer>().full_path(""), &path);
-                st.dirty = false;
+                let h = std::mem::replace(&mut st.save_as_scene, SceneHandle::MAIN);
+                let h = if w.scene_info(h).is_some() {
+                    h
+                } else {
+                    SceneHandle::MAIN
+                };
+                let n = oxide_engine::save_scene_as(w, h, &path)?;
+                st.scene_saved(w, h);
+                st.unloaded_scenes.retain(|p| *p != path);
+                launch::remember_scene_setup(w, &st.unloaded_scenes);
                 format!("Saved {n} objects to {path}")
             }
             Action::SaveSceneAsDialog => {
@@ -919,8 +998,122 @@ impl Editor {
                     .scene_path
                     .clone()
                     .unwrap_or_else(|| format!("Assets/Scenes/{}.scene", w.scene_name));
+                st.save_as_scene = SceneHandle::MAIN;
                 st.modal = Some(Modal::SaveAs(p));
                 String::new()
+            }
+            Action::SaveOneScene(h) => {
+                let sc = w.scene_info(h).ok_or("that scene is not loaded")?;
+                match sc.path {
+                    Some(path) => {
+                        terrain_tools::save_dirty(&mut st.terrain, w);
+                        let n = oxide_engine::save_scene_as(w, h, &path)?;
+                        st.scene_saved(w, h);
+                        format!("Saved {n} objects to {path}")
+                    }
+                    None => {
+                        st.save_as_scene = h;
+                        st.modal = Some(Modal::SaveAs(format!("Assets/Scenes/{}.scene", sc.name)));
+                        "Choose where to save".into()
+                    }
+                }
+            }
+            Action::SaveOneSceneAsDialog(h) => {
+                let sc = w.scene_info(h).ok_or("that scene is not loaded")?;
+                st.save_as_scene = h;
+                st.modal =
+                    Some(Modal::SaveAs(sc.path.unwrap_or_else(|| {
+                        format!("Assets/Scenes/{}.scene", sc.name)
+                    })));
+                String::new()
+            }
+            Action::OpenSceneAdditive(path) | Action::LoadUnloadedScene(path) => {
+                if w.find_scene(&path).is_some_and(|h| {
+                    w.scene_info(h).and_then(|s| s.path).as_deref() == Some(path.as_str())
+                }) {
+                    return Err(format!("{path} is already open"));
+                }
+                st.record(w, "Open Scene Additive", None, now);
+                let warnings = oxide_engine::load_scene(w, &path, true)?;
+                st.unloaded_scenes.retain(|p| *p != path);
+                if let Some(h) = w.find_scene(&path) {
+                    st.dirty_scenes.remove(&h);
+                }
+                st.dirty = !st.dirty_scenes.is_empty();
+                launch::remember_scene_setup(w, &st.unloaded_scenes);
+                format!("Opened {path} additively ({} warnings)", warnings.len())
+            }
+            Action::NewSceneAdditive => {
+                let n = w.loaded_scenes().len();
+                let h = w.create_scene(&format!("Untitled {n}"), None);
+                st.dirty_scenes.insert(h);
+                st.dirty = true;
+                format!(
+                    "Added scene {}",
+                    w.scene_info(h).map(|s| s.name).unwrap_or_default()
+                )
+            }
+            Action::SetActiveScene(h) => {
+                w.set_active_scene(h)?;
+                launch::remember_scene_setup(w, &st.unloaded_scenes);
+                format!(
+                    "Active scene: {}",
+                    w.scene_info(h).map(|s| s.name).unwrap_or_default()
+                )
+            }
+            Action::UnloadScene(h) | Action::RemoveScene(Some(h), _) => {
+                let remove = matches!(action, Action::RemoveScene(..));
+                if st.playing() {
+                    return Err("stop Play mode first".into());
+                }
+                let sc = w.scene_info(h).ok_or("that scene is not loaded")?;
+                if st.scene_dirty(w, h) {
+                    debug_log_warning!("{} had unsaved changes; they were discarded", sc.name);
+                }
+                // Unloading can't be undone (Unity asks to save first); keep undo consistent.
+                w.unload_scene(h)?;
+                st.undo.clear();
+                st.selection.retain(|&id| w.is_alive(id));
+                st.dirty_scenes.remove(&h);
+                st.dirty = !st.dirty_scenes.is_empty();
+                if let (Some(p), false) = (sc.path.clone(), remove)
+                    && !st.unloaded_scenes.contains(&p) {
+                        st.unloaded_scenes.push(p);
+                    }
+                launch::remember_scene_setup(w, &st.unloaded_scenes);
+                format!(
+                    "{} {}",
+                    if remove { "Removed" } else { "Unloaded" },
+                    sc.name
+                )
+            }
+            Action::RemoveScene(None, path) => {
+                let path = path.ok_or("no scene given")?;
+                st.unloaded_scenes.retain(|p| *p != path);
+                launch::remember_scene_setup(w, &st.unloaded_scenes);
+                format!("Removed {path} from the Hierarchy")
+            }
+            Action::PingAsset(path) => {
+                st.project.show(&path);
+                format!("Selected {path}")
+            }
+            Action::MoveToScene(ids, h) => {
+                st.record(w, "Move To Scene", None, now);
+                let mut n = 0;
+                for id in ids {
+                    if let Some(o) = w.get(id) {
+                        st.dirty_scenes.insert(o.scene());
+                    }
+                    if w.move_to_scene(id, h).is_ok() {
+                        n += 1;
+                    }
+                }
+                st.dirty_scenes.insert(h);
+                st.dirty = true;
+                format!(
+                    "Moved {n} object(s) to {}",
+                    w.scene_info(h).map(|s| s.name).unwrap_or_default()
+                )
             }
             Action::OpenSceneDialog => {
                 st.modal = Some(Modal::Open);
@@ -1839,6 +2032,13 @@ impl Shell for Editor {
             self.st.prefs = prefs::EditorPrefs::load(&self.st.prefs_path);
             self.st.keymap = shortcuts::Keymap::new(&self.st.prefs.shortcuts);
             self.styled = true;
+        }
+        if let Some(p) = engine
+            .world
+            .resources
+            .remove::<launch::PendingUnloadedScenes>()
+        {
+            self.st.unloaded_scenes = p.0;
         }
         self.st.prefs.apply(&ctx);
         engine.auto_refresh = self.st.prefs.auto_refresh;

@@ -99,6 +99,7 @@ fn downscale(img: CapturedImage, max: u32) -> CapturedImage {
 
 pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
     register_window_tools(s, bus);
+    register_scene_tools(s, bus);
     tool(s, bus, ToolDef::new("editor_get_state", "Get editor state",
         "Editor mode (edit/playing/paused), open scene and unsaved flag, selection, active tool, open windows, \
          undo/redo history and the Scene view camera.",
@@ -1425,6 +1426,112 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
 }
 
 /// Screenshot and synthetic input for whatever UI the window shows (the editor or the Hub).
+fn scenes_json(ed: &Editor, e: &Engine) -> Json {
+    let w = &e.world;
+    let active = w.active_scene();
+    json!({
+        "scenes": w.loaded_scenes().into_iter().map(|sc| json!({
+            "handle": sc.handle.0,
+            "name": sc.name,
+            "path": sc.path,
+            "active": sc.handle == active,
+            "dirty": ed.st.scene_dirty(w, sc.handle),
+            "loaded": true,
+            "roots": w.scene_roots(sc.handle).iter().filter_map(|&r| w.get(r).map(|o| o.name.clone())).collect::<Vec<_>>(),
+        })).chain(ed.st.unloaded_scenes.iter().map(|p| json!({ "path": p, "loaded": false })))
+        .collect::<Vec<_>>(),
+    })
+}
+
+fn register_scene_tools(s: &mut McpServer, bus: &Arc<Bus>) {
+    tool(
+        s,
+        bus,
+        ToolDef::new(
+            "editor_scenes",
+            "Multi-scene editing",
+            "The editor's open scenes, as in Unity's multi-scene Hierarchy: each with handle, name, path, active, \
+             dirty (unsaved) and its root objects, plus scenes listed but not loaded. `action`: open_additive \
+             (`path`), new (an untitled additive scene), set_active, save, save_as (`path`), unload (keeps it \
+             listed), remove, load (an unloaded `path`), save_all, move (`objects` = root objects, into `scene`). \
+             `scene` is a handle, name or path.",
+            schema(
+                json!({
+                    "action": { "type": "string", "enum": ["open_additive", "new", "set_active", "save", "save_as", "unload", "remove", "load", "save_all", "move"] },
+                    "scene": {},
+                    "path": { "type": "string" },
+                    "objects": { "type": "array" }
+                }),
+                &[],
+            ),
+        ),
+        |args, e| {
+            with_editor(e, |ed, e| {
+                let Some(action) = args.get("action").and_then(Json::as_str) else {
+                    return ToolResult::json(scenes_json(ed, e));
+                };
+                let w = &e.world;
+                let scene = args.get("scene").and_then(|v| match v {
+                    Json::Number(n) => n
+                        .as_u64()
+                        .map(|h| oxide_scene::SceneHandle(h as u32))
+                        .filter(|&h| w.scene_info(h).is_some()),
+                    Json::String(s) => w.find_scene(s),
+                    _ => None,
+                });
+                let path = args.get("path").and_then(Json::as_str).map(str::to_owned);
+                let need_scene =
+                    || scene.ok_or_else(|| "`scene` must name a loaded scene".to_owned());
+                let need_path = || path.clone().ok_or_else(|| "`path` is required".to_owned());
+                let a = match action {
+                    "open_additive" => need_path().map(Action::OpenSceneAdditive),
+                    "load" => need_path().map(Action::LoadUnloadedScene),
+                    "new" => Ok(Action::NewSceneAdditive),
+                    "set_active" => need_scene().map(Action::SetActiveScene),
+                    "save" => need_scene().map(Action::SaveOneScene),
+                    "save_all" => Ok(Action::SaveScene),
+                    "save_as" => need_scene().and_then(|h| {
+                        let p = need_path()?;
+                        ed.st.save_as_scene_for_mcp(h);
+                        Ok(Action::SaveSceneAs(p))
+                    }),
+                    "unload" => need_scene().map(Action::UnloadScene),
+                    "remove" => match scene {
+                        Some(h) => Ok(Action::RemoveScene(Some(h), None)),
+                        None => need_path().map(|p| Action::RemoveScene(None, Some(p))),
+                    },
+                    "move" => need_scene().and_then(|h| {
+                        let ids = args
+                            .get("objects")
+                            .and_then(Json::as_array)
+                            .ok_or("`objects` is required")?
+                            .iter()
+                            .map(|v| {
+                                oxide_engine::json_values::resolve_object(w, v)
+                                    .ok_or_else(|| format!("no GameObject matches {v}"))
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
+                        Ok(Action::MoveToScene(ids, h))
+                    }),
+                    other => Err(format!("unknown action `{other}`")),
+                };
+                let a = match a {
+                    Ok(a) => a,
+                    Err(err) => return ToolResult::error(err),
+                };
+                match ed.apply(e, a) {
+                    Ok(msg) => {
+                        let mut out = scenes_json(ed, e);
+                        out["message"] = json!(msg);
+                        ToolResult::json(out)
+                    }
+                    Err(err) => ToolResult::error(err),
+                }
+            })
+        },
+    );
+}
+
 pub fn register_window_tools(s: &mut McpServer, bus: &Arc<Bus>) {
     tool(
         s,

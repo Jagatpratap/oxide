@@ -134,9 +134,12 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
     let query = st.hierarchy.search.trim().to_lowercase();
     let mut rows = Vec::new();
     let scenes = world.loaded_scenes();
+    // Scene headers go before the first row of each scene (index into `rows`).
+    let mut headers: Vec<(usize, oxide_scene::SceneInfo)> = Vec::new();
     if query.is_empty() {
         // Grouped by scene, like Unity's multi-scene Hierarchy.
         for sc in &scenes {
+            headers.push((rows.len(), sc.clone()));
             for r in world.scene_roots(sc.handle) {
                 collect(world, &st.hierarchy, r, 0, &mut rows);
             }
@@ -157,6 +160,9 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
     let mut toggle: Option<GameObjectId> = None;
     let mut vis_toggle: Option<(GameObjectId, bool)> = None;
     let mut commit_rename: Option<(GameObjectId, String)> = None;
+    let mut to_scene: Option<(Vec<GameObjectId>, oxide_scene::SceneHandle)> = None;
+    let multi = scenes.len() > 1 || !st.unloaded_scenes.is_empty();
+    let active_scene = world.active_scene();
     let mut actions = Vec::new();
     let scroll_to = st.hierarchy.scroll_to.take();
 
@@ -174,34 +180,17 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
                 0.0,
                 Color32::from_gray(46),
             );
-            // Scene header rows.
-            let header = |ui: &mut egui::Ui, text: String| {
-                let (r, _) =
-                    ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::hover());
-                ui.painter().rect_filled(r, 0.0, Color32::from_gray(48));
-                ui.painter().text(
-                    r.left_center() + vec2(6.0, 0.0),
-                    egui::Align2::LEFT_CENTER,
-                    text,
-                    egui::FontId::proportional(12.5),
-                    Color32::from_gray(220),
-                );
-            };
-            header(
-                ui,
-                format!("{}{}", world.scene_name, if st.dirty { "*" } else { "" }),
-            );
-            let mut current_scene = oxide_scene::SceneHandle::MAIN;
-
-            for row in &rows {
+            let mut next_header = 0;
+            for (i, row) in rows.iter().enumerate() {
+                while next_header < headers.len() && headers[next_header].0 == i {
+                    let sc = &headers[next_header].1;
+                    let dirty = st.scene_dirty(world, sc.handle);
+                    let active = sc.handle == active_scene;
+                    scene_header(ui, sc, active && multi, dirty, &mut actions, &mut to_scene);
+                    next_header += 1;
+                }
                 let id = row.id;
                 let Some(o) = world.get(id) else { continue };
-                if query.is_empty() && o.scene() != current_scene {
-                    current_scene = o.scene();
-                    if let Some(sc) = scenes.iter().find(|s| s.handle == current_scene) {
-                        header(ui, sc.name.clone());
-                    }
-                }
                 let (rect, resp) = ui.allocate_exact_size(
                     vec2(ui.available_width(), ROW_H),
                     Sense::click_and_drag(),
@@ -410,6 +399,50 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
                 }
             }
 
+            while next_header < headers.len() {
+                let sc = &headers[next_header].1;
+                let dirty = st.scene_dirty(world, sc.handle);
+                let active = sc.handle == active_scene;
+                scene_header(ui, sc, active && multi, dirty, &mut actions, &mut to_scene);
+                next_header += 1;
+            }
+            if query.is_empty() {
+                for path in &st.unloaded_scenes {
+                    let (r, resp) =
+                        ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click());
+                    ui.painter().rect_filled(r, 0.0, Color32::from_gray(44));
+                    let name = path
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or(path)
+                        .trim_end_matches(".scene");
+                    ui.painter().text(
+                        r.left_center() + vec2(6.0, 0.0),
+                        egui::Align2::LEFT_CENTER,
+                        format!("{name} (not loaded)"),
+                        egui::FontId::proportional(12.5),
+                        Color32::from_gray(120),
+                    );
+                    if resp.double_clicked() {
+                        actions.push(Action::LoadUnloadedScene(path.clone()));
+                    }
+                    resp.context_menu(|ui| {
+                        if ui.button("Load Scene").clicked() {
+                            actions.push(Action::LoadUnloadedScene(path.clone()));
+                            ui.close();
+                        }
+                        if ui.button("Remove Scene").clicked() {
+                            actions.push(Action::RemoveScene(None, Some(path.clone())));
+                            ui.close();
+                        }
+                        if ui.button("Select Scene Asset").clicked() {
+                            actions.push(Action::PingAsset(path.clone()));
+                            ui.close();
+                        }
+                    });
+                }
+            }
+
             // Empty space: drop to make root; click to deselect.
             let rest = ui.available_rect_before_wrap();
             let rest =
@@ -424,6 +457,9 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
                     actions.push(Action::InstantiatePrefab(payload.0.clone()));
                 } else if p.ends_with(".glb") || p.ends_with(".gltf") {
                     actions.push(Action::InstantiateModel(payload.0.clone()));
+                } else if p.ends_with(".scene") {
+                    // Unity: dragging a scene into the Hierarchy opens it additively.
+                    actions.push(Action::OpenSceneAdditive(payload.0.clone()));
                 }
             }
             if resp.clicked() {
@@ -479,10 +515,100 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
             o.name = name;
         }
     }
+    if let Some((ids, h)) = to_scene {
+        // Only roots move between scenes; children follow their root.
+        let roots: Vec<GameObjectId> = ids
+            .into_iter()
+            .map(|id| engine.world.root_of(id))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        actions.push(Action::MoveToScene(roots, h));
+    }
     if let Some((dragged, target, at)) = drop {
         reparent(st, &mut engine.world, &dragged, target, at, now);
     }
     st.actions.extend(actions);
+}
+
+/// A scene header row (Unity: the active scene in bold, `*` when modified, a menu for the
+/// scene, and a drop target that moves objects into that scene).
+fn scene_header(
+    ui: &mut egui::Ui,
+    sc: &oxide_scene::SceneInfo,
+    bold: bool,
+    dirty: bool,
+    actions: &mut Vec<Action>,
+    to_scene: &mut Option<(Vec<GameObjectId>, oxide_scene::SceneHandle)>,
+) {
+    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click());
+    ui.painter().rect_filled(r, 0.0, Color32::from_gray(48));
+    let text = format!("{}{}", sc.name, if dirty { "*" } else { "" });
+    let pos = r.left_center() + vec2(6.0, 0.0);
+    let font = egui::FontId::proportional(12.5);
+    let col = if bold {
+        Color32::WHITE
+    } else {
+        Color32::from_gray(210)
+    };
+    // Bold: the label drawn twice, half a pixel apart.
+    let offsets: &[f32] = if bold { &[0.0, 0.6] } else { &[0.0] };
+    for &dx in offsets {
+        ui.painter().text(
+            pos + vec2(dx, 0.0),
+            egui::Align2::LEFT_CENTER,
+            &text,
+            font.clone(),
+            col,
+        );
+    }
+    if let Some(payload) = resp.dnd_hover_payload::<HierarchyDrag>() {
+        ui.painter().rect_stroke(
+            r,
+            0.0,
+            Stroke::new(1.5, Color32::from_rgb(90, 160, 255)),
+            egui::StrokeKind::Inside,
+        );
+        if resp.dnd_release_payload::<HierarchyDrag>().is_some() {
+            *to_scene = Some((payload.0.clone(), sc.handle));
+        }
+    }
+    let h = sc.handle;
+    let additive = h != oxide_scene::SceneHandle::MAIN;
+    resp.context_menu(|ui| {
+        let mut item = |ui: &mut egui::Ui, enabled: bool, label: &str, a: Action| {
+            if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
+                actions.push(a);
+                ui.close();
+            }
+        };
+        item(ui, !bold, "Set Active Scene", Action::SetActiveScene(h));
+        ui.separator();
+        item(ui, true, "Save Scene", Action::SaveOneScene(h));
+        item(ui, true, "Save Scene As", Action::SaveOneSceneAsDialog(h));
+        item(ui, true, "Save All", Action::SaveScene);
+        ui.separator();
+        item(
+            ui,
+            additive && sc.path.is_some(),
+            "Unload Scene",
+            Action::UnloadScene(h),
+        );
+        item(
+            ui,
+            additive,
+            "Remove Scene",
+            Action::RemoveScene(Some(h), None),
+        );
+        item(
+            ui,
+            sc.path.is_some(),
+            "Select Scene Asset",
+            Action::PingAsset(sc.path.clone().unwrap_or_default()),
+        );
+        ui.separator();
+        item(ui, true, "Add New Scene", Action::NewSceneAdditive);
+    });
 }
 
 fn is_ancestor(world: &World, ancestor: GameObjectId, mut id: GameObjectId) -> bool {

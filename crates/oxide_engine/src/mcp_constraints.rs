@@ -126,9 +126,10 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
                         if constraints_json(w, id)
                             .iter()
                             .all(|c| c["kind"] != kind.type_name())
-                            && let Err(err) = w.add_component_by_name(id, kind.type_name()) {
-                                return ToolResult::error(err);
-                            }
+                            && let Err(err) = w.add_component_by_name(id, kind.type_name())
+                        {
+                            return ToolResult::error(err);
+                        }
                         true
                     }
                     "add_source" => {

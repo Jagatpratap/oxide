@@ -412,3 +412,20 @@ fn activation_waits_in_order_and_single_load_replaces() {
     assert!(st.error.unwrap().contains("cannot read"));
     assert_eq!(w.loaded_scenes().len(), 1);
 }
+
+#[test]
+fn active_scene_receives_new_objects_and_falls_back_on_unload() {
+    let mut w = world();
+    let level = w.create_scene("Level2", Some("Assets/Scenes/Level2.scene"));
+    assert_eq!(w.active_scene(), SceneHandle::MAIN);
+    w.set_active_scene(level).unwrap();
+    let a = w.create("A");
+    assert_eq!(w.get(a).unwrap().scene(), level);
+    assert_eq!(w.scene_roots(level), vec![a]);
+    // Unloading the active scene makes the main scene active again.
+    w.unload_scene(level).unwrap();
+    assert_eq!(w.active_scene(), SceneHandle::MAIN);
+    assert!(w.set_active_scene(level).is_err());
+    let b = w.create("B");
+    assert_eq!(w.get(b).unwrap().scene(), SceneHandle::MAIN);
+}

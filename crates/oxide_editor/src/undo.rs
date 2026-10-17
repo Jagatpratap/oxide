@@ -17,6 +17,7 @@ pub struct Snapshot {
     /// Loaded scenes and each object's scene (multi-scene editing).
     scenes: Vec<SceneInfo>,
     scene_assignment: Vec<SceneHandle>,
+    active_scene: SceneHandle,
     /// Selected objects as indices into `World::hierarchy_order`.
     selection: Vec<usize>,
     /// Terrain data edited by this step (terrain tools): restored with the scene. The
@@ -34,6 +35,7 @@ impl Snapshot {
             scene_path: world.scene_path.clone(),
             scenes: world.loaded_scenes(),
             scene_assignment: world.scene_assignment(),
+            active_scene: world.active_scene(),
             selection: selection
                 .iter()
                 .filter_map(|id| order.iter().position(|o| o == id))
@@ -96,6 +98,7 @@ impl Snapshot {
         world.scene_name = self.scene_name.clone();
         world.scene_path = self.scene_path.clone();
         world.restore_scenes(&self.scenes, &self.scene_assignment);
+        let _ = world.set_active_scene(self.active_scene);
         let order = world.hierarchy_order();
         self.selection
             .iter()

@@ -152,7 +152,12 @@ pause/step advances exactly N frames. Checked live over MCP, including screensho
   [Create components with scripts](https://docs.unity3d.com/Manual/CreatingComponents.html))
 - ☑ Primitives: Cube, Sphere, Capsule, Cylinder, Plane, Quad
   ([Primitive objects](https://docs.unity3d.com/Manual/PrimitiveObjects.html))
-- ◐ Scenes: create/load/save, additive multi-scene
+- ☑ Scenes: create/load/save, additive multi-scene; multi-scene editing in the editor (scene headers in the
+  Hierarchy with Set Active Scene / Save / Save As / Save All / Unload / Remove / Select Scene Asset / Add New
+  Scene, active scene in bold receives new objects, per-scene `*`, unloaded scenes greyed with Load Scene, drag
+  objects onto a scene header to move them, Open Scene Additive from the Project window or by dragging a scene
+  into the Hierarchy, File > Save saves every modified scene, the scene setup reopens on launch, Undo and Play
+  keep it; `SceneManager.GetActiveScene/SetActiveScene`; MCP `editor_scenes`)
   ([Scenes](https://docs.unity3d.com/Manual/working-with-scenes.html),
   [Multi-scene](https://docs.unity3d.com/Manual/MultiSceneEditing.html))
 - ◐ Text YAML scene format with fileIDs + GUID references

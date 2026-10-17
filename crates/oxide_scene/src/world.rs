@@ -1547,6 +1547,20 @@ impl World {
         handle
     }
 
+    /// Unity `SceneManager.GetActiveScene`: the scene new objects are created in.
+    pub fn active_scene(&self) -> SceneHandle {
+        self.spawn_scene
+    }
+
+    /// Unity `SceneManager.SetActiveScene`.
+    pub fn set_active_scene(&mut self, h: SceneHandle) -> Result<(), String> {
+        if self.scene_info(h).is_none() {
+            return Err("that scene is not loaded".into());
+        }
+        self.spawn_scene = h;
+        Ok(())
+    }
+
     /// Runs `f` with new objects going into scene `h`.
     pub fn with_spawn_scene<R>(&mut self, h: SceneHandle, f: impl FnOnce(&mut Self) -> R) -> R {
         let prev = std::mem::replace(&mut self.spawn_scene, h);
@@ -1595,6 +1609,9 @@ impl World {
             self.destroy_immediate(r);
         }
         self.additive_scenes.remove(i);
+        if self.spawn_scene == h {
+            self.spawn_scene = SceneHandle::MAIN;
+        }
         Ok(())
     }
 
@@ -1625,6 +1642,9 @@ impl World {
             if let Some(o) = self.get_mut(id) {
                 o.scene = h;
             }
+        }
+        if self.scene_info(self.spawn_scene).is_none() {
+            self.spawn_scene = SceneHandle::MAIN;
         }
     }
 
