@@ -22,10 +22,12 @@ pub enum Page {
     Quality,
     Input,
     Player,
+    Localization,
 }
 
-pub const PAGES: [(Page, &str); 6] = [
+pub const PAGES: [(Page, &str); 7] = [
     (Page::Input, "Input Manager"),
+    (Page::Localization, "Localization"),
     (Page::Physics, "Physics"),
     (Page::Player, "Player"),
     (Page::Quality, "Quality"),
@@ -113,6 +115,7 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
         Page::Quality => quality(ui, w, &mut s, &mut ss.quality_selected),
         Page::Input => input(ui, &mut s),
         Page::Player => player(ui, &mut s, build),
+        Page::Localization => crate::localization_window::settings_page(ui, &mut s.localization),
     });
     ss.page = page;
     if *build != build_before

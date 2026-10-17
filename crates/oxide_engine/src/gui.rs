@@ -7,6 +7,44 @@ use oxide_scene::World;
 use oxide_ui::Gui;
 use winit::window::Window;
 
+/// System fonts with wide script coverage (CJK, Devanagari and other Indic scripts, Arabic,
+/// Thai), added after egui's built-in fonts so localized text doesn't show as boxes.
+const FALLBACK_FONTS: &[&str] = &[
+    // macOS
+    "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+    // Windows
+    "C:\\Windows\\Fonts\\msyh.ttc",
+    "C:\\Windows\\Fonts\\Nirmala.ttf",
+    // Linux
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",
+];
+
+/// Adds the first system fallback fonts found (egui's own fonts are Latin, Greek and
+/// Cyrillic only).
+pub fn install_fallback_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    let mut added = 0;
+    for (k, path) in FALLBACK_FONTS.iter().enumerate() {
+        let Ok(bytes) = std::fs::read(path) else {
+            continue;
+        };
+        let name = format!("oxide-fallback-{k}");
+        fonts.font_data.insert(
+            name.clone(),
+            std::sync::Arc::new(egui::FontData::from_owned(bytes)),
+        );
+        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+            fonts.families.entry(family).or_default().push(name.clone());
+        }
+        added += 1;
+    }
+    if added > 0 {
+        ctx.set_fonts(fonts);
+    }
+}
+
 pub struct GuiLayer {
     pub state: egui_winit::State,
     pub renderer: egui_wgpu::Renderer,
@@ -19,6 +57,7 @@ impl GuiLayer {
     pub fn new(window: &Window, gpu: &Gpu, format: wgpu::TextureFormat, world: &mut World) -> Self {
         let ctx = egui::Context::default();
         ctx.set_visuals(egui::Visuals::dark());
+        install_fallback_fonts(&ctx);
         let max_side = gpu.device.limits().max_texture_dimension_2d as usize;
         let state = egui_winit::State::new(
             ctx.clone(),

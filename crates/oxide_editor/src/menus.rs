@@ -257,6 +257,10 @@ pub fn menu_items(world: &World, keymap: &Keymap) -> Vec<MenuItem> {
         Action::OpenTab(Tab::UiBuilder),
     ));
     v.push(item(
+        "Window/Asset Management/Localization Tables",
+        Action::OpenTab(Tab::LocalizationTables),
+    ));
+    v.push(item(
         "Window/Rendering/Lighting/Generate Lighting",
         Action::GenerateLighting,
     ));

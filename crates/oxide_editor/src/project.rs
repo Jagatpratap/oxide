@@ -1443,6 +1443,11 @@ pub fn open(
             st.timeline.open_asset(&engine.world, path);
             st.actions.push(Action::OpenTab(crate::Tab::Timeline));
         }
+        "StringTableCollection" | "AssetTableCollection" => {
+            st.localization.open(path);
+            st.actions
+                .push(Action::OpenTab(crate::Tab::LocalizationTables));
+        }
         "VisualTreeAsset" => {
             st.ui_builder
                 .open(engine.world.resource::<AssetServer>(), path)?;

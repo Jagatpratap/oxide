@@ -22,6 +22,7 @@ oxide_terrain.workspace = true
 oxide_shadergraph.workspace = true
 oxide_vfx.workspace = true
 oxide_uitk.workspace = true
+oxide_localization.workspace = true
 
 egui.workspace = true
 egui_dock.workspace = true

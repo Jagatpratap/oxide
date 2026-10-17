@@ -21,6 +21,7 @@ mod hierarchy;
 mod input_actions_window;
 mod inspector;
 pub mod launch;
+mod localization_window;
 pub mod mcp;
 mod menus;
 mod navigation_window;
@@ -83,6 +84,7 @@ pub enum Tab {
     ShaderGraph,
     VfxGraph,
     UiBuilder,
+    LocalizationTables,
 }
 
 impl Tab {
@@ -120,6 +122,7 @@ impl Tab {
             Tab::ShaderGraph => "Shader Graph",
             Tab::VfxGraph => "VFX Graph",
             Tab::UiBuilder => "UI Builder",
+            Tab::LocalizationTables => "Localization Tables",
         }
     }
 }
@@ -366,6 +369,7 @@ pub struct EditorState {
     pub(crate) shader_graph: shader_graph_window::ShaderGraphWindow,
     pub(crate) vfx_graph: vfx_graph_window::VfxGraphWindow,
     pub(crate) ui_builder: ui_builder_window::UiBuilderWindow,
+    pub(crate) localization: localization_window::LocalizationWindow,
     mask: anim_inspectors::MaskState,
     audio_mixer: audio_mixer_window::AudioMixerWindow,
     sprite_editor: sprite_editor::SpriteEditorWindow,
@@ -432,6 +436,7 @@ impl EditorState {
             shader_graph: Default::default(),
             vfx_graph: Default::default(),
             ui_builder: Default::default(),
+            localization: Default::default(),
             mask: Default::default(),
             audio_mixer: Default::default(),
             sprite_editor: Default::default(),
@@ -642,6 +647,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::ShaderGraph => shader_graph_window::window_ui(self.st, self.engine, ui),
             Tab::VfxGraph => vfx_graph_window::window_ui(self.st, self.engine, ui),
             Tab::UiBuilder => ui_builder_window::window_ui(self.st, self.engine, ui),
+            Tab::LocalizationTables => localization_window::window_ui(self.st, self.engine, ui),
         }
     }
 

@@ -14,6 +14,7 @@ pub mod lighting;
 pub mod mcp_animation;
 pub mod mcp_audio;
 pub mod mcp_data_assets;
+mod mcp_localization;
 pub mod mcp_network;
 pub mod mcp_occlusion;
 pub mod mcp_physics;
@@ -104,6 +105,7 @@ impl Plugin for UiPlugin {
     ) {
         systems.push(oxide_ui::install(world));
         systems.push(oxide_uitk::install(world));
+        systems.push(oxide_localization::install(world));
         oxide_text::install(world);
     }
 }
@@ -221,6 +223,9 @@ pub mod prelude {
     };
     pub use oxide_assets::{TerrainData, TerrainLayer, TreeInstance, TreePrototype};
     pub use oxide_audio::{Audio, AudioExt, AudioListener, AudioSource};
+    pub use oxide_localization::{
+        Arg as LocalizedArg, LocalizationExt, LocalizeAssetEvent, LocalizeStringEvent,
+    };
     pub use oxide_navigation::{
         NavMesh, NavMeshAgent, NavMeshExt, NavMeshHit, NavMeshLink, NavMeshModifier,
         NavMeshModifierVolume, NavMeshObstacle, NavMeshObstacleShape, NavMeshPath,

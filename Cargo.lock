@@ -2621,6 +2621,7 @@ dependencies = [
  "oxide_core",
  "oxide_engine",
  "oxide_input",
+ "oxide_localization",
  "oxide_math",
  "oxide_mcp",
  "oxide_physics",
@@ -2651,6 +2652,7 @@ dependencies = [
  "oxide_core",
  "oxide_input",
  "oxide_lightmapper",
+ "oxide_localization",
  "oxide_math",
  "oxide_mcp",
  "oxide_navigation",
@@ -2693,6 +2695,21 @@ dependencies = [
  "oxide_math",
  "oxide_render",
  "rapier3d",
+]
+
+[[package]]
+name = "oxide_localization"
+version = "0.1.0"
+dependencies = [
+ "oxide_assets",
+ "oxide_audio",
+ "oxide_core",
+ "oxide_math",
+ "oxide_scene",
+ "oxide_text",
+ "oxide_ui",
+ "oxide_uitk",
+ "serde",
 ]
 
 [[package]]

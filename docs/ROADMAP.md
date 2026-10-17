@@ -415,6 +415,14 @@ runner, native plugins.
   templates (`<Template>`/`<Instance>`), ListView/TreeView/MultiColumnListView, transitions, USS transforms on
   painting (rotate/scale), world-space panels, rich text in labels
   ([UI Toolkit](https://docs.unity3d.com/Manual/UIElements.html))
+- ◐ Localization: locales and Localization Settings (Project Settings page, system-language startup,
+  fallback chains), String Table Collections (`.stringtable`, Smart Strings with plural/choose/cond, CSV
+  import/export), Asset Table Collections (`.assettable` for textures, sprites, audio), Localize String Event
+  (TextMeshPro, UI Text, UI Toolkit elements) and Localize Asset Event components, script API
+  (`world.localized`, `set_locale`), Localization Tables window with preview locale, system fallback fonts for
+  CJK/Indic scripts in egui, `localization` MCP tool. Not yet: pseudo-localization, per-locale Font Assets
+  switching, metadata, Google Sheets sync, plural rules beyond English-style
+  ([Localization](https://docs.unity3d.com/Packages/com.unity.localization@1.5/manual/index.html))
 - ◐ Canvas UI (uGUI equivalent): Canvas, RectTransform, anchors, Image, Text, Button, Slider, ScrollRect, layout groups, EventSystem
   ([uGUI](https://docs.unity3d.com/Manual/com.unity.ugui.html),
   [UI comparison](https://docs.unity3d.com/Manual/UI-system-compare.html))

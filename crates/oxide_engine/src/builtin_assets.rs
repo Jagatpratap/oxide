@@ -12,6 +12,7 @@ pub fn register(assets: &mut AssetServer) {
     oxide_shadergraph::register_assets(assets);
     oxide_vfx::register_assets(assets);
     oxide_uitk::register_assets(assets);
+    oxide_localization::register_assets(assets);
     assets.register_data_asset::<oxide_scene::CurvePresetLibrary>(
         AssetTypeInfo::new("CurvePresetLibrary", &["curves"])
             .menu("Presets/Curve Preset Library", "New Curves", 300)

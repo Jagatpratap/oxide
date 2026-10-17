@@ -1,0 +1,20 @@
+[package]
+name = "oxide_localization"
+description = "Oxide Localization: locales, string and asset tables, smart strings, localized components"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+oxide_math.workspace = true
+oxide_core.workspace = true
+oxide_assets.workspace = true
+oxide_scene.workspace = true
+oxide_text.workspace = true
+oxide_ui.workspace = true
+oxide_uitk.workspace = true
+oxide_audio.workspace = true
+serde.workspace = true
+
+[lints]
+workspace = true

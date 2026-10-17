@@ -164,10 +164,12 @@ pub struct ProjectSettings {
     pub player: PlayerSettings,
     /// Navigation agent types and areas (Unity's Navigation window).
     pub navigation: oxide_navigation::NavigationSettings,
+    /// Locales and startup locale (Unity's Localization Settings).
+    pub localization: oxide_localization::LocalizationSettings,
 }
 
 /// The pages and their files, for MCP and error messages.
-pub const SECTIONS: [(&str, &str); 7] = [
+pub const SECTIONS: [(&str, &str); 8] = [
     ("tags_and_layers", "TagManager.yaml"),
     ("time", "TimeManager.yaml"),
     ("physics", "DynamicsManager.yaml"),
@@ -175,6 +177,7 @@ pub const SECTIONS: [(&str, &str); 7] = [
     ("input", "InputManager.yaml"),
     ("player", "PlayerSettings.yaml"),
     ("navigation", "NavMeshAreas.yaml"),
+    ("localization", "LocalizationSettings.yaml"),
 ];
 
 fn read<T: DeserializeOwned + Default>(dir: &Path, file: &str, warnings: &mut Vec<String>) -> T {
@@ -202,6 +205,7 @@ impl ProjectSettings {
             input: read(&dir, SECTIONS[4].1, &mut w),
             player: read(&dir, SECTIONS[5].1, &mut w),
             navigation: read(&dir, SECTIONS[6].1, &mut w),
+            localization: read(&dir, SECTIONS[7].1, &mut w),
         };
         (s, w)
     }
@@ -218,6 +222,7 @@ impl ProjectSettings {
             serde_yaml_ng::to_string(&self.input),
             serde_yaml_ng::to_string(&self.player),
             serde_yaml_ng::to_string(&self.navigation),
+            serde_yaml_ng::to_string(&self.localization),
         ];
         for ((_, file), text) in SECTIONS.iter().zip(texts) {
             let text = text.map_err(|e| e.to_string())?;
@@ -271,6 +276,10 @@ impl ProjectSettings {
             },
             navigation: world
                 .try_resource::<oxide_navigation::NavigationSettings>()
+                .cloned()
+                .unwrap_or_default(),
+            localization: world
+                .try_resource::<oxide_localization::LocalizationSettings>()
                 .cloned()
                 .unwrap_or_default(),
         }
@@ -328,6 +337,18 @@ impl ProjectSettings {
         }
         nav.areas.resize(32, oxide_navigation::NavArea::default());
         world.resources.insert(nav);
+        let mut loc = self.localization.clone();
+        if loc.locales.is_empty() {
+            loc.locales = oxide_localization::LocalizationSettings::default().locales;
+        }
+        // A locale that was removed: back to the startup locale.
+        if let Some(l) = world.try_resource_mut::<oxide_localization::Localization>()
+            && !loc.locales.iter().any(|x| x.code == l.selected)
+        {
+            l.selected = oxide_localization::Localization::startup_locale(&loc);
+            l.generation += 1;
+        }
+        world.resources.insert(loc);
     }
 
     /// One page as JSON (MCP).
@@ -341,6 +362,7 @@ impl ProjectSettings {
                 "input" => serde_json::to_value(&self.input),
                 "player" => serde_json::to_value(&self.player),
                 "navigation" => serde_json::to_value(&self.navigation),
+                "localization" => serde_json::to_value(&self.localization),
                 _ => return None,
             }
             .unwrap_or_default(),
@@ -371,6 +393,7 @@ impl ProjectSettings {
             "quality" => self.quality = parse(current)?,
             "input" => self.input = parse(current)?,
             "navigation" => self.navigation = parse(current)?,
+            "localization" => self.localization = parse(current)?,
             _ => self.player = parse(current)?,
         }
         Ok(())
