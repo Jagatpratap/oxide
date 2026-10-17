@@ -178,3 +178,71 @@ fn taa_converges_and_does_not_ghost() {
     let body = img.pixel(SIZE / 2 + 43, SIZE / 2);
     assert!(body[0] > 200, "the cube is where it moved to: {body:?}");
 }
+
+#[test]
+fn smaa_smooths_edges_towards_the_msaa_reference() {
+    let Some(gpu) = gpu() else { return };
+    let mut assets = AssetServer::new(std::env::temp_dir());
+    let mut r = SceneRenderer::new(&gpu);
+    // Shallow edges (8°): long stair steps, SMAA's orthogonal patterns.
+    let shallow = |assets: &mut AssetServer, mode, msaa| {
+        let mut f = frame(assets, mode, msaa, 0.0);
+        f.draws[0].model = Matrix4x4::trs(
+            Vector3::ZERO,
+            Quaternion::euler(0.0, 0.0, 8.0),
+            Vector3::splat(1.2),
+        );
+        f
+    };
+    let f = shallow(&mut assets, AntiAliasing::None, 1);
+    let aliased_img = render(&gpu, &mut r, &assets, &f);
+    let aliased = edge_pixels(&aliased_img);
+    // Reference: the highest MSAA the adapter has.
+    let f = shallow(&mut assets, AntiAliasing::None, 8);
+    let reference = render(&gpu, &mut r, &assets, &f);
+    let msaa_on = r.sample_count() > 1;
+    let error = |img: &CapturedImage| -> u64 {
+        img.rgba
+            .iter()
+            .zip(&reference.rgba)
+            .step_by(4)
+            .map(|(a, b)| (*a as i64 - *b as i64).unsigned_abs())
+            .sum()
+    };
+    let mut prev_steps = 0;
+    for quality in [
+        aa::SmaaQuality::Low,
+        aa::SmaaQuality::Medium,
+        aa::SmaaQuality::High,
+    ] {
+        let mut f = shallow(&mut assets, AntiAliasing::Smaa, 1);
+        f.cameras[0].antialiasing.smaa_quality = quality;
+        let img = render(&gpu, &mut r, &assets, &f);
+        assert!(
+            r.scene_passes.iter().any(|p| p == "SMAA") || r.post_passes.iter().any(|p| p == "SMAA")
+        );
+        let smaa = edge_pixels(&img);
+        eprintln!(
+            "{quality:?}: {smaa} edge pixels (none {aliased}); error {} vs aliased {}",
+            error(&img),
+            error(&aliased_img)
+        );
+        assert!(
+            smaa > aliased + 40,
+            "{quality:?}: SMAA {smaa} vs none {aliased}"
+        );
+        if msaa_on {
+            assert!(
+                error(&img) * 10 < error(&aliased_img) * 8,
+                "{quality:?}: closer to the MSAA reference than no AA"
+            );
+        }
+        // The interior and background stay untouched.
+        let c = img.pixel(SIZE / 2, SIZE / 2);
+        assert_eq!(c, aliased_img.pixel(SIZE / 2, SIZE / 2));
+        assert_eq!(img.pixel(2, 2), aliased_img.pixel(2, 2));
+        let steps = quality.params().1;
+        assert!(steps > prev_steps);
+        prev_steps = steps;
+    }
+}

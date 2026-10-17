@@ -76,6 +76,9 @@ pub enum AntiAliasing {
     None,
     /// Fast Approximate Anti-aliasing: one edge-smoothing pass after tonemapping.
     Fxaa,
+    /// Subpixel Morphological Anti-aliasing: edge detection, shape-based blend weights and
+    /// neighbourhood blending after tonemapping ([`AntiAliasingSettings::smaa_quality`]).
+    Smaa,
     /// Temporal Anti-aliasing: jittered frames accumulated with motion vectors. Turns
     /// MSAA off for the camera, like URP.
     Taa,
@@ -96,6 +99,8 @@ pub struct AntiAliasingSettings {
     /// Identifies the view whose TAA history this is (the camera object; views of the same
     /// size with different ids keep separate histories).
     pub history_id: u64,
+    /// SMAA quality (URP "Quality": Low, Medium, High).
+    pub smaa_quality: crate::aa::SmaaQuality,
 }
 
 impl Default for AntiAliasingSettings {
@@ -107,6 +112,7 @@ impl Default for AntiAliasingSettings {
             taa_jitter_scale: 1.0,
             taa_variance_clamp_scale: 0.9,
             history_id: 0,
+            smaa_quality: crate::aa::SmaaQuality::Medium,
         }
     }
 }

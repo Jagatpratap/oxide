@@ -29,8 +29,18 @@ pub enum AntialiasingMode {
     #[default]
     None,
     FastApproximateAntialiasing,
+    SubpixelMorphologicalAntiAliasing,
     /// Turns MSAA off for this camera, like URP.
     TemporalAntiAliasing,
+}
+
+/// URP `AntialiasingQuality` (SMAA quality).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
+pub enum AntialiasingQuality {
+    Low,
+    #[default]
+    Medium,
+    High,
 }
 
 /// MSAA sample count (URP asset "Anti Aliasing (MSAA)").
@@ -102,6 +112,8 @@ pub struct Camera {
     pub use_occlusion_culling: bool,
     /// Post-process anti-aliasing (URP camera "Anti-aliasing").
     pub antialiasing: AntialiasingMode,
+    /// SMAA quality (URP camera "Quality").
+    pub antialiasing_quality: AntialiasingQuality,
     /// Use the project's MSAA on this camera (Unity `Camera.allowMSAA`).
     pub allow_msaa: bool,
     /// TAA: share of the history kept each frame (URP "Base Blend Factor").
@@ -175,6 +187,7 @@ impl Default for Camera {
             post_processing: true,
             use_occlusion_culling: true,
             antialiasing: AntialiasingMode::None,
+            antialiasing_quality: AntialiasingQuality::Medium,
             allow_msaa: true,
             taa_base_blend_factor: 0.875,
             taa_jitter_scale: 1.0,

@@ -1904,7 +1904,7 @@ impl SceneRenderer {
             cur = dst;
         }
         let final_target = graph.import(target);
-        let (post_out, post_format) = if out.fxaa {
+        let (post_out, post_format) = if out.fxaa || out.smaa.is_some() {
             (
                 graph.create(TextureDesc::color(w, h, crate::aa::LDR_FORMAT)),
                 crate::aa::LDR_FORMAT,
@@ -1960,6 +1960,37 @@ impl SceneRenderer {
                         dst_format,
                         w,
                         h,
+                    )
+                },
+            );
+            cur = dst;
+        }
+        if let Some(quality) = out.smaa {
+            let (dst, dst_format) = if after.is_empty() {
+                (final_target, format)
+            } else {
+                (graph.create(TextureDesc::color(w, h, srgb)), srgb)
+            };
+            let edges = graph.create(TextureDesc::color(w, h, crate::aa::LDR_FORMAT));
+            let weights = graph.create(TextureDesc::color(w, h, crate::aa::LDR_FORMAT));
+            let (src, aa) = (cur, &aa);
+            graph.add_pass(
+                "SMAA",
+                |b| {
+                    b.read(src).write(edges).write(weights).write(dst);
+                },
+                move |ctx| {
+                    aa.borrow_mut().smaa(
+                        ctx.device,
+                        ctx.queue,
+                        ctx.encoder,
+                        &ctx.view(src),
+                        &ctx.view(edges),
+                        &ctx.view(weights),
+                        &ctx.view(dst),
+                        dst_format,
+                        (w, h),
+                        quality,
                     )
                 },
             );
@@ -3964,6 +3995,7 @@ impl SceneRenderer {
                 samples,
                 taa: taa_key,
                 fxaa: mode == AntiAliasing::Fxaa,
+                smaa: (mode == AntiAliasing::Smaa).then_some(aa.smaa_quality),
                 fx,
             },
         )
@@ -4051,6 +4083,7 @@ struct SceneOutput {
     /// TAA history holding the anti-aliased HDR image (else it is the resolve target).
     taa: Option<(u64, u32, u32)>,
     fxaa: bool,
+    smaa: Option<crate::aa::SmaaQuality>,
     /// Depth of field or motion blur runs.
     fx: bool,
 }

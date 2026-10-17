@@ -357,8 +357,10 @@ from the fixed edge and each object along its matching local axis).
   ([Textures](https://docs.unity3d.com/Manual/Textures-landing.html))
 - ☑ Linear color space, HDR render targets
   ([Color and HDR](https://docs.unity3d.com/Manual/graphics-color.html))
-- ◐ Anti-aliasing: MSAA (off/2x/4x/8x setting), FXAA, TAA (jitter, motion vectors incl.
-  skinned, variance clipping) ☑; SMAA ☐
+- ☑ Anti-aliasing: MSAA (off/2x/4x/8x setting), FXAA, TAA (jitter, motion vectors incl.
+  skinned, variance clipping), SMAA (Low/Medium/High: luma edges with local contrast adaptation, L/U/Z
+  shape blend weights, neighbourhood blending in linear light; coverage computed analytically instead of
+  SMAA's area texture, no diagonal patterns)
   ([URP anti-aliasing](https://docs.unity3d.com/Manual/urp/anti-aliasing.html))
 - ✔ Occlusion culling: runtime CPU occluder depth buffer + min-depth pyramid (no bake, works
   with streaming); Occluder/Occludee Static flags, `Camera.useOcclusionCulling`,

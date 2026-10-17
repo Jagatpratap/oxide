@@ -1,4 +1,4 @@
-//! Anti-aliasing passes: per-object motion vectors and the TAA resolve, and FXAA.
+//! Anti-aliasing passes: per-object motion vectors and the TAA resolve, FXAA and SMAA.
 //! The renderer decides when they run (see `SceneRenderer::render_scene`).
 //!
 //! Reference: <https://docs.unity3d.com/Manual/urp/anti-aliasing.html>
@@ -53,7 +53,34 @@ pub(crate) struct AaGpu {
     fxaa_module: wgpu::ShaderModule,
     fxaa_pipelines: HashMap<wgpu::TextureFormat, wgpu::RenderPipeline>,
     fxaa_uniform: wgpu::Buffer,
+    smaa_layout: wgpu::BindGroupLayout,
+    smaa_edges: wgpu::RenderPipeline,
+    smaa_weights: wgpu::RenderPipeline,
+    smaa_pipeline_layout: wgpu::PipelineLayout,
+    smaa_module: wgpu::ShaderModule,
+    smaa_blend: HashMap<wgpu::TextureFormat, wgpu::RenderPipeline>,
+    smaa_uniform: wgpu::Buffer,
     linear: wgpu::Sampler,
+}
+
+/// URP SMAA quality (`AntialiasingQuality`): edge threshold and search distance.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum SmaaQuality {
+    Low,
+    #[default]
+    Medium,
+    High,
+}
+
+impl SmaaQuality {
+    /// (luma edge threshold, max search steps), as SMAA's presets.
+    pub fn params(self) -> (f32, u32) {
+        match self {
+            SmaaQuality::Low => (0.15, 4),
+            SmaaQuality::Medium => (0.1, 8),
+            SmaaQuality::High => (0.1, 16),
+        }
+    }
 }
 
 fn uniform_entry(binding: u32, vis: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
@@ -271,6 +298,39 @@ impl AaGpu {
             LDR_FORMAT,
         );
         let fxaa_uniform = buffer("fxaa uniform", 16);
+
+        // ---- SMAA ---------------------------------------------------------------------
+        let smaa_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("smaa layout"),
+            entries: &[
+                uniform_entry(0, wgpu::ShaderStages::FRAGMENT),
+                texture_entry(1, float),
+                texture_entry(2, float),
+                texture_entry(3, float),
+            ],
+        });
+        // Three entry points, so no `fs_main` pipeline.
+        let smaa_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("smaa.wgsl"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/smaa.wgsl").into()),
+        });
+        let smaa_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("smaa"),
+            bind_group_layouts: &[Some(&smaa_layout)],
+            immediate_size: 0,
+        });
+        let smaa_pass = |entry: &str| {
+            Self::fullscreen_pipeline_entry(
+                device,
+                entry,
+                &smaa_pipeline_layout,
+                &smaa_module,
+                LDR_FORMAT,
+                entry,
+            )
+        };
+        let (smaa_edges, smaa_weights) = (smaa_pass("fs_edges"), smaa_pass("fs_weights"));
+        let smaa_uniform = buffer("smaa uniform", 32);
         let linear = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("aa linear"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -290,6 +350,13 @@ impl AaGpu {
             fxaa_module,
             fxaa_pipelines: HashMap::new(),
             fxaa_uniform,
+            smaa_layout,
+            smaa_edges,
+            smaa_weights,
+            smaa_pipeline_layout,
+            smaa_module,
+            smaa_blend: HashMap::new(),
+            smaa_uniform,
             linear,
         }
     }
@@ -300,6 +367,17 @@ impl AaGpu {
         layout: &wgpu::PipelineLayout,
         module: &wgpu::ShaderModule,
         format: wgpu::TextureFormat,
+    ) -> wgpu::RenderPipeline {
+        Self::fullscreen_pipeline_entry(device, label, layout, module, format, "fs_main")
+    }
+
+    fn fullscreen_pipeline_entry(
+        device: &wgpu::Device,
+        label: &str,
+        layout: &wgpu::PipelineLayout,
+        module: &wgpu::ShaderModule,
+        format: wgpu::TextureFormat,
+        entry: &str,
     ) -> wgpu::RenderPipeline {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(label),
@@ -315,7 +393,7 @@ impl AaGpu {
             multisample: Default::default(),
             fragment: Some(wgpu::FragmentState {
                 module,
-                entry_point: Some("fs_main"),
+                entry_point: Some(entry),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
@@ -467,6 +545,73 @@ impl AaGpu {
             ],
         });
         fullscreen_pass(encoder, "fxaa", target, pipeline, &group);
+    }
+}
+
+impl AaGpu {
+    /// SMAA from the sRGB-encoded `src` (`w`×`h`) into `target`, through the `edges` and
+    /// `weights` textures (both [`LDR_FORMAT`]).
+    #[allow(clippy::too_many_arguments)]
+    pub fn smaa(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        src: &wgpu::TextureView,
+        edges: &wgpu::TextureView,
+        weights: &wgpu::TextureView,
+        target: &wgpu::TextureView,
+        format: wgpu::TextureFormat,
+        (w, h): (u32, u32),
+        quality: SmaaQuality,
+    ) {
+        let (pl, module) = (&self.smaa_pipeline_layout, &self.smaa_module);
+        self.smaa_blend.entry(format).or_insert_with(|| {
+            Self::fullscreen_pipeline_entry(device, "smaa blend", pl, module, format, "fs_blend")
+        });
+        let (threshold, steps) = quality.params();
+        let u = [
+            1.0 / w as f32,
+            1.0 / h as f32,
+            w as f32,
+            h as f32,
+            threshold,
+            steps as f32,
+            format.is_srgb() as u32 as f32,
+            0.0,
+        ];
+        queue.write_buffer(&self.smaa_uniform, 0, bytemuck::cast_slice(&u));
+        let group = |t1: &wgpu::TextureView, t2: &wgpu::TextureView, t3: &wgpu::TextureView| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("smaa group"),
+                layout: &self.smaa_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.smaa_uniform.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(t1),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(t2),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(t3),
+                    },
+                ],
+            })
+        };
+        // Unused slots get the source image (never the pass's own target).
+        let g = group(src, src, src);
+        fullscreen_pass(encoder, "smaa edges", edges, &self.smaa_edges, &g);
+        let g = group(src, edges, src);
+        fullscreen_pass(encoder, "smaa weights", weights, &self.smaa_weights, &g);
+        let g = group(src, edges, weights);
+        fullscreen_pass(encoder, "smaa blend", target, &self.smaa_blend[&format], &g);
     }
 }
 

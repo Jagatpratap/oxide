@@ -55,6 +55,9 @@ pub fn camera_view(world: &World, id: oxide_scene::GameObjectId, c: &Camera) -> 
             mode: match c.antialiasing {
                 AntialiasingMode::None => oxide_render::AntiAliasing::None,
                 AntialiasingMode::FastApproximateAntialiasing => oxide_render::AntiAliasing::Fxaa,
+                AntialiasingMode::SubpixelMorphologicalAntiAliasing => {
+                    oxide_render::AntiAliasing::Smaa
+                }
                 AntialiasingMode::TemporalAntiAliasing => oxide_render::AntiAliasing::Taa,
             },
             allow_msaa: c.allow_msaa,
@@ -62,6 +65,11 @@ pub fn camera_view(world: &World, id: oxide_scene::GameObjectId, c: &Camera) -> 
             taa_jitter_scale: c.taa_jitter_scale,
             taa_variance_clamp_scale: c.taa_variance_clamp_scale,
             history_id: id.to_bits(),
+            smaa_quality: match c.antialiasing_quality {
+                oxide_scene::AntialiasingQuality::Low => oxide_render::aa::SmaaQuality::Low,
+                oxide_scene::AntialiasingQuality::Medium => oxide_render::aa::SmaaQuality::Medium,
+                oxide_scene::AntialiasingQuality::High => oxide_render::aa::SmaaQuality::High,
+            },
         },
     }
 }

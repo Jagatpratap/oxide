@@ -1258,6 +1258,20 @@ fn hide_inapplicable(
                 Some(false) => h.extend(&PHYSICAL[..12]),
                 None => {}
             }
+            // Settings of the other anti-aliasing modes.
+            match mode("antialiasing").as_deref() {
+                Some("TemporalAntiAliasing") => h.push("antialiasing_quality"),
+                Some(_) => h.extend([
+                    "antialiasing_quality",
+                    "taa_base_blend_factor",
+                    "taa_jitter_scale",
+                    "taa_variance_clamp_scale",
+                ]),
+                None => {}
+            }
+            if mode("antialiasing").as_deref() == Some("SubpixelMorphologicalAntiAliasing") {
+                h.retain(|f| *f != "antialiasing_quality");
+            }
             // URP: an Overlay camera draws into its Base camera's output.
             match mode("render_type").as_deref() {
                 Some("Overlay") => h.extend([
@@ -1272,6 +1286,7 @@ fn hide_inapplicable(
                     "taa_base_blend_factor",
                     "taa_jitter_scale",
                     "taa_variance_clamp_scale",
+                    "antialiasing_quality",
                     "depth",
                 ]),
                 Some("Base") => h.push("clear_depth"),
