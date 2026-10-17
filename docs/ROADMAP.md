@@ -390,9 +390,10 @@ from the fixed edge and each object along its matching local axis).
   cubemap (re-captured when the skybox or its textures change), ambient from L2 spherical harmonics, the
   lightmapper's sky matching the skybox, fog
   ([Sky](https://docs.unity3d.com/Manual/sky-landing.html))
-- ◐ Reflection probes: Realtime (On Awake / Every Frame / Via Scripting) and Baked (static
-  objects only; captured at load, not saved to disk), importance, blend distance, box
-  projection, up to 15 + sky, GGX-prefiltered cube array ☑; custom cubemap probes ☐
+- ☑ Reflection probes: Realtime (On Awake / Every Frame / Via Scripting), Baked (Reflection Probe Static
+  objects; Generate Lighting captures each and saves it as `ReflectionProbe-<n>.png` — RGBM HDR in a cross,
+  imported as a Cube — set as its `baked_texture` and used from then on) and Custom (a Cubemap asset);
+  importance, blend distance, box projection, up to 15 + sky, GGX-prefiltered cube array; Inspector per Type
   ([Reflections](https://docs.unity3d.com/Manual/reflections-landing.html))
 - ◐ Global illumination ☑: CPU path-traced lightmapper (`oxide_lightmapper`): Baked / Mixed
   (Baked Indirect) / Realtime light modes, Contribute GI static objects, generated lightmap UVs

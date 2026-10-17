@@ -18,7 +18,8 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
             "Unity's Lighting window. `start`: bakes lightmaps and light probes in the background for Static \
              (Contribute GI) renderers, Mixed lights (their bounce) and Baked lights (direct + bounce), Light Probe \
              Groups and the sky, using RenderSettings lightmap_resolution / max_lightmap_size / bake_samples / \
-             bake_bounces; the lightmaps go into a folder named after the scene. `status` (default): progress and \
+             bake_bounces; the lightmaps go into a folder named after the scene, with each Baked Reflection Probe's \
+             capture (ReflectionProbe-<n>.png, set as its baked_texture). `status` (default): progress and \
              the last result. `cancel`. `clear`: removes baked data. Save the scene to keep the result.",
             schema(
                 json!({ "action": { "type": "string", "enum": ["start", "status", "cancel", "clear"] } }),
@@ -32,7 +33,14 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
                 .unwrap_or("status")
             {
                 "start" => {
-                    if let Err(err) = crate::lighting::start(&mut e.world) {
+                    // Baked reflection probes: captured on the GPU and saved now.
+                    let probes = match crate::lighting::bake_reflection_probes(e) {
+                        Ok(n) => n,
+                        Err(err) => return ToolResult::error(err),
+                    };
+                    if let Err(err) = crate::lighting::start(&mut e.world)
+                        && probes == 0
+                    {
                         return ToolResult::error(err);
                     }
                 }

@@ -630,8 +630,18 @@ fn shadow_settings(l: &Light, q: &QualityLevel) -> Option<ShadowSettings> {
 
 pub fn reflection_probes(world: &World) -> Vec<ReflectionProbeView> {
     let realtime = QualitySettings::of(world).realtime_reflection_probes;
+    let assets = world.resource::<AssetServer>();
+    // A loaded cubemap asset as a probe source: (id, version, RGBM).
+    let cube = |h: &Option<oxide_assets::Handle<oxide_assets::TextureCube>>, rgbm: bool| {
+        let id = h.as_ref()?.id();
+        Some((id, assets.cubemaps.version(id)?, rgbm))
+    };
     world
         .query::<ReflectionProbe>()
+        // A Custom probe without its cubemap reflects nothing (it falls back to the sky).
+        .filter(|(_, p)| {
+            p.mode != ReflectionProbeMode::Custom || cube(&p.custom_baked_texture, false).is_some()
+        })
         .map(|(id, p)| {
             let position = world.position(id);
             let (box_min, box_max) = p.bounds(position);
@@ -656,7 +666,9 @@ pub fn reflection_probes(world: &World) -> Vec<ReflectionProbeView> {
                 },
                 baked: p.mode == ReflectionProbeMode::Baked,
                 refresh: match (p.mode, p.refresh_mode) {
-                    (ReflectionProbeMode::Baked, _) => ProbeRefresh::OnAwake,
+                    (ReflectionProbeMode::Baked | ReflectionProbeMode::Custom, _) => {
+                        ProbeRefresh::OnAwake
+                    }
                     (_, ReflectionProbeRefreshMode::OnAwake) => ProbeRefresh::OnAwake,
                     // Quality "Realtime Reflection Probes" off: capture once, never refresh.
                     (_, ReflectionProbeRefreshMode::EveryFrame) if !realtime => {
@@ -666,6 +678,11 @@ pub fn reflection_probes(world: &World) -> Vec<ReflectionProbeView> {
                     (_, ReflectionProbeRefreshMode::ViaScripting) => ProbeRefresh::ViaScripting,
                 },
                 render_requests: p.render_requests,
+                source: match p.mode {
+                    ReflectionProbeMode::Custom => cube(&p.custom_baked_texture, false),
+                    ReflectionProbeMode::Baked => cube(&p.baked_texture, true),
+                    ReflectionProbeMode::Realtime => None,
+                },
             }
         })
         .collect()

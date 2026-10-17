@@ -1246,6 +1246,21 @@ fn hide_inapplicable(
             }
             h
         }
+        // Unity's Reflection Probe Inspector: Type decides the settings shown.
+        "ReflectionProbe" => match mode("mode").as_deref() {
+            Some("Custom") => vec![
+                "baked_texture",
+                "refresh_mode",
+                "near_clip_plane",
+                "far_clip_plane",
+                "clear_flags",
+                "background_color",
+                "culling_mask",
+            ],
+            Some("Baked") => vec!["custom_baked_texture", "refresh_mode"],
+            Some("Realtime") => vec!["custom_baked_texture", "baked_texture"],
+            _ => vec![],
+        },
         "Camera" => {
             let flag = |name: &str| {
                 values.iter().find_map(|(f, v, mixed)| match v {

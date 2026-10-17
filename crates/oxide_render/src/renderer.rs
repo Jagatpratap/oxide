@@ -2173,94 +2173,202 @@ impl SceneRenderer {
             .plan(&gpu.queue, sky_key, &frame.reflection_probes, frame.time);
         let count = jobs.len() as u32;
         for job in jobs {
-            let (center, capture_frame) = match &job.probe {
-                None => {
-                    let sun = frame.sun.clone().map(|mut s| {
-                        s.shadows = None;
-                        s
-                    });
-                    let f = RenderFrame {
-                        cameras: face_cameras(Vector3::ZERO, 0.1, 10.0, ClearMode::Sky, 0),
-                        sun,
-                        environment: frame.environment.clone(),
-                        time: frame.time,
-                        ..Default::default()
-                    };
-                    (Vector3::ZERO, f)
+            // Custom probes and saved Baked captures come from a cubemap asset.
+            let source = job
+                .probe
+                .as_ref()
+                .and_then(|p| p.source)
+                .and_then(|(id, _, rgbm)| {
+                    self.gpu_assets
+                        .cubemap_view(&gpu.device, &gpu.queue, assets, id)
+                        .cloned()
+                        .map(|v| (v, rgbm))
+                });
+            let mut encoder = match source {
+                Some((view, rgbm)) => {
+                    let mut encoder = gpu.device.create_command_encoder(&Default::default());
+                    self.reflections.blit_source(
+                        &gpu.device,
+                        &gpu.queue,
+                        &mut encoder,
+                        &view,
+                        rgbm,
+                    );
+                    encoder
                 }
-                Some(p) => {
-                    let mut environment = frame.environment.clone();
-                    environment.shadow_distance = environment.shadow_distance.min(p.far);
-                    let f = RenderFrame {
-                        cameras: face_cameras(p.position, p.near, p.far, p.clear, p.culling_mask),
-                        sun: frame.sun.clone(),
-                        lights: frame.lights.clone(),
-                        draws: frame
-                            .draws
-                            .iter()
-                            .filter(|d| !p.baked || d.reflection_probe_static)
-                            .cloned()
-                            .collect(),
-                        terrain_draws: frame.terrain_draws.clone(),
-                        particles: if p.baked {
-                            Vec::new()
-                        } else {
-                            frame.particles.clone()
-                        },
-                        joints: frame.joints.clone(),
-                        environment,
-                        time: frame.time,
-                        ..Default::default()
-                    };
-                    (p.position, f)
-                }
+                None => self.capture_probe_scene(gpu, assets, frame, job.probe.as_ref(), job.slot),
             };
-            let capture = Capture {
-                center,
-                exclude: job.probe.as_ref().map(|_| job.slot),
-            };
-            let (mut encoder, _, out) = self.render_scene(
-                gpu,
-                assets,
-                &capture_frame,
-                CAPTURE_W,
-                CAPTURE_H,
-                Some(capture),
-            );
-            let targets = &self.targets[&(CAPTURE_W, CAPTURE_H, out.samples)];
-            for face in 0..6u32 {
-                encoder.copy_texture_to_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &targets.resolve_tex,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d {
-                            x: (face % 3) * PROBE_SIZE,
-                            y: (face / 3) * PROBE_SIZE,
-                            z: 0,
-                        },
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::TexelCopyTextureInfo {
-                        texture: self.reflections.capture_texture(),
-                        mip_level: 0,
-                        origin: wgpu::Origin3d {
-                            x: 0,
-                            y: 0,
-                            z: face,
-                        },
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::Extent3d {
-                        width: PROBE_SIZE,
-                        height: PROBE_SIZE,
-                        depth_or_array_layers: 1,
-                    },
-                );
-            }
             self.reflections.filter(&mut encoder, job.slot);
             gpu.queue.submit([encoder.finish()]);
         }
         count
+    }
+
+    /// Renders the scene (or the sky, for `probe` None) into the probe capture cube's
+    /// mip 0. Returns the unsubmitted encoder.
+    fn capture_probe_scene(
+        &mut self,
+        gpu: &Gpu,
+        assets: &AssetServer,
+        frame: &RenderFrame,
+        probe: Option<&ReflectionProbeView>,
+        slot: u32,
+    ) -> wgpu::CommandEncoder {
+        let (center, capture_frame) = match probe {
+            None => {
+                let sun = frame.sun.clone().map(|mut s| {
+                    s.shadows = None;
+                    s
+                });
+                let f = RenderFrame {
+                    cameras: face_cameras(Vector3::ZERO, 0.1, 10.0, ClearMode::Sky, 0),
+                    sun,
+                    environment: frame.environment.clone(),
+                    time: frame.time,
+                    ..Default::default()
+                };
+                (Vector3::ZERO, f)
+            }
+            Some(p) => {
+                let mut environment = frame.environment.clone();
+                environment.shadow_distance = environment.shadow_distance.min(p.far);
+                let f = RenderFrame {
+                    cameras: face_cameras(p.position, p.near, p.far, p.clear, p.culling_mask),
+                    sun: frame.sun.clone(),
+                    lights: frame.lights.clone(),
+                    draws: frame
+                        .draws
+                        .iter()
+                        .filter(|d| !p.baked || d.reflection_probe_static)
+                        .cloned()
+                        .collect(),
+                    terrain_draws: frame.terrain_draws.clone(),
+                    particles: if p.baked {
+                        Vec::new()
+                    } else {
+                        frame.particles.clone()
+                    },
+                    joints: frame.joints.clone(),
+                    environment,
+                    time: frame.time,
+                    ..Default::default()
+                };
+                (p.position, f)
+            }
+        };
+        let capture = Capture {
+            center,
+            exclude: probe.map(|_| slot),
+        };
+        let (mut encoder, _, out) = self.render_scene(
+            gpu,
+            assets,
+            &capture_frame,
+            CAPTURE_W,
+            CAPTURE_H,
+            Some(capture),
+        );
+        let targets = &self.targets[&(CAPTURE_W, CAPTURE_H, out.samples)];
+        for face in 0..6u32 {
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &targets.resolve_tex,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: (face % 3) * PROBE_SIZE,
+                        y: (face / 3) * PROBE_SIZE,
+                        z: 0,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: self.reflections.capture_texture(),
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: 0,
+                        y: 0,
+                        z: face,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: PROBE_SIZE,
+                    height: PROBE_SIZE,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        encoder
+    }
+
+    /// Captures a Baked reflection probe now (Reflection Probe Static objects only, like
+    /// Unity's bake) and reads back its six faces: `PROBE_SIZE`² linear RGBA each, in cube
+    /// face order. Used to save Baked probes to disk.
+    pub fn bake_reflection_probe(
+        &mut self,
+        gpu: &Gpu,
+        assets: &AssetServer,
+        frame: &RenderFrame,
+        probe: &ReflectionProbeView,
+    ) -> Result<Vec<Vec<[f32; 4]>>, String> {
+        let probe = ReflectionProbeView {
+            baked: true,
+            source: None,
+            ..probe.clone()
+        };
+        // Lights, shadows and the sky need this frame's state.
+        self.update_lightmaps(gpu, assets, &frame.lightmaps);
+        let mut encoder = self.capture_probe_scene(gpu, assets, frame, Some(&probe), u32::MAX);
+        let size = crate::reflection::PROBE_SIZE;
+        let row = size * 8;
+        let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("probe bake readback"),
+            size: (row * size * 6) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: self.reflections.capture_texture(),
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(row),
+                    rows_per_image: Some(size),
+                },
+            },
+            wgpu::Extent3d {
+                width: size,
+                height: size,
+                depth_or_array_layers: 6,
+            },
+        );
+        gpu.queue.submit([encoder.finish()]);
+        let slice = buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+        rx.recv()
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?;
+        let data = slice.get_mapped_range().map_err(|e| format!("{e:?}"))?;
+        let halves: &[u16] = bytemuck::cast_slice(&data);
+        let faces = halves
+            .as_chunks::<4>()
+            .0
+            .chunks((size * size) as usize)
+            .map(|face| face.iter().map(|p| p.map(f16_to_f32)).collect())
+            .collect();
+        drop(data);
+        buffer.unmap();
+        Ok(faces)
     }
 
     /// Culls, batches and draws every camera of `frame` into the HDR target of size `w`×`h`
@@ -4860,6 +4968,24 @@ fn variant_constants(
         .get(&variant)
         .map(|c| c.iter().map(|(k, v)| (k.as_str(), *v)).collect())
         .unwrap_or_default()
+}
+
+/// IEEE half to f32 (HDR read-backs).
+fn f16_to_f32(h: u16) -> f32 {
+    let sign = if h & 0x8000 != 0 { -1.0 } else { 1.0 };
+    let exp = ((h >> 10) & 0x1f) as i32;
+    let frac = (h & 0x3ff) as f32;
+    match exp {
+        0 => sign * frac * 2f32.powi(-24),
+        31 => {
+            if frac == 0.0 {
+                sign * f32::INFINITY
+            } else {
+                f32::NAN
+            }
+        }
+        _ => sign * (1.0 + frac / 1024.0) * 2f32.powi(exp - 15),
+    }
 }
 
 #[cfg(test)]

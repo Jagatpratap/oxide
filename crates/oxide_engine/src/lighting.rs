@@ -451,3 +451,94 @@ pub fn probe_sh(rs: &RenderSettings, p: Vector3) -> Option<[Vector3; 9]> {
     }
     Some(sh.map(|s| s / total))
 }
+
+/// Bakes every Baked reflection probe (Unity's Generate Lighting does): captures Reflection
+/// Probe Static objects on the GPU and saves each cube as an RGBM cross PNG
+/// (`<scene folder>/ReflectionProbe-<n>.png`, imported as a Cube), set as the probe's
+/// `baked_texture`. Returns how many probes were baked.
+pub fn bake_reflection_probes(engine: &mut crate::Engine) -> Result<usize, String> {
+    use oxide_scene::{ReflectionProbe, ReflectionProbeMode};
+    let probes: Vec<GameObjectId> = engine
+        .world
+        .query::<ReflectionProbe>()
+        .filter(|(_, p)| p.mode == ReflectionProbeMode::Baked)
+        .map(|(id, _)| id)
+        .collect();
+    if probes.is_empty() {
+        return Ok(0);
+    }
+    // Capture without the old saved cube, so the bake sees the scene.
+    for id in &probes {
+        if let Some(p) = engine.world.get_component_mut::<ReflectionProbe>(*id) {
+            p.baked_texture = None;
+        }
+    }
+    let frame = crate::extract::extract(&engine.world, None);
+    let folder = data_folder(&engine.world);
+    for (i, id) in probes.iter().enumerate() {
+        let Some(view) = frame
+            .reflection_probes
+            .iter()
+            .find(|v| v.id == id.to_bits())
+        else {
+            continue;
+        };
+        let faces = engine.renderer.bake_reflection_probe(
+            &engine.gpu,
+            engine.world.resource::<AssetServer>(),
+            &frame,
+            view,
+        )?;
+        let path = format!("{folder}/ReflectionProbe-{i}.png");
+        let assets = engine.world.resource_mut::<AssetServer>();
+        write_cube_cross(&assets.full_path(&path), &faces)?;
+        // RGBM HDR in a horizontal cross: linear, uncompressed, a Cube.
+        let importer = oxide_assets::TextureImporter {
+            srgb: false,
+            compression: oxide_assets::TextureCompression::None,
+            generate_mip_maps: false,
+            max_size: 8192,
+            wrap_mode: oxide_assets::TextureWrapMode::Clamp,
+            filter_mode: oxide_assets::FilterMode::Bilinear,
+            texture_shape: oxide_assets::TextureShape::Cube,
+            cubemap_mapping: oxide_assets::CubemapMapping::SixFramesLayout,
+            ..Default::default()
+        };
+        assets.set_texture_importer(&path, &importer)?;
+        if let Some(p) = engine.world.get_component_mut::<ReflectionProbe>(*id) {
+            p.baked_texture = Some(oxide_assets::Handle::from_path(path));
+        }
+    }
+    Ok(probes.len())
+}
+
+/// Six square faces (linear RGBA, cube face order) as an RGBM horizontal-cross PNG.
+fn write_cube_cross(path: &std::path::Path, faces: &[Vec<[f32; 4]>]) -> Result<(), String> {
+    let s = (faces.first().map_or(0, Vec::len) as f32).sqrt() as u32;
+    if s == 0 || faces.len() != 6 {
+        return Err("a cube needs six square faces".into());
+    }
+    let (w, h) = (4 * s, 3 * s);
+    let mut img = vec![0u8; (w * h * 4) as usize];
+    let cells = [(2, 1), (0, 1), (1, 0), (1, 2), (1, 1), (3, 1)];
+    for (face, (cx, cy)) in faces.iter().zip(cells) {
+        for y in 0..s {
+            for x in 0..s {
+                let c = face[(y * s + x) as usize];
+                let rgbm = oxide_lightmapper::encode_rgbm(Vector3::new(c[0], c[1], c[2]));
+                let i = (((cy * s + y) * w + cx * s + x) * 4) as usize;
+                img[i..i + 4].copy_from_slice(&rgbm);
+            }
+        }
+    }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let file = std::fs::File::create(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut enc = png::Encoder::new(std::io::BufWriter::new(file), w, h);
+    enc.set_color(png::ColorType::Rgba);
+    enc.set_depth(png::BitDepth::Eight);
+    enc.write_header()
+        .and_then(|mut wr| wr.write_image_data(&img))
+        .map_err(|e| format!("{}: {e}", path.display()))
+}

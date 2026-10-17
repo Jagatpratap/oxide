@@ -102,6 +102,7 @@ fn probe() -> ReflectionProbeView {
         baked: false,
         refresh: ProbeRefresh::OnAwake,
         render_requests: 0,
+        source: None,
     }
 }
 
@@ -227,5 +228,98 @@ fn ambient_follows_the_sky() {
     assert!(
         red[0] as i32 - red[2] as i32 > neutral[0] as i32 - neutral[2] as i32 + 30,
         "neutral {neutral:?} vs red sky {red:?}"
+    );
+}
+
+/// The lightmapper's RGBM encoding (gamma, range 8).
+fn rgbm(c: Vector3) -> [u8; 4] {
+    let s = c.max(Vector3::ZERO).powf(0.5);
+    let m = ((s.max_element() / 8.0).clamp(1.0 / 255.0, 1.0) * 255.0).ceil() / 255.0;
+    let rgb = (s / (m * 8.0)).clamp(Vector3::ZERO, Vector3::ONE);
+    [
+        (rgb.x * 255.0).round() as u8,
+        (rgb.y * 255.0).round() as u8,
+        (rgb.z * 255.0).round() as u8,
+        (m * 255.0) as u8,
+    ]
+}
+
+#[test]
+fn custom_cubemaps_and_saved_baked_captures_feed_probes() {
+    let Some(gpu) = Gpu::headless() else {
+        eprintln!("no GPU; skipped");
+        return;
+    };
+    let mut assets = AssetServer::new(std::env::temp_dir());
+    let mut frame = scene(&mut assets);
+    // The blocks only exist in the bake: drawn now, removed after.
+    let mut r = SceneRenderer::new(&gpu);
+    let faces = r
+        .bake_reflection_probe(&gpu, &assets, &frame, &probe())
+        .unwrap();
+    assert_eq!(faces.len(), 6);
+    // +X sees the red block, -X the green one (linear HDR values).
+    let mid = |f: &Vec<[f32; 4]>| f[f.len() / 2 + 64];
+    let (px, nx) = (mid(&faces[0]), mid(&faces[1]));
+    assert!(px[0] > 0.5 && px[1] < 0.1, "+X face {px:?}");
+    assert!(nx[1] > 0.5 && nx[0] < 0.1, "-X face {nx:?}");
+
+    // Saved like Generate Lighting does (RGBM), the capture drives the probe without the
+    // blocks being in the scene any more.
+    let size = (faces[0].len() as f32).sqrt() as u32;
+    let rgbm_faces = faces
+        .iter()
+        .map(|f| {
+            let px: Vec<u8> = f
+                .iter()
+                .flat_map(|c| rgbm(Vector3::new(c[0], c[1], c[2])))
+                .collect();
+            oxide_assets::Texture2D::from_rgba8("baked", size, size, px, false)
+        })
+        .collect();
+    let baked = assets
+        .cubemaps
+        .insert(
+            "test:baked.cubemap",
+            oxide_assets::TextureCube {
+                name: "baked".into(),
+                faces: rgbm_faces,
+            },
+        )
+        .id();
+    frame.draws.truncate(1);
+    let mut p = probe();
+    p.baked = true;
+    p.source = Some((baked, assets.cubemaps.version(baked).unwrap(), true));
+    frame.reflection_probes = vec![p];
+    let (img, _) = render(&gpu, &mut r, &assets, &frame);
+    let (left, right) = (ball(&img, -14), ball(&img, 14));
+    assert!(
+        right[0] as i32 > right[1] as i32 + 60,
+        "baked red: {right:?}"
+    );
+    assert!(
+        left[1] as i32 > left[0] as i32 + 60,
+        "baked green: {left:?}"
+    );
+
+    // Custom: a plain (sRGB) blue cubemap.
+    let blue = assets.cubemaps.insert(
+        "test:blue.cubemap",
+        oxide_assets::TextureCube::solid("blue", [0, 0, 255, 255], true),
+    );
+    let mut p = probe();
+    p.id = 2;
+    p.source = Some((
+        blue.id(),
+        assets.cubemaps.version(blue.id()).unwrap(),
+        false,
+    ));
+    frame.reflection_probes = vec![p];
+    let (img, _) = render(&gpu, &mut r, &assets, &frame);
+    let c = ball(&img, 0);
+    assert!(
+        c[2] as i32 > c[0] as i32 + 60 && c[2] as i32 > c[1] as i32 + 60,
+        "custom blue: {c:?}"
     );
 }

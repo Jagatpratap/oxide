@@ -745,11 +745,14 @@ impl Component for OcclusionPortal {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
 pub enum ReflectionProbeMode {
-    /// Captures only Reflection Probe Static objects, once (and again when edited).
+    /// Captures only Reflection Probe Static objects; Generate Lighting saves the capture
+    /// (`baked_texture`), which is used from then on.
     Baked,
     /// Captures everything on the culling mask, as `refresh_mode` says.
     #[default]
     Realtime,
+    /// Uses `custom_baked_texture`, a Cubemap you provide.
+    Custom,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
@@ -772,8 +775,14 @@ pub enum ReflectionProbeClearFlags {
 /// Unity `ReflectionProbe`: captures its surroundings into a cubemap that renderers inside
 /// its box use for reflections. <https://docs.unity3d.com/Manual/class-ReflectionProbe.html>
 #[derive(Clone, Debug, Reflect)]
+#[reflect(default)]
 pub struct ReflectionProbe {
     pub mode: ReflectionProbeMode,
+    /// Custom: the cubemap (Unity `customBakedTexture`).
+    pub custom_baked_texture: Option<Handle<oxide_assets::TextureCube>>,
+    /// Baked: the saved capture, written by Generate Lighting (Unity `bakedTexture`; RGBM
+    /// HDR in a cross PNG).
+    pub baked_texture: Option<Handle<oxide_assets::TextureCube>>,
     pub refresh_mode: ReflectionProbeRefreshMode,
     /// Higher importance wins where boxes overlap; equal importance prefers the smaller box.
     pub importance: i32,
@@ -801,6 +810,8 @@ impl Default for ReflectionProbe {
     fn default() -> Self {
         Self {
             mode: ReflectionProbeMode::Realtime,
+            custom_baked_texture: None,
+            baked_texture: None,
             refresh_mode: ReflectionProbeRefreshMode::OnAwake,
             importance: 1,
             intensity: 1.0,

@@ -103,6 +103,10 @@ pub struct ReflectionProbes {
     last_time: f32,
     warned_full: bool,
     pub(crate) active: Vec<ActiveProbe>,
+    blit_layout: wgpu::BindGroupLayout,
+    blit_pipeline: wgpu::RenderPipeline,
+    /// Six 256-byte uniform slots, one per face.
+    blit_uniform: wgpu::Buffer,
 }
 
 fn uniform_slot(i: u32) -> u32 {
@@ -175,7 +179,8 @@ impl ReflectionProbes {
             format: HDR_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_DST,
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         let mut capture_targets = Vec::new();
@@ -195,6 +200,74 @@ impl ReflectionProbes {
             ..Default::default()
         });
 
+        let blit_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("probe blit layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: true,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::Cube,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let blit_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("probe_blit.wgsl"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/probe_blit.wgsl").into()),
+        });
+        let blit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("probe blit"),
+            layout: Some(
+                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("probe blit"),
+                    bind_group_layouts: &[Some(&blit_layout)],
+                    immediate_size: 0,
+                }),
+            ),
+            vertex: wgpu::VertexState {
+                module: &blit_module,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &blit_module,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(HDR_FORMAT.into())],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let blit_uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("probe blit uniform"),
+            size: UNIFORM_SLOT * 6,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let fs = wgpu::ShaderStages::FRAGMENT;
         let tex_entry = |binding, dim| wgpu::BindGroupLayoutEntry {
             binding,
@@ -488,6 +561,9 @@ impl ReflectionProbes {
             last_time: f32::NAN,
             warned_full: false,
             active: Vec::new(),
+            blit_layout,
+            blit_pipeline,
+            blit_uniform,
         }
     }
 
@@ -660,6 +736,65 @@ impl ReflectionProbes {
         &self.capture
     }
 
+    /// Fills the scratch cube's mip 0 from a cubemap asset's view (`rgbm`: a saved Baked
+    /// capture) instead of rendering the scene.
+    pub(crate) fn blit_source(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        source: &wgpu::TextureView,
+        rgbm: bool,
+    ) {
+        for face in 0..6u32 {
+            queue.write_buffer(
+                &self.blit_uniform,
+                face as u64 * UNIFORM_SLOT,
+                bytemuck::cast_slice(&[face, rgbm as u32, 0, 0]),
+            );
+        }
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("probe blit group"),
+            layout: &self.blit_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.blit_uniform,
+                        offset: 0,
+                        size: wgpu::BufferSize::new(16),
+                    }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(source),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+            ],
+        });
+        for face in 0..6u32 {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("probe blit"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.capture_targets[(face * PROBE_MIPS) as usize],
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            pass.set_pipeline(&self.blit_pipeline);
+            pass.set_bind_group(0, &group, &[face * UNIFORM_SLOT as u32]);
+            pass.draw(0..3, 0..1);
+        }
+    }
+
     /// Builds the scratch cube's mips, then prefilters it into `slot` (and refreshes the
     /// ambient SH for the sky slot).
     pub(crate) fn filter(&self, encoder: &mut wgpu::CommandEncoder, slot: u32) {
@@ -728,6 +863,7 @@ fn probe_key(p: &ReflectionProbeView) -> u64 {
     );
     p.culling_mask.hash(&mut h);
     p.baked.hash(&mut h);
+    p.source.hash(&mut h);
     match p.clear {
         crate::ClearMode::Color(c) => hash_f32s(&mut h, &[c.r, c.g, c.b]),
         other => std::mem::discriminant(&other).hash(&mut h),

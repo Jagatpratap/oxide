@@ -1271,8 +1271,17 @@ impl Editor {
                 )
             }
             Action::GenerateLighting => {
-                let n = oxide_engine::lighting::start(w)?;
-                format!("Baking lighting for {n} static objects…")
+                // Baked reflection probes are captured now (on the GPU); lightmaps bake in the
+                // background.
+                let probes = oxide_engine::lighting::bake_reflection_probes(engine)?;
+                let w = &mut engine.world;
+                match oxide_engine::lighting::start(w) {
+                    Ok(n) => format!(
+                        "Baked {probes} reflection probe(s); baking lighting for {n} static objects…"
+                    ),
+                    Err(_) if probes > 0 => format!("Baked {probes} reflection probe(s)"),
+                    Err(e) => return Err(e),
+                }
             }
             Action::ClearBakedLighting => {
                 st.record(w, "Clear Baked Data", None, now);

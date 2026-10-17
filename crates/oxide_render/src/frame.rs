@@ -496,6 +496,9 @@ pub struct ReflectionProbeView {
     pub refresh: ProbeRefresh,
     /// Bumped by `RenderProbe()`; a change triggers a capture.
     pub render_requests: u32,
+    /// A cubemap used instead of capturing (Custom probes, and Baked probes' saved
+    /// captures): the Cubemap asset, its version, and whether it is RGBM-encoded HDR.
+    pub source: Option<(AssetId, u64, bool)>,
 }
 
 /// When a renderer feature runs (Unity `RenderPassEvent`).
