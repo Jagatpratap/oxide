@@ -152,7 +152,6 @@ pub fn set_2d(st: &mut EditorState, on: bool) {
 }
 
 pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
-    overlay_bar(st, ui);
     let rect = ui.available_rect_before_wrap();
     if rect.width() < 2.0 || rect.height() < 2.0 {
         return;
@@ -180,6 +179,7 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
         frame_selection(st, &engine.world);
     }
     navigate(st, ui, &resp);
+    crate::overlays::ui(st, engine, ui, rect);
 
     let proj = Projector::new(&st.scene_cam.camera_view(), rect);
     let world = &engine.world;
@@ -201,7 +201,6 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
         return;
     }
     // ProBuilder element editing (Vertex / Edge / Face modes).
-    crate::probuilder_window::scene_overlay(st, &engine.world, ui, rect);
     if crate::probuilder_window::scene_edit(st, engine, ui, &resp, &proj, &painter) {
         return;
     }
@@ -243,86 +242,82 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
     {
         drop_model(st, engine, &payload.0, &proj.ray(pos));
     }
-
-    if !st.scene_ui.mode_2d {
-        orientation_gizmo(st, ui, rect);
-    }
 }
 
-fn overlay_bar(st: &mut EditorState, ui: &mut egui::Ui) {
-    ui.horizontal(|ui| {
-        egui::ComboBox::from_id_salt("scene_draw_mode")
-            .selected_text(st.scene_ui.draw_mode.name())
-            .show_ui(ui, |ui| {
-                for mode in oxide_render::DebugView::ALL {
-                    ui.selectable_value(&mut st.scene_ui.draw_mode, mode, mode.name());
-                }
-            })
-            .response
-            .on_hover_text("Draw Mode");
-        let mut two_d = st.scene_ui.mode_2d;
-        if ui
-            .toggle_value(&mut two_d, "2D")
-            .on_hover_text("2D mode")
-            .changed()
-        {
-            set_2d(st, two_d);
-        }
-        ui.toggle_value(&mut st.scene_ui.lighting, "Light")
-            .on_hover_text("Scene lighting (off: lit from the camera)");
-        let fx = &mut st.scene_ui.effects;
-        let fx_label = if fx.enabled {
-            "Effects"
-        } else {
-            "Effects (off)"
-        };
-        ui.menu_button(fx_label, |ui| {
-            ui.checkbox(&mut fx.enabled, "Enabled");
-            ui.separator();
-            ui.checkbox(&mut fx.skybox, "Skybox");
-            ui.checkbox(&mut fx.fog, "Fog");
-            ui.checkbox(&mut fx.particles, "Particle Systems");
-            ui.checkbox(&mut fx.post_processing, "Post Processing");
+/// The View Options overlay: draw mode, 2D, lighting, effects, visibility, gizmos.
+pub fn view_options(st: &mut EditorState, ui: &mut egui::Ui) {
+    egui::ComboBox::from_id_salt("scene_draw_mode")
+        .selected_text(st.scene_ui.draw_mode.name())
+        .show_ui(ui, |ui| {
+            for mode in oxide_render::DebugView::ALL {
+                ui.selectable_value(&mut st.scene_ui.draw_mode, mode, mode.name());
+            }
         })
         .response
-        .on_hover_text("Effects");
-        let mut vis_on = !st.visibility.show_all;
-        if ui
-            .toggle_value(&mut vis_on, "Vis")
-            .on_hover_text("Scene visibility: off shows objects hidden in the Hierarchy")
-            .changed()
-        {
-            st.visibility.show_all = !vis_on;
-        }
-        ui.toggle_value(&mut st.scene_ui.grid, "#")
-            .on_hover_text("Grid");
-        ui.toggle_value(&mut st.scene_ui.gizmos, "Gizmos");
-        let label = if st.scene_cam.orthographic {
-            "Iso"
-        } else {
-            "Persp"
-        };
-        if ui
-            .add_enabled(!st.scene_ui.mode_2d, egui::Button::new(label))
-            .on_hover_text("Perspective / Isometric")
-            .clicked()
-        {
-            st.scene_cam.orthographic = !st.scene_cam.orthographic;
-        }
+        .on_hover_text("Draw Mode");
+    let mut two_d = st.scene_ui.mode_2d;
+    if ui
+        .toggle_value(&mut two_d, "2D")
+        .on_hover_text("2D mode")
+        .changed()
+    {
+        set_2d(st, two_d);
+    }
+    ui.toggle_value(&mut st.scene_ui.lighting, "Light")
+        .on_hover_text("Scene lighting (off: lit from the camera)");
+    let fx = &mut st.scene_ui.effects;
+    let fx_label = if fx.enabled {
+        "Effects"
+    } else {
+        "Effects (off)"
+    };
+    ui.menu_button(fx_label, |ui| {
+        ui.checkbox(&mut fx.enabled, "Enabled");
         ui.separator();
-        ui.label("Speed");
-        ui.add(
-            egui::DragValue::new(&mut st.scene_cam.speed)
-                .range(0.1..=1000.0)
-                .speed(0.1),
-        );
-        ui.label("FOV");
-        ui.add(
-            egui::DragValue::new(&mut st.scene_cam.fov)
-                .range(4.0..=120.0)
-                .speed(0.5),
-        );
-    });
+        ui.checkbox(&mut fx.skybox, "Skybox");
+        ui.checkbox(&mut fx.fog, "Fog");
+        ui.checkbox(&mut fx.particles, "Particle Systems");
+        ui.checkbox(&mut fx.post_processing, "Post Processing");
+    })
+    .response
+    .on_hover_text("Effects");
+    let mut vis_on = !st.visibility.show_all;
+    if ui
+        .toggle_value(&mut vis_on, "Vis")
+        .on_hover_text("Scene visibility: off shows objects hidden in the Hierarchy")
+        .changed()
+    {
+        st.visibility.show_all = !vis_on;
+    }
+    ui.toggle_value(&mut st.scene_ui.gizmos, "Gizmos");
+}
+
+/// The Scene Camera overlay: projection, fly speed and field of view.
+pub fn camera_options(st: &mut EditorState, ui: &mut egui::Ui) {
+    let label = if st.scene_cam.orthographic {
+        "Iso"
+    } else {
+        "Persp"
+    };
+    if ui
+        .add_enabled(!st.scene_ui.mode_2d, egui::Button::new(label))
+        .on_hover_text("Perspective / Isometric")
+        .clicked()
+    {
+        st.scene_cam.orthographic = !st.scene_cam.orthographic;
+    }
+    ui.label("Speed");
+    ui.add(
+        egui::DragValue::new(&mut st.scene_cam.speed)
+            .range(0.1..=1000.0)
+            .speed(0.1),
+    );
+    ui.label("FOV");
+    ui.add(
+        egui::DragValue::new(&mut st.scene_cam.fov)
+            .range(4.0..=120.0)
+            .speed(0.5),
+    );
 }
 
 fn navigate(st: &mut EditorState, ui: &egui::Ui, resp: &egui::Response) {
@@ -1752,8 +1747,9 @@ fn rect_tool(
 
 // ---- orientation gizmo --------------------------------------------------------------------
 
-fn orientation_gizmo(st: &mut EditorState, ui: &egui::Ui, rect: egui::Rect) {
-    let center = rect.right_top() + vec2(-48.0, 52.0);
+/// The Orientation overlay: the axis gizmo centred at `center` (click an axis to view along
+/// it, the centre to switch Perspective / Isometric).
+pub fn orientation_gizmo_at(st: &mut EditorState, ui: &egui::Ui, center: Pos2, rect: egui::Rect) {
     let inv = st.scene_cam.rotation().inverse();
     let mut ends: Vec<(f32, Pos2, usize, bool)> = Vec::new();
     for i in 0..3 {

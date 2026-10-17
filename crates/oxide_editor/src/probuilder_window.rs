@@ -6,7 +6,7 @@
 
 use crate::EditorState;
 use crate::view::Projector;
-use egui::{Color32, RichText, Stroke, pos2, vec2};
+use egui::{Color32, RichText, Stroke};
 use oxide_assets::{AssetServer, Handle};
 use oxide_engine::Engine;
 use oxide_math::{Matrix4x4, Vector3};
@@ -920,35 +920,25 @@ pub fn mcp(
     }))
 }
 
-/// Draws a small mode bar in the Scene view when a ProBuilder object is selected.
-pub fn scene_overlay(st: &mut EditorState, world: &World, ui: &mut egui::Ui, rect: egui::Rect) {
-    if target(st, world).is_none() {
-        return;
+/// Whether a ProBuilder object is selected (the ProBuilder overlay shows then).
+pub fn has_target(st: &EditorState, world: &World) -> bool {
+    target(st, world).is_some()
+}
+
+/// The ProBuilder overlay's edit mode buttons.
+pub fn mode_buttons(st: &mut EditorState, ui: &mut egui::Ui) {
+    for (m, label) in [
+        (Mode::Object, "Object"),
+        (Mode::Vertex, "Vertex"),
+        (Mode::Edge, "Edge"),
+        (Mode::Face, "Face"),
+    ] {
+        if ui
+            .selectable_label(st.probuilder.mode == m, label)
+            .clicked()
+        {
+            st.probuilder.mode = m;
+            st.probuilder.clear();
+        }
     }
-    let at = rect.left_bottom() + vec2(10.0, -36.0);
-    egui::Area::new(egui::Id::new("pb-modes"))
-        .fixed_pos(at)
-        .order(egui::Order::Foreground)
-        .show(ui.ctx(), |ui| {
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("ProBuilder").strong());
-                    for (m, label) in [
-                        (Mode::Object, "Object"),
-                        (Mode::Vertex, "Vertex"),
-                        (Mode::Edge, "Edge"),
-                        (Mode::Face, "Face"),
-                    ] {
-                        if ui
-                            .selectable_label(st.probuilder.mode == m, label)
-                            .clicked()
-                        {
-                            st.probuilder.mode = m;
-                            st.probuilder.clear();
-                        }
-                    }
-                });
-            });
-        });
-    let _ = pos2(0.0, 0.0);
 }

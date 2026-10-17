@@ -37,6 +37,9 @@ pub struct EditorPrefs {
     // Shortcuts
     /// Rebound shortcuts: command id → bindings (`Cmd+Shift+Z`). Only changed commands.
     pub shortcuts: std::collections::BTreeMap<String, Vec<String>>,
+    // Scene view overlays
+    pub overlays: Vec<crate::overlays::OverlayLayout>,
+    pub overlay_presets: std::collections::BTreeMap<String, Vec<crate::overlays::OverlayLayout>>,
 }
 
 impl Default for EditorPrefs {
@@ -54,6 +57,8 @@ impl Default for EditorPrefs {
             play_mode_tint: [62, 78, 102],
             script_editor: String::new(),
             shortcuts: Default::default(),
+            overlays: crate::overlays::default_layouts(),
+            overlay_presets: Default::default(),
         }
     }
 }

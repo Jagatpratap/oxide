@@ -100,6 +100,7 @@ fn downscale(img: CapturedImage, max: u32) -> CapturedImage {
 pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
     register_window_tools(s, bus);
     register_scene_tools(s, bus);
+    register_overlay_tools(s, bus);
     tool(s, bus, ToolDef::new("editor_get_state", "Get editor state",
         "Editor mode (edit/playing/paused), open scene and unsaved flag, selection, active tool, open windows, \
          undo/redo history and the Scene view camera.",
@@ -1441,6 +1442,92 @@ fn scenes_json(ed: &Editor, e: &Engine) -> Json {
         })).chain(ed.st.unloaded_scenes.iter().map(|p| json!({ "path": p, "loaded": false })))
         .collect::<Vec<_>>(),
     })
+}
+
+fn register_overlay_tools(s: &mut McpServer, bus: &Arc<Bus>) {
+    use crate::overlays::Dock;
+    tool(
+        s,
+        bus,
+        ToolDef::new(
+            "editor_overlays",
+            "Scene view overlays",
+            "Lists the Scene view overlays (Tools, Tool Settings, Grid and Snap, View Options, Scene Camera, \
+             Orientation, Cameras, ProBuilder) with visible, collapsed, dock (Floating | Top | Bottom | Left | \
+             Right) and floating position (fractions of the view). With `id`: sets `visible`, `collapsed`, `dock` \
+             and/or `pos`. `preset`: \"Default\" or a saved preset name applies it; `save_preset` saves the current \
+             layout under that name.",
+            schema(
+                json!({
+                    "id": { "type": "string" }, "visible": { "type": "boolean" }, "collapsed": { "type": "boolean" },
+                    "dock": { "type": "string", "enum": ["Floating", "Top", "Bottom", "Left", "Right"] },
+                    "pos": { "type": "array", "items": { "type": "number" } },
+                    "preset": { "type": "string" }, "save_preset": { "type": "string" }
+                }),
+                &[],
+            ),
+        ),
+        |args, e| {
+            with_editor(e, |ed, _| {
+                let st = &mut ed.st;
+                if let Some(p) = args.get("preset").and_then(Json::as_str) {
+                    st.prefs.overlays = if p == "Default" {
+                        crate::overlays::default_layouts()
+                    } else {
+                        match st.prefs.overlay_presets.get(p) {
+                            Some(l) => l.clone(),
+                            None => return ToolResult::error(format!("no overlay preset `{p}`")),
+                        }
+                    };
+                    st.prefs_changed = true;
+                }
+                if let Some(id) = args.get("id").and_then(Json::as_str) {
+                    let Some(l) = st
+                        .prefs
+                        .overlays
+                        .iter_mut()
+                        .find(|l| l.id.eq_ignore_ascii_case(id))
+                    else {
+                        return ToolResult::error(format!("no overlay `{id}`"));
+                    };
+                    if let Some(v) = args.get("visible").and_then(Json::as_bool) {
+                        l.visible = v;
+                    }
+                    if let Some(v) = args.get("collapsed").and_then(Json::as_bool) {
+                        l.collapsed = v;
+                    }
+                    if let Some(d) = args.get("dock").and_then(Json::as_str) {
+                        match Dock::ALL.into_iter().find(|x| x.name() == d) {
+                            Some(d) => l.dock = d,
+                            None => return ToolResult::error(format!("unknown dock `{d}`")),
+                        }
+                    }
+                    if let Some(p) = args.get("pos").and_then(Json::as_array) {
+                        let f = |i: usize| {
+                            p.get(i)
+                                .and_then(Json::as_f64)
+                                .unwrap_or(0.0)
+                                .clamp(0.0, 1.0) as f32
+                        };
+                        l.pos = [f(0), f(1)];
+                    }
+                    st.prefs_changed = true;
+                }
+                if let Some(name) = args.get("save_preset").and_then(Json::as_str) {
+                    st.prefs
+                        .overlay_presets
+                        .insert(name.to_owned(), st.prefs.overlays.clone());
+                    st.prefs_changed = true;
+                }
+                ToolResult::json(json!({
+                    "overlays": st.prefs.overlays.iter().map(|l| json!({
+                        "id": l.id, "visible": l.visible, "collapsed": l.collapsed, "dock": l.dock.name(), "pos": l.pos,
+                    })).collect::<Vec<_>>(),
+                    "presets": st.prefs.overlay_presets.keys().collect::<Vec<_>>(),
+                }))
+            })
+        },
+    );
 }
 
 fn register_scene_tools(s: &mut McpServer, bus: &Arc<Bus>) {

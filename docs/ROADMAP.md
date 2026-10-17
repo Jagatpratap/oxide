@@ -234,8 +234,12 @@ post-processing) toggles; Hierarchy eye/hand toggles for scene visibility and pi
 Project window thumbnails, grid/list zoom, Favorites, Unity search syntax, Asset Labels and asset
 operations with reference fix-up; asset Inspectors; Shortcuts Manager; Search window (⌘K); custom
 Inspectors for scripts (`CustomEditor`, `InspectorGui`, `scripts! { ...; editors: T }`).
-MCP: `editor_*` tools drive all of it (`editor_project`, `editor_shortcuts`, `editor_search` added). Not yet: movable overlay panels, Scene view audio
-toggle, Rect tool for multiple objects at once (it resizes the active object).
+Scene view overlays ☑ (`overlays.rs`): Tools, Tool Settings, Grid and Snap, View Options, Scene Camera,
+Orientation, Cameras (live preview of a scene camera) and ProBuilder; drag by the grip, drop near an edge to dock
+(top toolbar wraps onto more rows), double-click or right-click to collapse, Dock menu, Hide; Overlay menu on `` ` ``
+with Show All / Hide All and saved presets; layouts kept in Preferences; MCP `editor_overlays`.
+MCP: `editor_*` tools drive all of it (`editor_project`, `editor_shortcuts`, `editor_search` added). Not yet: Scene view
+audio toggle, Rect tool for multiple objects at once (it resizes the active object).
 
 ### P3 — Asset pipeline
 - ☑ AssetDatabase with GUIDs (`oxide_assets::database`): every file and folder under `Assets/` gets a

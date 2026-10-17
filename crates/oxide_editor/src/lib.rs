@@ -28,6 +28,7 @@ pub mod mcp;
 mod menus;
 mod navigation_window;
 mod node_canvas;
+pub mod overlays;
 pub mod player_build;
 pub mod prefs;
 mod previews;
@@ -385,6 +386,8 @@ pub struct EditorState {
     save_as_scene: SceneHandle,
     /// Last AssetDatabase refresh (realtime seconds).
     db_synced: f64,
+    /// Scene view overlays (sizes, drag, menu, camera preview).
+    pub overlays: overlays::OverlayState,
     /// Requested from inside window code; applied after the UI pass.
     pub actions: Vec<Action>,
     /// Scene view NavMesh display options (Navigation window).
@@ -461,6 +464,7 @@ impl EditorState {
             unloaded_scenes: Vec::new(),
             save_as_scene: SceneHandle::MAIN,
             db_synced: 0.0,
+            overlays: Default::default(),
             actions: Vec::new(),
             nav_display: Default::default(),
             nav_window: Default::default(),
@@ -2185,6 +2189,7 @@ impl Shell for Editor {
 
     fn render(&mut self, engine: &mut Engine) {
         scene_view::render(&mut self.st, engine);
+        overlays::render_preview(&mut self.st, engine);
         if let (Some(view), [w, h]) = (self.st.game_view.view(), self.st.game_view.size)
             && self.st.game_view.rect.is_some()
         {
