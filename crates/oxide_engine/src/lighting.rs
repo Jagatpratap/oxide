@@ -250,7 +250,18 @@ pub fn start(world: &mut World) -> Result<usize, String> {
     let input = BakeInput {
         objects,
         lights,
-        sky: oxide_render::sky::SkyModel::new(&env, sun.as_ref().map(|(_, s)| s)),
+        sky: {
+            let sky = oxide_render::sky::SkyModel::new(&env, sun.as_ref().map(|(_, s)| s));
+            // A textured skybox lights the bake as it is drawn.
+            let assets = world.resource::<oxide_assets::AssetServer>();
+            match crate::extract::skybox(&rs, assets) {
+                Some(sb) => match oxide_render::skybox_faces(assets, sb.source) {
+                    Ok(faces) => sky.with_skybox(&faces, &sb),
+                    Err(_) => sky,
+                },
+                None => sky,
+            }
+        },
         ambient_intensity: rs.ambient_intensity,
         probes: probes.clone(),
         settings: match &lighting {

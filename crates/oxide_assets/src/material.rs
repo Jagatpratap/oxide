@@ -19,6 +19,28 @@ pub enum ShaderKind {
     SimpleLit,
     /// Baked lighting only: lightmaps and light probes, no realtime lights (URP "Baked Lit").
     BakedLit,
+    /// Skybox materials (Lighting window "Skybox Material"): Unity's procedural sky (its
+    /// look comes from the Lighting settings).
+    SkyboxProcedural,
+    /// Six textures, one per cube face (`front_tex` … `down_tex`).
+    Skybox6Sided,
+    /// A Cubemap texture (`cubemap`).
+    SkyboxCubemap,
+    /// A latitude-longitude panorama (`base_map`).
+    SkyboxPanoramic,
+}
+
+impl ShaderKind {
+    /// Whether this is a skybox shader (not drawn on meshes).
+    pub fn is_skybox(self) -> bool {
+        matches!(
+            self,
+            ShaderKind::SkyboxProcedural
+                | ShaderKind::Skybox6Sided
+                | ShaderKind::SkyboxCubemap
+                | ShaderKind::SkyboxPanoramic
+        )
+    }
 }
 
 /// URP Lit "Workflow Mode".
@@ -106,6 +128,22 @@ pub struct Material {
     /// Enabled shader keywords (Unity `Material.shaderKeywords`): a Shader Graph's Boolean
     /// keyword `REF` or Enum entry `REF_ENTRY`. Each combination is its own shader variant.
     pub keywords: Vec<String>,
+    // Skybox shaders (the tint is `base_color`, Unity's grey 0.5 being neutral).
+    /// Skybox brightness (Unity `_Exposure`).
+    #[reflect(range(0, 8))]
+    pub exposure: f32,
+    /// Skybox rotation around the up axis in degrees (Unity `_Rotation`).
+    #[reflect(range(0, 360))]
+    pub rotation: f32,
+    /// Skybox/Cubemap: the cube texture.
+    pub cubemap: Option<Handle<crate::cubemap::TextureCube>>,
+    /// Skybox/6 Sided faces: Front [+Z], Back [-Z], Left [+X], Right [-X], Up [+Y], Down [-Y].
+    pub front_tex: Option<Handle<Texture2D>>,
+    pub back_tex: Option<Handle<Texture2D>>,
+    pub left_tex: Option<Handle<Texture2D>>,
+    pub right_tex: Option<Handle<Texture2D>>,
+    pub up_tex: Option<Handle<Texture2D>>,
+    pub down_tex: Option<Handle<Texture2D>>,
 }
 
 /// Unity's built-in render queues (`UnityEngine.Rendering.RenderQueue`).
@@ -217,6 +255,15 @@ impl Default for Material {
             render_queue: -1,
             cast_shadows: true,
             keywords: Vec::new(),
+            exposure: 1.0,
+            rotation: 0.0,
+            cubemap: None,
+            front_tex: None,
+            back_tex: None,
+            left_tex: None,
+            right_tex: None,
+            up_tex: None,
+            down_tex: None,
         }
     }
 }

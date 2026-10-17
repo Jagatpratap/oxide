@@ -483,7 +483,11 @@ pub enum FogMode {
 /// Scene-wide lighting and environment (Unity `RenderSettings`, Lighting window).
 /// <https://docs.unity3d.com/Manual/lighting-window.html>
 #[derive(Clone, Debug, Reflect)]
+#[reflect(default)]
 pub struct RenderSettings {
+    /// Skybox Material (Lighting window): a 6 Sided, Cubemap or Panoramic skybox material.
+    /// None (or a Procedural one) draws the procedural sky below.
+    pub skybox_material: Option<Handle<oxide_assets::Material>>,
     /// Procedural skybox: sky tint, ground color, exposure, sun disk size.
     pub sky_tint: Color,
     pub ground_color: Color,
@@ -552,6 +556,7 @@ pub struct RenderSettings {
 impl Default for RenderSettings {
     fn default() -> Self {
         Self {
+            skybox_material: None,
             sky_tint: Color::rgb(0.5, 0.5, 0.5),
             ground_color: Color::rgb(0.369, 0.349, 0.341),
             sky_exposure: 1.3,

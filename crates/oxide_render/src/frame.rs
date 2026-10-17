@@ -832,6 +832,30 @@ pub struct Environment {
     pub shadow_distance: f32,
     /// MSAA samples (1, 2, 4 or 8; clamped to what the GPU supports).
     pub msaa_samples: u32,
+    /// A textured skybox instead of the procedural sky.
+    pub skybox: Option<Skybox>,
+}
+
+/// Where a textured skybox's texels come from.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SkyboxSource {
+    /// A Cubemap asset.
+    Cubemap(AssetId),
+    /// Six textures in cube face order (+X, -X, +Y, -Y, +Z, -Z).
+    SixSided([AssetId; 6]),
+    /// An equirectangular panorama.
+    Panoramic(AssetId),
+}
+
+/// A textured skybox (Unity's Skybox/Cubemap, 6 Sided and Panoramic shaders).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Skybox {
+    pub source: SkyboxSource,
+    /// sRGB tint; 0.5 grey is neutral (Unity doubles it).
+    pub tint: Color,
+    pub exposure: f32,
+    /// Degrees around +Y.
+    pub rotation: f32,
 }
 
 impl Default for Environment {
@@ -848,6 +872,7 @@ impl Default for Environment {
             ssao: None,
             shadow_distance: 150.0,
             msaa_samples: 4,
+            skybox: None,
         }
     }
 }

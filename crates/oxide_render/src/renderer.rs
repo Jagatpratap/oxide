@@ -58,6 +58,10 @@ struct FrameUniform {
     sun_cookie: [f32; 4],
     /// xyz right vector, w cookie layer (-1 = none).
     sun_right: [f32; 4],
+    /// x textured skybox, y exposure, z rotation (radians).
+    sky_params: [f32; 4],
+    /// Linear tint × colour-space double.
+    sky_tint: [f32; 4],
 }
 
 #[repr(C)]
@@ -301,6 +305,12 @@ pub struct SceneRenderer {
     cookie_sampler: wgpu::Sampler,
     cookie_sources: Vec<(AssetId, u64)>,
     cookie_layers: HashMap<AssetId, u32>,
+    /// The textured skybox's cube (a black 1×1 cube when there is none) and what it was
+    /// made from.
+    sky_cube: wgpu::TextureView,
+    sky_cube_sampler: wgpu::Sampler,
+    sky_cube_key: Option<(crate::frame::SkyboxSource, Vec<u64>)>,
+    sky_cube_ok: bool,
     lightmap_count: usize,
     gi_buffer: wgpu::Buffer,
     fullscreen: crate::fullscreen::FullscreenGpu,
@@ -568,6 +578,22 @@ impl SceneRenderer {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 16,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 17,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::Cube,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 18,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
@@ -888,6 +914,15 @@ impl SceneRenderer {
             }),
             cookie_sources: Vec::new(),
             cookie_layers: HashMap::new(),
+            sky_cube: black_cube(device, &gpu.queue),
+            sky_cube_sampler: device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("skybox"),
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                ..Default::default()
+            }),
+            sky_cube_key: None,
+            sky_cube_ok: false,
             lightmap_count: 0,
             gi_buffer: buf("baked lighting", 176 * 64, wgpu::BufferUsages::STORAGE),
             fullscreen: crate::fullscreen::FullscreenGpu::new(device, &gpu.queue),
@@ -1652,6 +1687,14 @@ impl SceneRenderer {
                             binding: 16,
                             resource: wgpu::BindingResource::Sampler(&self.cookie_sampler),
                         },
+                        wgpu::BindGroupEntry {
+                            binding: 17,
+                            resource: wgpu::BindingResource::TextureView(&self.sky_cube),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 18,
+                            resource: wgpu::BindingResource::Sampler(&self.sky_cube_sampler),
+                        },
                     ],
                 })
             })
@@ -2111,6 +2154,18 @@ impl SceneRenderer {
                 f(c.b);
                 format!("{kind:?}").hash(&mut h);
             }
+            // A textured skybox, and its textures' versions (re-imports re-capture).
+            if let Some(sb) = env.skybox {
+                format!("{sb:?}").hash(&mut h);
+                use crate::frame::SkyboxSource as S;
+                match sb.source {
+                    S::Cubemap(id) => assets.cubemaps.version(id).hash(&mut h),
+                    S::Panoramic(id) => assets.textures.version(id).hash(&mut h),
+                    S::SixSided(ids) => ids
+                        .iter()
+                        .for_each(|id| assets.textures.version(*id).hash(&mut h)),
+                }
+            }
             h.finish()
         };
         let jobs = self
@@ -2305,6 +2360,7 @@ impl SceneRenderer {
         let exclude = capture.and_then(|c| c.exclude);
         self.update_lightmaps(gpu, assets, &frame.lightmaps);
         self.update_cookies(gpu, assets, frame);
+        self.update_skybox(gpu, assets, &frame.environment);
         let mut resolved = Vec::with_capacity(frame.draws.len());
         for d in &frame.draws {
             if !self.gpu_assets.ensure_mesh(device, assets, d.mesh) {
@@ -3318,6 +3374,16 @@ impl SceneRenderer {
                         .map_or(-1.0, |&i| i as f32);
                     right.extend(layer).to_array()
                 },
+                sky_params: match (env.skybox, self.sky_cube_ok) {
+                    (Some(sb), true) => [1.0, sb.exposure, sb.rotation.to_radians(), 0.0],
+                    _ => [0.0, 1.0, 0.0, 0.0],
+                },
+                sky_tint: env.skybox.map_or([1.0; 4], |sb| {
+                    // Unity: texel × tint × unity_ColorSpaceDouble (2 in gamma) × exposure.
+                    let t = sb.tint.linear();
+                    let k = 4.594_794;
+                    [t.r * k, t.g * k, t.b * k, 1.0]
+                }),
             };
             queue.write_buffer(&self.frame_buffers[ci], 0, bytemuck::bytes_of(&u));
         }
@@ -4119,6 +4185,92 @@ fn lightmap_array(
         })
 }
 
+/// A 1×1 black cube (no skybox).
+fn black_cube(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::TextureView {
+    use wgpu::util::DeviceExt;
+    device
+        .create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("no skybox"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 6,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &[0, 0, 0, 255].repeat(6),
+        )
+        .create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::Cube),
+            ..Default::default()
+        })
+}
+
+/// The six faces of a skybox source (CPU pixels): a Cubemap's faces, six textures, or a
+/// panorama projected onto a cube.
+pub fn skybox_faces(
+    assets: &AssetServer,
+    source: crate::frame::SkyboxSource,
+) -> Result<Vec<Texture2D>, String> {
+    use crate::frame::SkyboxSource as S;
+    match source {
+        S::Cubemap(id) => assets
+            .cubemaps
+            .get_by_id(id)
+            .map(|c| c.faces.clone())
+            .ok_or_else(|| "skybox cubemap is not loaded".to_owned()),
+        S::SixSided(ids) => {
+            let faces: Vec<&Texture2D> = ids
+                .iter()
+                .map(|id| assets.textures.get_by_id(*id))
+                .collect::<Option<_>>()
+                .ok_or("a 6 Sided skybox texture is not loaded")?;
+            let (w, h) = (faces[0].width, faces[0].height);
+            if w != h
+                || faces
+                    .iter()
+                    .any(|f| (f.width, f.height) != (w, h) || f.mips.is_empty())
+            {
+                return Err("6 Sided skybox textures must be square and the same size".into());
+            }
+            Ok(faces
+                .iter()
+                .map(|f| {
+                    // Clamped, uncompressed copies (the faces join at their edges).
+                    let mut t = Texture2D::from_rgba8(&f.name, w, h, f.mips[0].clone(), f.srgb);
+                    t.wrap_mode = oxide_assets::texture::TextureWrapMode::Clamp;
+                    t
+                })
+                .collect())
+        }
+        S::Panoramic(id) => {
+            let t = assets
+                .textures
+                .get_by_id(id)
+                .filter(|t| !t.mips.is_empty())
+                .ok_or("the panoramic skybox texture is not loaded")?;
+            let (size, faces) = oxide_assets::cubemap::cube_faces(
+                &t.mips[0],
+                t.width,
+                t.height,
+                oxide_assets::CubemapMapping::LatitudeLongitude,
+            )?;
+            Ok(faces
+                .into_iter()
+                .map(|f| Texture2D::from_rgba8(&t.name, size, size, f, t.srgb))
+                .collect())
+        }
+    }
+}
+
 /// Light cookie layer size.
 const COOKIE_SIZE: u32 = 256;
 
@@ -4189,6 +4341,46 @@ fn resample_cookie(t: &Texture2D) -> Vec<u8> {
 }
 
 impl SceneRenderer {
+    /// Rebuilds the skybox cube when the skybox (or its textures) change.
+    fn update_skybox(&mut self, gpu: &Gpu, assets: &AssetServer, env: &Environment) {
+        use crate::frame::SkyboxSource as S;
+        let key = env.skybox.map(|sb| {
+            let ids: Vec<AssetId> = match sb.source {
+                S::Cubemap(id) | S::Panoramic(id) => vec![id],
+                S::SixSided(ids) => ids.to_vec(),
+            };
+            let versions = ids
+                .iter()
+                .map(|id| match sb.source {
+                    S::Cubemap(_) => assets.cubemaps.version(*id).unwrap_or(0),
+                    _ => assets.textures.version(*id).unwrap_or(0),
+                })
+                .collect();
+            (sb.source, versions)
+        });
+        if key == self.sky_cube_key {
+            return;
+        }
+        self.sky_cube_key = key;
+        self.sky_cube_ok = false;
+        self.sky_cube = black_cube(&gpu.device, &gpu.queue);
+        if let Some(sb) = env.skybox {
+            let faces = skybox_faces(assets, sb.source);
+            match faces.and_then(|f| {
+                crate::gpu_assets::upload_layers(&gpu.device, &gpu.queue, "skybox", &f, true, 0)
+                    .ok_or_else(|| "the skybox faces don't make a cube".to_owned())
+            }) {
+                Ok(t) => {
+                    self.sky_cube = t.view;
+                    self.sky_cube_ok = true;
+                }
+                Err(e) => oxide_core::debug_log_warning!("skybox: {e}"),
+            }
+        }
+        // The sky changed: reflections and ambient follow.
+        self.groups_dirty = true;
+    }
+
     /// Rebuilds the cookie array when the frame's light cookies (or their files) change.
     fn update_cookies(&mut self, gpu: &Gpu, assets: &AssetServer, frame: &RenderFrame) {
         let mut ids: Vec<AssetId> = frame

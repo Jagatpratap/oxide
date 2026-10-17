@@ -203,6 +203,38 @@ pub fn texture_cameras(world: &World) -> Vec<(AssetId, CameraView)> {
     out
 }
 
+/// The Lighting window's Skybox Material as a textured skybox (`None`: procedural, or a
+/// material that is missing or has no textures).
+pub fn skybox(rs: &RenderSettings, assets: &AssetServer) -> Option<oxide_render::Skybox> {
+    use oxide_assets::ShaderKind as K;
+    let m = assets.materials.get(rs.skybox_material.as_ref()?)?;
+    let source = match m.shader {
+        K::SkyboxCubemap => oxide_render::SkyboxSource::Cubemap(m.cubemap.as_ref()?.id()),
+        K::SkyboxPanoramic => oxide_render::SkyboxSource::Panoramic(m.base_map.as_ref()?.id()),
+        K::Skybox6Sided => {
+            let face = |t: &Option<oxide_assets::Handle<oxide_assets::Texture2D>>| {
+                t.as_ref().map(|h| h.id())
+            };
+            // Cube face order: +X Left, -X Right, +Y Up, -Y Down, +Z Front, -Z Back (Unity).
+            oxide_render::SkyboxSource::SixSided([
+                face(&m.left_tex)?,
+                face(&m.right_tex)?,
+                face(&m.up_tex)?,
+                face(&m.down_tex)?,
+                face(&m.front_tex)?,
+                face(&m.back_tex)?,
+            ])
+        }
+        _ => return None,
+    };
+    Some(oxide_render::Skybox {
+        source,
+        tint: m.base_color,
+        exposure: m.exposure,
+        rotation: m.rotation,
+    })
+}
+
 /// Scene environment with the active quality level's shadow distance and MSAA.
 pub fn environment(rs: &RenderSettings, q: &QualityLevel) -> Environment {
     Environment {
@@ -236,6 +268,7 @@ pub fn environment(rs: &RenderSettings, q: &QualityLevel) -> Environment {
             samples: rs.ssao_samples,
         }),
         shadow_distance: q.shadow_distance,
+        skybox: None,
         msaa_samples: match q.msaa {
             MsaaQuality::Disabled => 1,
             MsaaQuality::Msaa2x => 2,
@@ -266,7 +299,10 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
             .is_none_or(|(_, c)| c.post_processing);
     let mut frame = RenderFrame {
         cameras: cameras_override.unwrap_or_else(|| cameras(world)),
-        environment: environment(&settings, &quality),
+        environment: oxide_render::Environment {
+            skybox: skybox(&settings, assets),
+            ..environment(&settings, &quality)
+        },
         time: world.resource::<oxide_core::Time>().time(),
         frame_index: world.resource::<oxide_core::Time>().frame_count(),
         texture_cameras: texture_cameras(world),

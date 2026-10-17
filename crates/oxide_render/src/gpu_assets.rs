@@ -832,7 +832,7 @@ fn compressed_format(
 
 /// Uploads same-size layers as one texture: a cube (six faces) or a 2D array. Uses the
 /// layers' compressed copies when they all have one in a format the GPU supports.
-fn upload_layers(
+pub(crate) fn upload_layers(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     name: &str,

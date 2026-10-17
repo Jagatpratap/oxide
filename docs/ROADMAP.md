@@ -385,8 +385,10 @@ from the fixed edge and each object along its matching local axis).
 - ☑ Shadows: 4 sun cascades, soft PCF, point/spot shadows in a 4096 atlas (nearest lights
   first), shadow distance/bias/normal bias
   ([Shadows](https://docs.unity3d.com/Manual/Shadows.html))
-- ◐ Environment: procedural skybox, sky captured to a prefiltered cubemap, ambient from L2
-  spherical harmonics, fog ☑; 6-sided / cubemap / panoramic skyboxes ☐
+- ☑ Environment: procedural skybox, Skybox Material (Skybox/Procedural, 6 Sided, Cubemap, Panoramic shaders with
+  Unity's Tint × 2 × Exposure and Rotation; RenderSettings `skybox_material`), sky captured to a prefiltered
+  cubemap (re-captured when the skybox or its textures change), ambient from L2 spherical harmonics, the
+  lightmapper's sky matching the skybox, fog
   ([Sky](https://docs.unity3d.com/Manual/sky-landing.html))
 - ◐ Reflection probes: Realtime (On Awake / Every Frame / Via Scripting) and Baked (static
   objects only; captured at load, not saved to disk), importance, blend distance, box

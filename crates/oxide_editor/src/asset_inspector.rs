@@ -682,6 +682,35 @@ fn material(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: 
         let (kind, workflow) = (m.shader, m.workflow_mode);
         changed |=
             crate::inspector::reflect_grid_where(ui, &engine.world, &mut m, "material", &|f| {
+                // Skybox shaders: Tint, Exposure, Rotation and their textures only.
+                let sky_field = matches!(
+                    f,
+                    "exposure"
+                        | "rotation"
+                        | "cubemap"
+                        | "front_tex"
+                        | "back_tex"
+                        | "left_tex"
+                        | "right_tex"
+                        | "up_tex"
+                        | "down_tex"
+                );
+                if kind.is_skybox() {
+                    return f == "name"
+                        || match kind {
+                            K::SkyboxProcedural => false,
+                            K::SkyboxCubemap => {
+                                matches!(f, "base_color" | "exposure" | "rotation" | "cubemap")
+                            }
+                            K::SkyboxPanoramic => {
+                                matches!(f, "base_color" | "exposure" | "rotation" | "base_map")
+                            }
+                            _ => f == "base_color" || (sky_field && f != "cubemap"),
+                        };
+                }
+                if sky_field {
+                    return false;
+                }
                 let shown_for_kind = match f {
                     "workflow_mode" => kind == K::Lit,
                     "metallic" => kind == K::Lit && workflow == Wm::Metallic,
@@ -1006,6 +1035,10 @@ fn shader_picker(
         (None, ShaderKind::SimpleLit) => "Universal Render Pipeline/Simple Lit".into(),
         (None, ShaderKind::BakedLit) => "Universal Render Pipeline/Baked Lit".into(),
         (None, ShaderKind::Lit) => "Universal Render Pipeline/Lit".into(),
+        (None, ShaderKind::SkyboxProcedural) => "Skybox/Procedural".into(),
+        (None, ShaderKind::Skybox6Sided) => "Skybox/6 Sided".into(),
+        (None, ShaderKind::SkyboxCubemap) => "Skybox/Cubemap".into(),
+        (None, ShaderKind::SkyboxPanoramic) => "Skybox/Panoramic".into(),
     };
     let mut changed = false;
     ui.horizontal(|ui| {
@@ -1022,6 +1055,10 @@ fn shader_picker(
                     ),
                     ("Universal Render Pipeline/Baked Lit", ShaderKind::BakedLit),
                     ("Universal Render Pipeline/Unlit", ShaderKind::Unlit),
+                    ("Skybox/Procedural", ShaderKind::SkyboxProcedural),
+                    ("Skybox/6 Sided", ShaderKind::Skybox6Sided),
+                    ("Skybox/Cubemap", ShaderKind::SkyboxCubemap),
+                    ("Skybox/Panoramic", ShaderKind::SkyboxPanoramic),
                 ] {
                     if ui.selectable_label(current == label, label).clicked() {
                         m.shader = kind;

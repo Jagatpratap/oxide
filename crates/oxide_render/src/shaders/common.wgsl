@@ -23,6 +23,8 @@ struct Frame {
     cluster_params: vec4f,  // depth slice = floor(ln(view z) * x + y), z = sun rendering layers
     sun_cookie: vec4f,      // xy cookie tile size (m), zw offset (m)
     sun_right: vec4f,       // xyz the sun's right vector, w cookie layer (-1 = none)
+    sky_params: vec4f,      // x 1 = textured skybox, y exposure, z rotation (radians)
+    sky_tint: vec4f,        // linear tint × 2 (Unity's colour-space double)
 };
 
 struct PunctualLight {
@@ -78,8 +80,19 @@ fn sun_to_light() -> vec3f {
 }
 
 // Procedural sky (Unity "Skybox/Procedural"-like): gradient + sunset tint + sun disk.
+@group(0) @binding(17) var sky_cube: texture_cube<f32>;
+@group(0) @binding(18) var sky_sampler: sampler;
+
 fn sky_color(dir_in: vec3f, with_sun: bool) -> vec3f {
     let dir = normalize(dir_in);
+    if (frame.sky_params.x > 0.5) {
+        // Textured skybox, turned by Rotation around +Y.
+        let a = frame.sky_params.z;
+        let s = sin(a);
+        let c = cos(a);
+        let d = vec3f(c * dir.x - s * dir.z, dir.y, s * dir.x + c * dir.z);
+        return textureSampleLevel(sky_cube, sky_sampler, d, 0.0).rgb * frame.sky_tint.rgb * frame.sky_params.y;
+    }
     let l = sun_to_light();
     let has_sun = frame.sun_dir.w > 0.5;
     let sun_h = select(0.6, l.y, has_sun);
