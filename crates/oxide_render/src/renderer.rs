@@ -3242,7 +3242,7 @@ impl SceneRenderer {
                                 }
                             }
                             if ci == 0 && !grass_ranges.is_empty() {
-                                st.draw_calls += this.grass.draw(&mut pass, &grass_ranges, samples);
+                                st.draw_calls += this.grass.draw(&mut pass, grass_ranges, samples);
                                 pass.set_vertex_buffer(1, this.instance_buffer.slice(..));
                             }
                             let draw_batches =
@@ -3286,17 +3286,17 @@ impl SceneRenderer {
                             draw_batches(&mut pass, tb, &mut st);
                             if !particle_ranges.is_empty() {
                                 st.draw_calls +=
-                                    this.particles.draw(&mut pass, &particle_ranges, samples);
+                                    this.particles.draw(&mut pass, particle_ranges, samples);
                             }
                             if !frame.vfx.is_empty() {
                                 st.draw_calls += this.vfx.draw(&mut pass, frame, samples);
                             }
                             if !sprite_ranges.is_empty() {
                                 st.draw_calls +=
-                                    this.sprites.draw(&mut pass, &sprite_ranges, samples);
+                                    this.sprites.draw(&mut pass, sprite_ranges, samples);
                             }
                             if !text_ranges.is_empty() {
-                                st.draw_calls += this.text.draw(&mut pass, &text_ranges, samples);
+                                st.draw_calls += this.text.draw(&mut pass, text_ranges, samples);
                             }
                             for list in features_at(RenderPassEvent::AfterRenderingTransparents) {
                                 draw_batches(&mut pass, list, &mut st);
