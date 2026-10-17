@@ -3353,6 +3353,7 @@ dependencies = [
 name = "oxide_terrain"
 version = "0.1.0"
 dependencies = [
+ "image",
  "oxide_assets",
  "oxide_core",
  "oxide_math",

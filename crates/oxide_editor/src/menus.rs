@@ -302,6 +302,10 @@ pub fn menu_items(world: &World, keymap: &Keymap) -> Vec<MenuItem> {
         Action::OpenTab(Tab::FontAssetCreator),
     ));
     v.push(item(
+        "Window/Terrain/Terrain Toolbox",
+        Action::OpenTab(Tab::TerrainToolbox),
+    ));
+    v.push(item(
         "Window/Rendering/Lighting/Generate Lighting",
         Action::GenerateLighting,
     ));

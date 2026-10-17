@@ -31,6 +31,10 @@ pub trait Shell: std::any::Any {
     /// Renders the 3D views the UI shows, before the UI itself is drawn over the window.
     fn render(&mut self, engine: &mut Engine);
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+    /// The app is about to exit (save what is pending).
+    fn on_quit(&mut self, engine: &mut Engine) {
+        let _ = engine;
+    }
 }
 
 /// Where the game's screen is while a [`Shell`] shows it in a panel (physical pixels).

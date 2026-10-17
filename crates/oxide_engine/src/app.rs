@@ -363,8 +363,12 @@ impl ApplicationHandler<Wake> for Runner {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.drain_jobs();
-        if let Some(engine) = &self.engine {
+        if let Some(engine) = self.engine.as_mut() {
             if engine.quit_requested {
+                if let Some(mut shell) = engine.shell.take() {
+                    shell.on_quit(engine);
+                    engine.shell = Some(shell);
+                }
                 event_loop.exit();
                 return;
             }

@@ -45,6 +45,7 @@ pub mod settings_window;
 mod shader_graph_window;
 pub mod shortcuts;
 mod sprite_editor;
+mod terrain_toolbox;
 mod terrain_tools;
 mod test_runner;
 mod theme;
@@ -98,6 +99,7 @@ pub enum Tab {
     LightExplorer,
     TestRunner,
     FontAssetCreator,
+    TerrainToolbox,
 }
 
 impl Tab {
@@ -135,6 +137,7 @@ impl Tab {
             Tab::LightExplorer => "Light Explorer",
             Tab::TestRunner => "Test Runner",
             Tab::FontAssetCreator => "Font Asset Creator",
+            Tab::TerrainToolbox => "Terrain Toolbox",
             Tab::Timeline => "Timeline",
             Tab::ShaderGraph => "Shader Graph",
             Tab::VfxGraph => "VFX Graph",
@@ -415,6 +418,7 @@ pub struct EditorState {
     nav_window: navigation_window::NavigationWindow,
     lighting_window: lighting_window::LightingWindow,
     font_asset_creator: font_asset_creator::FontAssetCreator,
+    terrain_toolbox: terrain_toolbox::TerrainToolbox,
     pub(crate) tests: test_runner::TestRunner,
     hierarchy: hierarchy::HierarchyState,
     pub(crate) inspector: inspector::InspectorState,
@@ -494,6 +498,7 @@ impl EditorState {
             nav_window: Default::default(),
             lighting_window: Default::default(),
             font_asset_creator: Default::default(),
+            terrain_toolbox: Default::default(),
             tests: Default::default(),
             hierarchy: Default::default(),
             inspector: Default::default(),
@@ -759,6 +764,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::LightExplorer => lighting_window::explorer_ui(self.st, self.engine, ui),
             Tab::TestRunner => test_runner::window_ui(self.st, self.engine, ui),
             Tab::FontAssetCreator => font_asset_creator::window_ui(self.st, self.engine, ui),
+            Tab::TerrainToolbox => terrain_toolbox::window_ui(self.st, self.engine, ui),
             Tab::Timeline => timeline_window::window_ui(self.st, self.engine, ui),
             Tab::ShaderGraph => shader_graph_window::window_ui(self.st, self.engine, ui),
             Tab::VfxGraph => vfx_graph_window::window_ui(self.st, self.engine, ui),
@@ -830,13 +836,14 @@ impl Editor {
         }
     }
 
-    /// Saves the layout when it changed (checked every couple of seconds).
-    fn save_layout(&mut self, engine: &Engine) {
+    /// Saves the layout when it changed (checked every couple of seconds, or now when
+    /// `force`).
+    fn save_layout(&mut self, engine: &Engine, force: bool) {
         if self.unmaximized.is_some() {
             return;
         }
         let now = oxide_core::time::realtime_since_startup();
-        if now - self.layout_checked < 2.0 {
+        if !force && now - self.layout_checked < 2.0 {
             return;
         }
         self.layout_checked = now;
@@ -903,6 +910,7 @@ impl Editor {
                 | Tab::SpriteEditor
                 | Tab::LightExplorer
                 | Tab::FontAssetCreator
+                | Tab::TerrainToolbox
         ) {
             // Unity opens its settings (and the Input Actions editor, the Light Explorer) in
             // their own window.
@@ -913,6 +921,8 @@ impl Editor {
                 egui::vec2(900.0, 360.0)
             } else if tab == Tab::FontAssetCreator {
                 egui::vec2(560.0, 720.0)
+            } else if tab == Tab::TerrainToolbox {
+                egui::vec2(620.0, 520.0)
             } else {
                 egui::vec2(760.0, 560.0)
             };
@@ -2322,7 +2332,7 @@ impl Shell for Editor {
         }
         self.st.track_selection(&engine.world);
         self.update_game_viewport(engine, &ctx);
-        self.save_layout(engine);
+        self.save_layout(engine, false);
         settings_window::flush(
             &mut self.st,
             engine,
@@ -2364,6 +2374,11 @@ impl Shell for Editor {
                     .renderer
                     .render(&engine.gpu, assets, &rf, view, view::VIEW_FORMAT, w, h);
         }
+    }
+
+    /// Layout changes from the last couple of seconds are saved too.
+    fn on_quit(&mut self, engine: &mut Engine) {
+        self.save_layout(engine, true);
     }
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {

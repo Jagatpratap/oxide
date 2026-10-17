@@ -21,6 +21,8 @@ use oxide_render::{
 use oxide_scene::{Component, GameObjectId, System, World};
 use std::collections::HashMap;
 
+pub mod toolbox;
+
 /// Cells per chunk side at full detail.
 pub const CHUNK_CELLS: u32 = 32;
 pub const LODS: usize = 3;
@@ -56,6 +58,10 @@ pub struct Terrain {
     /// Terrain Layer assets painted on this terrain; when set they replace the
     /// TerrainData's own layers.
     pub layers: Vec<Handle<TerrainLayer>>,
+    /// In Play mode, drop this tile's data and meshes when the camera is farther than
+    /// `stream_distance` from it, and reload them from its file when it comes back.
+    pub streaming: bool,
+    pub stream_distance: f32,
 }
 
 impl Default for Terrain {
@@ -75,6 +81,8 @@ impl Default for Terrain {
             grouping_id: 0,
             allow_auto_connect: true,
             layers: Vec::new(),
+            streaming: false,
+            stream_distance: 1500.0,
         }
     }
 }
@@ -390,6 +398,24 @@ pub struct TerrainMeshes {
     built: HashMap<AssetId, Built>,
 }
 
+impl TerrainMeshes {
+    /// Frees a terrain's chunk meshes (streaming).
+    pub fn release(&mut self, assets: &mut AssetServer, data: AssetId) {
+        if let Some(b) = self.built.remove(&data) {
+            for c in b.chunks {
+                for h in c.lods.iter().chain(c.occluders.iter()) {
+                    assets.meshes.remove(h);
+                }
+            }
+        }
+    }
+
+    /// Whether a terrain's meshes are built.
+    pub fn is_built(&self, data: AssetId) -> bool {
+        self.built.contains_key(&data)
+    }
+}
+
 struct Built {
     /// Heights / holes versions the meshes match.
     heights: u64,
@@ -597,6 +623,30 @@ impl System for TerrainSystem {
     /// Builds meshes and colliders before the first physics step.
     fn start(&mut self, world: &mut World) {
         self.always(world);
+    }
+
+    /// Streaming terrains load and unload around the main camera (Play mode).
+    fn update(&mut self, world: &mut World) {
+        let camera = world
+            .find_with_tag("MainCamera")
+            .into_iter()
+            .next()
+            .or_else(|| {
+                world
+                    .query::<oxide_scene::Camera>()
+                    .map(|(id, _)| id)
+                    .next()
+            })
+            .map(|id| world.position(id));
+        if let Some(c) = camera {
+            let (loaded, unloaded) = toolbox::stream(world, c);
+            for p in loaded {
+                oxide_core::debug_log!("Terrain streaming: loaded {p}");
+            }
+            for p in unloaded {
+                oxide_core::debug_log!("Terrain streaming: unloaded {p}");
+            }
+        }
     }
 
     fn always(&mut self, world: &mut World) {
