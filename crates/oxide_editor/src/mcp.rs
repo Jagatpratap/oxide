@@ -411,13 +411,20 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
         ToolDef::new(
             "editor_game_view",
             "Game view settings",
-            "Game view control bar: `size` (aspect or fixed resolution, e.g. \"Full HD (1920x1080)\"), `scale` \
-             (zoom, 1 = fit), `maximize_on_play`, `mute_audio`, `stats`. Returns the current settings.",
+            "Game view control bar: `display` (1-8, cameras with that Target Display), `size` (aspect or fixed \
+             resolution, e.g. \"Full HD (1920x1080)\", or a size added in Preferences), `scale` (zoom, 1 = fit), \
+             `play_mode` (Play Focused | Play Maximized | Play Unfocused; `maximize_on_play` sets Maximized or \
+             Focused), `low_resolution`, `vsync`, `mute_audio`, `stats`, `gizmos`. Returns the current settings.",
             schema(
                 json!({
                     "size": { "type": "string", "enum": sizes },
                     "scale": { "type": "number", "minimum": 1, "maximum": 5 },
                     "maximize_on_play": { "type": "boolean" },
+                    "play_mode": { "type": "string", "enum": ["Play Focused", "Play Maximized", "Play Unfocused"] },
+                    "display": { "type": "integer", "minimum": 1, "maximum": 8 },
+                    "low_resolution": { "type": "boolean" },
+                    "vsync": { "type": "boolean" },
+                    "gizmos": { "type": "boolean" },
                     "mute_audio": { "type": "boolean" },
                     "stats": { "type": "boolean" }
                 }),
@@ -426,23 +433,53 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
         ),
         |args, e| {
             with_editor(e, |ed, _| {
+                use crate::game_view::EnterPlayMode;
+                let custom = ed.st.prefs.game_sizes.clone();
                 let g = &mut ed.st.game;
                 if let Some(n) = args.get("size").and_then(Json::as_str) {
-                    match crate::game_view::SIZES
+                    let found = crate::game_view::SIZES
                         .iter()
                         .find(|(s, _)| s.eq_ignore_ascii_case(n))
-                    {
-                        Some((_, sz)) => g.size = *sz,
+                        .map(|(_, sz)| *sz)
+                        .or_else(|| {
+                            custom
+                                .iter()
+                                .find(|c| c.name().eq_ignore_ascii_case(n))
+                                .map(|c| c.size())
+                        });
+                    match found {
+                        Some(sz) => g.size = sz,
                         None => return ToolResult::error(format!("unknown size `{n}`")),
                     }
+                }
+                if let Some(m) = args.get("maximize_on_play").and_then(Json::as_bool) {
+                    g.play_mode = if m {
+                        EnterPlayMode::Maximized
+                    } else {
+                        EnterPlayMode::Focused
+                    };
+                }
+                if let Some(m) = args.get("play_mode").and_then(Json::as_str) {
+                    match EnterPlayMode::ALL
+                        .into_iter()
+                        .find(|x| x.name().eq_ignore_ascii_case(m))
+                    {
+                        Some(m) => g.play_mode = m,
+                        None => return ToolResult::error(format!("unknown play_mode `{m}`")),
+                    }
+                }
+                if let Some(d) = args.get("display").and_then(Json::as_u64) {
+                    g.display = (d.clamp(1, 8) - 1) as u32;
                 }
                 if let Some(v) = args.get("scale").and_then(Json::as_f64) {
                     g.scale = (v as f32).clamp(1.0, 5.0);
                 }
                 for (k, f) in [
-                    ("maximize_on_play", &mut g.maximize_on_play),
                     ("mute_audio", &mut g.mute_audio),
                     ("stats", &mut g.stats),
+                    ("low_resolution", &mut g.low_resolution),
+                    ("vsync", &mut g.vsync),
+                    ("gizmos", &mut g.gizmos),
                 ] {
                     if let Some(v) = args.get(k).and_then(Json::as_bool) {
                         *f = v;
@@ -453,8 +490,9 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
                     .find(|(_, s)| *s == g.size)
                     .map_or("custom", |(n, _)| *n);
                 ToolResult::json(json!({
-                    "size": size, "scale": g.scale, "maximize_on_play": g.maximize_on_play,
-                    "mute_audio": g.mute_audio, "stats": g.stats,
+                    "size": size, "scale": g.scale, "play_mode": g.play_mode.name(),
+                    "display": g.display + 1, "low_resolution": g.low_resolution, "vsync": g.vsync,
+                    "mute_audio": g.mute_audio, "stats": g.stats, "gizmos": g.gizmos,
                 }))
             })
         },

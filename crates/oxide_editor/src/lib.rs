@@ -1568,14 +1568,18 @@ impl Editor {
         engine.simulate = true;
         engine.paused = false;
         st.play = PlayState::Playing;
-        st.game_focused = true;
-        if st.game.maximize_on_play {
+        use game_view::EnterPlayMode as M;
+        let mode = st.game.play_mode;
+        st.game_focused = mode != M::Unfocused;
+        if mode == M::Maximized {
             self.unmaximized = Some(std::mem::replace(
                 &mut self.dock,
                 DockState::new(vec![Tab::Game]),
             ));
         }
-        self.focus_tab(Tab::Game);
+        if mode != M::Unfocused {
+            self.focus_tab(Tab::Game);
+        }
     }
 
     fn exit_play(&mut self, engine: &mut Engine) {
@@ -2193,7 +2197,12 @@ impl Shell for Editor {
         if let (Some(view), [w, h]) = (self.st.game_view.view(), self.st.game_view.size)
             && self.st.game_view.rect.is_some()
         {
-            let rf = oxide_engine::extract::extract(&engine.world, None);
+            let mut rf = oxide_engine::extract::extract(&engine.world, None);
+            if self.st.game.gizmos {
+                for (a, b, c) in engine.world.collect_gizmos().lines {
+                    rf.line(a, b, c);
+                }
+            }
             let assets = engine.world.resource::<AssetServer>();
             engine.stats =
                 engine

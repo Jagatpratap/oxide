@@ -98,6 +98,8 @@ pub struct Engine {
     last_frame: Instant,
     /// Vsync the surface is configured with (follows the active quality level).
     vsync: bool,
+    /// Forces VSync on or off regardless of Quality Settings (the Game view's VSync toggle).
+    pub vsync_override: Option<bool>,
     /// Reimport asset files edited outside the engine (Preferences → Auto Refresh).
     pub auto_refresh: bool,
 }
@@ -139,6 +141,7 @@ impl Engine {
             cursor: (CursorLockMode::None, true),
             last_frame: Instant::now(),
             vsync: true,
+            vsync_override: None,
             auto_refresh: true,
         };
         e.world.resource_mut::<Input>().screen_height = size.height as f32;
@@ -249,7 +252,9 @@ impl Engine {
                 oxide_core::debug_log!("Reloaded {p}");
             }
         }
-        let vsync = oxide_scene::QualitySettings::of(&self.world).vsync;
+        let vsync = self
+            .vsync_override
+            .unwrap_or_else(|| oxide_scene::QualitySettings::of(&self.world).vsync);
         if vsync != self.vsync {
             self.vsync = vsync;
             self.surface.set_vsync(&self.gpu, vsync);

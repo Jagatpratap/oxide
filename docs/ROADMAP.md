@@ -202,7 +202,10 @@ with `.meta` files in P3).
 - ☑ **Project** window: folder tree, Favorites, thumbnails (textures, materials, models, prefabs), grid/list zoom,
   search with `t:`/`l:`, Asset Labels, rename/duplicate/delete/move (references rewritten), drag-into-scene
   ([Project window](https://docs.unity3d.com/Manual/ProjectView.html))
-- ◐ **Game** view: play/pause/step, resolution/aspect, stats, maximize on play
+- ☑ **Game** view: play/pause/step, Display 1-8 (`Camera.targetDisplay`), aspect ratios and fixed resolutions
+  plus custom sizes (Add dialog, saved in Preferences), Low Resolution Aspect Ratios, VSync (Game view only),
+  Scale, Play Focused / Maximized / Unfocused, Mute Audio, Stats (graphics, culling, skinned meshes, animators,
+  audio), Gizmos
   ([Game view](https://docs.unity3d.com/Manual/GameView.html))
 - ◐ **Console**: collapse, filter, stack trace, click-to-source
   ([Console](https://docs.unity3d.com/Manual/console-window.html))

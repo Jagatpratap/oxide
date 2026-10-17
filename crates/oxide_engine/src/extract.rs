@@ -56,10 +56,16 @@ pub fn camera_view(world: &World, id: oxide_scene::GameObjectId, c: &Camera) -> 
 
 /// Screen cameras sorted by `depth` (Unity draws lower depth first). Cameras with a
 /// target texture are in [`texture_cameras`] instead.
+/// Which display the game renders (Unity's Game view "Display 1-8"; players show Display 1).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ActiveDisplay(pub u32);
+
+/// Cameras that render to the screen on the active display, in depth order.
 pub fn cameras(world: &World) -> Vec<CameraView> {
+    let display = world.try_resource::<ActiveDisplay>().map_or(0, |d| d.0);
     let mut cams: Vec<_> = world
         .query::<Camera>()
-        .filter(|(_, c)| c.target_texture.is_none())
+        .filter(|(_, c)| c.target_texture.is_none() && c.target_display == display)
         .map(|(id, c)| (c.depth, camera_view(world, id, c)))
         .collect();
     cams.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));

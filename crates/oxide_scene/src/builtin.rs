@@ -81,6 +81,8 @@ pub struct Camera {
     pub taa_variance_clamp_scale: f32,
     /// Render into this texture instead of the screen (Unity `Camera.targetTexture`).
     pub target_texture: Option<Handle<oxide_assets::RenderTexture>>,
+    /// Which display this camera renders to, 0-7 (Unity `Camera.targetDisplay`: Display 1-8).
+    pub target_display: u32,
 }
 
 impl Default for Camera {
@@ -104,6 +106,7 @@ impl Default for Camera {
             taa_jitter_scale: 1.0,
             taa_variance_clamp_scale: 0.9,
             target_texture: None,
+            target_display: 0,
         }
     }
 }
