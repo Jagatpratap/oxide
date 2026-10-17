@@ -6,6 +6,16 @@
 //! - `#[reflect(skip)]` — runtime-only state (Unity `[NonSerialized]`); the type must be `Default`.
 //! - `#[reflect(range(min, max))]` — slider in the Inspector (Unity `[Range]`).
 //! - `#[reflect(tooltip = "...")]` — hover help (Unity `[Tooltip]`).
+//! - `#[reflect(header = "...")]` — a section title above the field (Unity `[Header]`).
+//! - `#[reflect(hide)]` — saved but not shown (Unity `[HideInInspector]`).
+//! - `#[reflect(min = 0)]` — lowest value (Unity `[Min]`).
+//! - `#[reflect(space)]` / `#[reflect(space = 20)]` — gap above the field (Unity `[Space]`).
+//! - `#[reflect(multiline)]` / `#[reflect(multiline = 5)]` — text box (Unity `[TextArea]`).
+//! - `#[reflect(hdr)]` — HDR colour picker (Unity `[ColorUsage(hdr: true)]`).
+//! - `#[reflect(delayed)]` — applies when editing ends (Unity `[Delayed]`).
+//! - `#[reflect(label = "...")]` — shown name (Unity `[InspectorName]`).
+//! - `#[reflect(formerly = "old_name")]` — also reads data saved under an old field name
+//!   (Unity `[FormerlySerializedAs]`); repeatable.
 //!
 //! On an enum of unit variants it implements `FieldValue`, so the enum can be a field
 //! (shown as a dropdown, stored by variant name).
@@ -44,6 +54,15 @@ struct FieldAttrs {
     skip: bool,
     range: Option<(f64, f64)>,
     tooltip: Option<String>,
+    header: Option<String>,
+    hide: bool,
+    min: Option<f64>,
+    space: f32,
+    multiline: Option<u32>,
+    hdr: bool,
+    delayed: bool,
+    label: Option<String>,
+    formerly: Vec<String>,
 }
 
 fn parse_attrs(attrs: &[syn::Attribute]) -> syn::Result<FieldAttrs> {
@@ -65,8 +84,52 @@ fn parse_attrs(attrs: &[syn::Attribute]) -> syn::Result<FieldAttrs> {
                 let s: LitStr = meta.value()?.parse()?;
                 out.tooltip = Some(s.value());
                 Ok(())
+            } else if meta.path.is_ident("header") {
+                let s: LitStr = meta.value()?.parse()?;
+                out.header = Some(s.value());
+                Ok(())
+            } else if meta.path.is_ident("label") {
+                let s: LitStr = meta.value()?.parse()?;
+                out.label = Some(s.value());
+                Ok(())
+            } else if meta.path.is_ident("formerly") {
+                let s: LitStr = meta.value()?.parse()?;
+                out.formerly.push(s.value());
+                Ok(())
+            } else if meta.path.is_ident("hide") {
+                out.hide = true;
+                Ok(())
+            } else if meta.path.is_ident("hdr") {
+                out.hdr = true;
+                Ok(())
+            } else if meta.path.is_ident("delayed") {
+                out.delayed = true;
+                Ok(())
+            } else if meta.path.is_ident("min") {
+                let e: syn::Expr = meta.value()?.parse()?;
+                out.min = Some(lit_f64(&e)?);
+                Ok(())
+            } else if meta.path.is_ident("space") {
+                out.space = if meta.input.peek(syn::Token![=]) {
+                    let e: syn::Expr = meta.value()?.parse()?;
+                    lit_f64(&e)? as f32
+                } else {
+                    8.0
+                };
+                Ok(())
+            } else if meta.path.is_ident("multiline") {
+                out.multiline = Some(if meta.input.peek(syn::Token![=]) {
+                    let e: syn::Expr = meta.value()?.parse()?;
+                    lit_f64(&e)? as u32
+                } else {
+                    3
+                });
+                Ok(())
             } else {
-                Err(meta.error("expected `skip`, `range(min, max)` or `tooltip = \"...\"`"))
+                Err(meta.error(
+                    "expected `skip`, `range(min, max)`, `tooltip`, `header`, `hide`, `min`, \
+                     `space`, `multiline`, `hdr`, `delayed`, `label` or `formerly`",
+                ))
             }
         })?;
     }
@@ -172,6 +235,22 @@ fn derive_struct(input: &DeriveInput, fields: &Fields) -> syn::Result<TokenStrea
             Some(t) => quote!(Some(#t)),
             None => quote!(None),
         };
+        let opt_str = |v: &Option<String>| match v {
+            Some(t) => quote!(Some(#t)),
+            None => quote!(None),
+        };
+        let header = opt_str(&attrs.header);
+        let label = opt_str(&attrs.label);
+        let min = match attrs.min {
+            Some(m) => quote!(Some(#m)),
+            None => quote!(None),
+        };
+        let multiline = match attrs.multiline {
+            Some(m) => quote!(Some(#m)),
+            None => quote!(None),
+        };
+        let (hide, space, hdr, delayed) = (attrs.hide, attrs.space, attrs.hdr, attrs.delayed);
+        let aliases = &attrs.formerly;
         infos.push(quote! {
             #core::reflect::FieldInfo {
                 name: #name,
@@ -184,11 +263,21 @@ fn derive_struct(input: &DeriveInput, fields: &Fields) -> syn::Result<TokenStrea
                 nullable: #core::reflect::field_nullable(&self.#id),
                 new_item: #core::reflect::field_new_item(&self.#id),
                 nested: #core::reflect::field_nested(&self.#id),
+                ui: #core::reflect::FieldUi {
+                    header: #header,
+                    hide: #hide,
+                    min: #min,
+                    space: #space,
+                    multiline: #multiline,
+                    hdr: #hdr,
+                    delayed: #delayed,
+                    label: #label,
+                },
             }
         });
         gets.push(quote! { #name => Some(#core::reflect::FieldValue::to_value(&self.#id)), });
         sets.push(quote! {
-            #name => {
+            #name #(| #aliases)* => {
                 let expected = #core::reflect::field_kind(&self.#id);
                 if #core::reflect::FieldValue::set_from(&mut self.#id, value) {
                     Ok(())

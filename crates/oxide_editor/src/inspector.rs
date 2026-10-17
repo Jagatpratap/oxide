@@ -111,6 +111,8 @@ enum Edit {
     Move(Slot, i32),
     Paste(Slot, BTreeMap<String, Value>),
     Reset(Slot),
+    /// A `[ContextMenu]` item of the component.
+    ContextMenu(Slot, &'static str),
     Name(String),
     Active(bool),
     Static(oxide_scene::StaticEditorFlags),
@@ -986,13 +988,16 @@ fn components(
                 ui.weak("No editable fields.");
             }
             for (f, v, mixed) in values {
+                if !field_prelude(ui, &f, debug) {
+                    continue;
+                }
                 let mut v2 = v.clone();
                 // Numbers and checkboxes show "—" themselves; other mixed fields mark the label.
                 let marks_itself = matches!(v, Value::Bool(_) | Value::Int(_) | Value::Float(_));
                 let label = if mixed && !marks_itself {
-                    format!("{} —", nicify(f.name))
+                    format!("{} —", field_label(&f))
                 } else {
-                    nicify(f.name)
+                    field_label(&f)
                 };
                 let is_override = overridden.iter().any(|x| x == f.name);
                 let block = is_block(&f, f.kind, f.type_name, &v2);
@@ -1485,9 +1490,38 @@ fn component_menu(
         edits.push((Edit::Reset(slot), 0));
         ui.close();
     }
-    if ui.button("Remove Component").clicked() {
+    // `[RequireComponent]`: not while another component needs it.
+    let needed_by = w.required_by(id, type_name);
+    let remove = ui.add_enabled(needed_by.is_empty(), egui::Button::new("Remove Component"));
+    let remove = if needed_by.is_empty() {
+        remove
+    } else {
+        remove.on_disabled_hover_text(format!(
+            "Can't remove {} because {} depends on it",
+            nicify(type_name),
+            needed_by
+                .iter()
+                .map(|n| nicify(n))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
+    };
+    if remove.clicked() {
         edits.push((Edit::Remove(slot), 0));
         ui.close();
+    }
+    // The component's own `[ContextMenu]` items.
+    let items = w
+        .component_dyn(id, cid)
+        .map_or(&[][..], |c| c.context_menu());
+    if !items.is_empty() {
+        ui.separator();
+        for item in items {
+            if ui.button(*item).clicked() {
+                edits.push((Edit::ContextMenu(slot, item), 0));
+                ui.close();
+            }
+        }
     }
     if ui
         .add_enabled(index > 0, egui::Button::new("Move Up"))
@@ -1656,12 +1690,15 @@ pub fn reflect_grid_where(
             let Some(v) = obj.get_field(f.name) else {
                 continue;
             };
+            if !field_prelude(ui, f, false) {
+                continue;
+            }
             let mut v2 = v.clone();
             let edited = field_row(
                 ui,
                 w,
                 f,
-                nicify(f.name),
+                field_label(f),
                 &mut v2,
                 false,
                 &format!("{salt}{}", f.name),
@@ -1672,6 +1709,53 @@ pub fn reflect_grid_where(
         }
     });
     changed
+}
+
+/// The name a field shows: its `label` attribute, else the nicified field name.
+pub fn field_label(f: &FieldInfo) -> String {
+    f.ui.label.map_or_else(|| nicify(f.name), str::to_owned)
+}
+
+/// Unity's decorator attributes before a field row: `[Space]` and `[Header]`. Returns false
+/// for `[HideInInspector]` fields (shown anyway in Debug mode).
+pub fn field_prelude(ui: &mut egui::Ui, f: &FieldInfo, debug: bool) -> bool {
+    if f.ui.hide && !debug {
+        return false;
+    }
+    if f.ui.space > 0.0 {
+        ui.add_space(f.ui.space);
+    }
+    if let Some(h) = f.ui.header {
+        ui.add_space(4.0);
+        ui.label(RichText::new(h).strong());
+    }
+    true
+}
+
+/// `[Delayed]` editing: the value is edited in a scratch copy kept by egui and only
+/// reported when editing ends (Enter, focus lost or the drag released).
+fn delayed<T: Clone + Send + Sync + 'static>(
+    ui: &mut egui::Ui,
+    salt: &str,
+    value: &mut T,
+    edit: impl FnOnce(&mut egui::Ui, &mut T) -> egui::Response,
+) -> bool {
+    let id = ui.id().with(("delayed", salt));
+    let mut scratch = ui
+        .data(|d| d.get_temp::<T>(id))
+        .unwrap_or_else(|| value.clone());
+    let r = edit(ui, &mut scratch);
+    let done = r.lost_focus() || r.drag_stopped();
+    if r.has_focus() || r.dragged() {
+        ui.data_mut(|d| d.insert_temp(id, scratch.clone()));
+    } else {
+        ui.data_mut(|d| d.remove::<T>(id));
+    }
+    if done {
+        *value = scratch;
+        ui.data_mut(|d| d.remove::<T>(id));
+    }
+    done
 }
 
 /// Whether a value is drawn as a foldout block (a nested struct) rather than in a row.
@@ -1763,7 +1847,11 @@ pub fn field_row(
                 .and_then(|i| i.fields.iter().find(|fi| fi.name == k.as_str()))
                 .copied()
                 .unwrap_or_else(|| FieldInfo::plain("", item.kind()));
-            changed |= field_row(ui, w, &sub, nicify(&k), item, false, &format!("{salt}.{k}"));
+            if !field_prelude(ui, &sub, false) {
+                continue;
+            }
+            let label = sub.ui.label.map_or_else(|| nicify(&k), str::to_owned);
+            changed |= field_row(ui, w, &sub, label, item, false, &format!("{salt}.{k}"));
         }
     });
     changed
@@ -1797,9 +1885,23 @@ fn value_ui(
                 ui.add(egui::Slider::new(i, lo as i64..=hi as i64))
                     .changed()
             }
-            _ => ui
-                .add_sized([avail(ui), ROW_H], dash(egui::DragValue::new(i), mixed))
-                .changed(),
+            _ => {
+                let lo = f.ui.min.map_or(i64::MIN, |m| m.ceil() as i64);
+                if f.ui.delayed {
+                    delayed(ui, salt, i, |ui, i| {
+                        ui.add_sized(
+                            [avail(ui), ROW_H],
+                            egui::DragValue::new(i).range(lo..=i64::MAX),
+                        )
+                    })
+                } else {
+                    let r = ui.add_sized(
+                        [avail(ui), ROW_H],
+                        dash(egui::DragValue::new(i).range(lo..=i64::MAX), mixed),
+                    );
+                    r.changed()
+                }
+            }
         },
         Value::Float(x) => match f.range {
             Some((lo, hi)) if kind == ValueKind::Float && !mixed => {
@@ -1808,11 +1910,30 @@ fn value_ui(
             }
             _ => {
                 let speed = (x.abs() * 0.01).clamp(0.001, 10.0);
-                ui.add_sized(
-                    [avail(ui), ROW_H],
-                    dash(egui::DragValue::new(x).speed(speed).max_decimals(4), mixed),
-                )
-                .changed()
+                let lo = f.ui.min.unwrap_or(f64::NEG_INFINITY);
+                if f.ui.delayed {
+                    delayed(ui, salt, x, |ui, x| {
+                        ui.add_sized(
+                            [avail(ui), ROW_H],
+                            egui::DragValue::new(x)
+                                .speed(speed)
+                                .max_decimals(4)
+                                .range(lo..=f64::INFINITY),
+                        )
+                    })
+                } else {
+                    ui.add_sized(
+                        [avail(ui), ROW_H],
+                        dash(
+                            egui::DragValue::new(x)
+                                .speed(speed)
+                                .max_decimals(4)
+                                .range(lo..=f64::INFINITY),
+                            mixed,
+                        ),
+                    )
+                    .changed()
+                }
             }
         },
         // 2D renderers pick a Sorting Layer from Tags & Layers.
@@ -1831,9 +1952,28 @@ fn value_ui(
                 });
             changed
         }
-        Value::String(s) => ui
-            .add(egui::TextEdit::singleline(s).desired_width(f32::INFINITY))
-            .changed(),
+        Value::String(s) => match (f.ui.multiline, f.ui.delayed) {
+            (Some(rows), false) => ui
+                .add(
+                    egui::TextEdit::multiline(s)
+                        .desired_rows(rows.max(1) as usize)
+                        .desired_width(f32::INFINITY),
+                )
+                .changed(),
+            (Some(rows), true) => delayed(ui, salt, s, |ui, s| {
+                ui.add(
+                    egui::TextEdit::multiline(s)
+                        .desired_rows(rows.max(1) as usize)
+                        .desired_width(f32::INFINITY),
+                )
+            }),
+            (None, true) => delayed(ui, salt, s, |ui, s| {
+                ui.add(egui::TextEdit::singleline(s).desired_width(f32::INFINITY))
+            }),
+            (None, false) => ui
+                .add(egui::TextEdit::singleline(s).desired_width(f32::INFINITY))
+                .changed(),
+        },
         Value::Vector2(a) => drag_array(ui, a),
         Value::Vector3(a) => drag_array(ui, a),
         Value::Vector4(a) => drag_array(ui, a),
@@ -1847,6 +1987,31 @@ fn value_ui(
             } else {
                 false
             }
+        }
+        // HDR colours: a picker for the hue and an intensity multiplier for values above 1.
+        Value::Color(c) if f.ui.hdr => {
+            let k = c[0].max(c[1]).max(c[2]).max(1.0);
+            let mut base = [c[0] / k, c[1] / k, c[2] / k, c[3]];
+            let mut intensity = k;
+            let mut changed = ui.color_edit_button_rgba_unmultiplied(&mut base).changed();
+            changed |= ui
+                .add(
+                    egui::DragValue::new(&mut intensity)
+                        .speed(0.01)
+                        .range(1.0..=1000.0)
+                        .prefix("×"),
+                )
+                .on_hover_text("HDR intensity")
+                .changed();
+            if changed {
+                *c = [
+                    base[0] * intensity,
+                    base[1] * intensity,
+                    base[2] * intensity,
+                    base[3],
+                ];
+            }
+            changed
         }
         Value::Color(c) => ui.color_edit_button_rgba_unmultiplied(c).changed(),
         Value::Enum(e) => {
@@ -2288,6 +2453,11 @@ fn apply_one(st: &mut EditorState, w: &mut World, id: GameObjectId, edit: &Edit)
         Edit::Remove(slot) => {
             if let Some(cid) = slot_id(w, slot) {
                 w.remove_component_now(id, cid);
+            }
+        }
+        Edit::ContextMenu(slot, item) => {
+            if let Some(cid) = slot_id(w, slot) {
+                w.call(id, cid, |c, ctx| c.on_context_menu(ctx, item));
             }
         }
         Edit::Move(slot, d) => {

@@ -349,6 +349,8 @@ impl ProjectSettings {
         app.company_name = self.player.company_name.clone();
         app.product_name = self.player.product_name.clone();
         app.version = self.player.version.clone();
+        // PlayerPrefs live in the company/product folder.
+        oxide_core::PlayerPrefs::set_path(app.persistent_data_path().join("PlayerPrefs.json"));
         let mut nav = self.navigation.clone();
         if nav.agents.is_empty() {
             nav.agents = oxide_navigation::NavigationSettings::default().agents;

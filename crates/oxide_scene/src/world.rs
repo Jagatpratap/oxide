@@ -735,6 +735,7 @@ impl World {
         self.next_component += 1;
         let type_id = component_type_id(comp.as_ref());
         let type_name = comp.type_info().name;
+        let requires = comp.requires();
         let o = self.get_mut(id)?;
         o.components.push(ComponentEntry {
             id: cid,
@@ -747,10 +748,35 @@ impl World {
             destroy_pending: false,
             comp: Some(comp),
         });
-        if o.active_in_hierarchy {
+        // `[RequireComponent]`: the ones it needs come first.
+        for name in requires {
+            let present = self.get(id).is_some_and(|o| {
+                o.components
+                    .iter()
+                    .any(|c| c.type_name == *name && !c.destroy_pending)
+            });
+            if !present && let Err(e) = self.add_component_by_name(id, name) {
+                oxide_core::debug_log_warning!("{type_name} requires {name}: {e}");
+            }
+        }
+        if self.get(id).is_some_and(|o| o.active_in_hierarchy) {
             self.activate_component(id, cid);
         }
         Some(cid)
+    }
+
+    /// Components on `id` that require `type_name` (Unity blocks removing it while they're
+    /// there).
+    pub fn required_by(&self, id: GameObjectId, type_name: &str) -> Vec<&'static str> {
+        self.get(id).map_or_else(Vec::new, |o| {
+            o.components
+                .iter()
+                .filter(|c| !c.destroy_pending)
+                .filter_map(|c| c.comp.as_deref())
+                .filter(|c| c.requires().contains(&type_name))
+                .map(|c| c.type_info().name)
+                .collect()
+        })
     }
 
     /// Adds a registered component by type name (scene files, editor, MCP).
@@ -816,6 +842,44 @@ impl World {
             }
             self.get_component::<T>(d).map(|c| (d, c))
         })
+    }
+
+    /// Unity `GetComponents<T>`: every `T` on the object.
+    pub fn get_components<T: Component>(&self, id: GameObjectId) -> Vec<&T> {
+        let tid = TypeId::of::<T>();
+        self.get(id).map_or_else(Vec::new, |o| {
+            o.components
+                .iter()
+                .filter(|c| c.type_id == tid && !c.destroy_pending)
+                .filter_map(|c| c.comp.as_deref().and_then(downcast_ref::<T>))
+                .collect()
+        })
+    }
+
+    /// Unity `GetComponentsInChildren<T>` (the object and its active descendants).
+    pub fn get_components_in_children<T: Component>(
+        &self,
+        id: GameObjectId,
+    ) -> Vec<(GameObjectId, &T)> {
+        self.descendants(id)
+            .into_iter()
+            .filter(|d| self.get(*d).is_some_and(|o| o.active_in_hierarchy))
+            .flat_map(|d| self.get_components::<T>(d).into_iter().map(move |c| (d, c)))
+            .collect()
+    }
+
+    /// Unity `GetComponentsInParent<T>` (the object and its ancestors).
+    pub fn get_components_in_parent<T: Component>(
+        &self,
+        id: GameObjectId,
+    ) -> Vec<(GameObjectId, &T)> {
+        let mut out = Vec::new();
+        let mut cur = Some(id);
+        while let Some(c) = cur {
+            out.extend(self.get_components::<T>(c).into_iter().map(|t| (c, t)));
+            cur = self.parent(c);
+        }
+        out
     }
 
     /// Unity `GetComponentInParent` (includes the object itself).
@@ -1712,6 +1776,53 @@ impl World {
         self.flush_destroyed();
     }
 
+    /// Edit mode (scripts off): `[ExecuteAlways]` components get Awake, OnEnable and Start
+    /// once, then Update every frame (Unity runs them in the editor too).
+    pub fn run_execute_always(&mut self) {
+        if self.run_scripts {
+            return;
+        }
+        #[derive(Default)]
+        struct EditModeStarted(std::collections::HashSet<(GameObjectId, ComponentId)>);
+        let mut todo = Vec::new();
+        for (id, o) in self.objects() {
+            if !o.active_in_hierarchy {
+                continue;
+            }
+            for c in &o.components {
+                if c.enabled
+                    && !c.destroy_pending
+                    && c.comp.as_deref().is_some_and(|c| c.execute_always())
+                {
+                    todo.push((id, c.id));
+                }
+            }
+        }
+        if todo.is_empty() {
+            return;
+        }
+        if self.resources.get::<EditModeStarted>().is_none() {
+            self.resources.insert(EditModeStarted::default());
+        }
+        for (id, cid) in todo {
+            let first = self
+                .resources
+                .get_mut::<EditModeStarted>()
+                .expect("inserted")
+                .0
+                .insert((id, cid));
+            self.call(id, cid, |c, ctx| {
+                if first {
+                    c.awake(ctx);
+                    c.on_enable(ctx);
+                    c.start(ctx);
+                }
+                c.update(ctx);
+            });
+        }
+        self.flush_destroyed();
+    }
+
     /// Delivers a callback to every enabled component on `id` (collision/trigger messages,
     /// `SendMessage`).
     pub fn broadcast(&mut self, id: GameObjectId, mut f: impl FnMut(&mut dyn Component, &mut Ctx)) {
@@ -1741,6 +1852,36 @@ impl World {
     ) -> bool {
         let mut handled = false;
         self.broadcast(id, |c, ctx| handled |= c.on_message(ctx, message, &arg));
+        handled
+    }
+
+    /// Unity `BroadcastMessage`: the object and every descendant.
+    pub fn broadcast_message(
+        &mut self,
+        id: GameObjectId,
+        message: &str,
+        arg: oxide_core::reflect::Value,
+    ) -> bool {
+        let mut handled = false;
+        for d in self.descendants(id) {
+            handled |= self.send_message(d, message, arg.clone());
+        }
+        handled
+    }
+
+    /// Unity `SendMessageUpwards`: the object and every ancestor.
+    pub fn send_message_upwards(
+        &mut self,
+        id: GameObjectId,
+        message: &str,
+        arg: oxide_core::reflect::Value,
+    ) -> bool {
+        let mut handled = false;
+        let mut cur = Some(id);
+        while let Some(c) = cur {
+            handled |= self.send_message(c, message, arg.clone());
+            cur = self.parent(c);
+        }
         handled
     }
 

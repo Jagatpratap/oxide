@@ -280,8 +280,8 @@ pub mod prelude {
         FilteringSettings, RenderPipeline, RenderPipelines, ScriptableRenderContext,
     };
     pub use oxide_core::{
-        AnimationCurve, Gradient, MinMaxCurve, MinMaxGradient, Reflect, Time, debug_log,
-        debug_log_error, debug_log_warning,
+        AnimationCurve, Gradient, MinMaxCurve, MinMaxGradient, PlayerPrefs, Random, Reflect, Time,
+        debug_log, debug_log_error, debug_log_warning,
     };
     pub use oxide_input::{
         ActionState, CursorLockMode, GamepadAxis, GamepadButton, Input, InputActionAsset,
@@ -300,6 +300,7 @@ pub mod prelude {
         AimConstraint, ConstraintAxes, ConstraintSource, LookAtConstraint, ParentConstraint,
         PositionConstraint, RotationConstraint, ScaleConstraint, WorldUpType,
     };
+    pub use oxide_scene::{Application, RuntimePlatform, Screen};
     pub use oxide_scene::{
         Camera, CameraClearFlags, Collision, Component, Ctx, GameObjectId, Light, LightShadows,
         LightType, MeshFilter, MeshRenderer, OcclusionPortal, PlayerInput, Projection,

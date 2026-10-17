@@ -71,6 +71,26 @@ pub trait Component: Reflect + ComponentClone {
     fn allow_multiple(&self) -> bool {
         true
     }
+
+    /// Components this one needs on its GameObject, by type name (Unity
+    /// `[RequireComponent]`): adding it adds them, and they can't be removed while it is
+    /// there.
+    fn requires(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// Items for the component's Inspector menu (Unity `[ContextMenu("...")]`); choosing one
+    /// calls [`Component::on_context_menu`] with it, in Edit and Play mode.
+    fn context_menu(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    fn on_context_menu(&mut self, ctx: &mut Ctx, item: &str) {}
+
+    /// Runs `Update` and friends in Edit mode too (Unity `[ExecuteAlways]`).
+    fn execute_always(&self) -> bool {
+        false
+    }
 }
 
 /// Lets `Box<dyn Component>` be cloned (needed by `Instantiate`). Implemented for every

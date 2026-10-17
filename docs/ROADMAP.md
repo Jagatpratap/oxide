@@ -430,9 +430,19 @@ from the fixed edge and each object along its matching local axis).
 **Exit:** day/night outdoor scene with CSM, baked GI, reflection probes and a post-FX volume matching a Unity reference screenshot side-by-side.
 
 ### P6 — Scripting & gameplay programming
-- ◐ Script API: `GetComponent`, `AddComponent`, `Instantiate`, `Destroy`, `Find`, `SendMessage`-equivalent, events
+- ☑ Script API: `GetComponent(s)`, `…InChildren`, `…InParent`, `AddComponent`, `Instantiate`, `Destroy`,
+  `Find`, `FindObjectsByType`, `FindGameObjectWithTag`, `SendMessage`, `BroadcastMessage`, `SendMessageUpwards`,
+  `Invoke`, `InvokeRepeating`, `CancelInvoke`, `IsInvoking`, `DontDestroyOnLoad`, tag / layer / active state,
+  the Transform API; `Random` (seedable: value, Range, insideUnitSphere/Circle, onUnitSphere, rotation,
+  ColorHSV), `PlayerPrefs` (int/float/string in the persistent data folder, saved on quit), `Screen` (size,
+  dpi, full screen, SetResolution), `Application` (platform, isEditor, persistentDataPath, dataPath,
+  targetFrameRate)
   ([Get started with programming](https://docs.unity3d.com/Manual/scripting-get-started.html))
-- ◐ Serialized fields → Inspector (`#[serialize]`, `#[range]`, `#[header]`, `#[tooltip]` attributes)
+- ☑ Serialized fields → Inspector: `#[reflect(...)]` attributes `range`, `min`, `tooltip`, `header`, `space`,
+  `hide`, `multiline`, `hdr`, `delayed`, `label`, `formerly` (FormerlySerializedAs), `skip` (NonSerialized);
+  component hooks `allow_multiple` (DisallowMultipleComponent), `requires` (RequireComponent, enforced on add
+  and remove), `context_menu` / `on_context_menu` (ContextMenu items in the Inspector), `execute_always`
+  (ExecuteAlways: Awake/OnEnable/Start/Update in Edit mode)
 - ☑ Hot reload of script dylib with state preservation (domain-reload equivalent)
   ([Code reload and serialization](https://docs.unity3d.com/Manual/code-reload-serialization.html))
 - ☑ Assembly Definitions: `.asmdef` (Unity's JSON) under `Assets/` make crates from their folder's scripts

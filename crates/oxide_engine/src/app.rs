@@ -291,7 +291,11 @@ impl ApplicationHandler<Wake> for Runner {
             | WindowEvent::MouseWheel { .. }
                 if !to_game => {}
 
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                // Unity writes PlayerPrefs when the application quits.
+                let _ = oxide_core::PlayerPrefs::save();
+                event_loop.exit()
+            }
             WindowEvent::Resized(size) => {
                 if viewport.is_none() {
                     input.screen_height = size.height as f32;

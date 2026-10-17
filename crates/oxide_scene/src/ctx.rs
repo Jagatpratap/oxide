@@ -98,6 +98,85 @@ impl<'w> Ctx<'w> {
         self.world.add_component(self.this, c)
     }
 
+    /// Unity `GetComponents<T>()` on this object.
+    pub fn get_components<T: Component>(&self) -> Vec<&T> {
+        self.world.get_components::<T>(self.this)
+    }
+
+    /// Unity `GetComponentsInChildren<T>()` (this object and its active descendants).
+    pub fn get_components_in_children<T: Component>(&self) -> Vec<(GameObjectId, &T)> {
+        self.world.get_components_in_children::<T>(self.this)
+    }
+
+    /// Unity `GetComponentsInParent<T>()` (this object and its ancestors).
+    pub fn get_components_in_parent<T: Component>(&self) -> Vec<(GameObjectId, &T)> {
+        self.world.get_components_in_parent::<T>(self.this)
+    }
+
+    /// Unity `TryGetComponent<T>` on any object.
+    pub fn has_component<T: Component>(&self, id: GameObjectId) -> bool {
+        self.world.get_component::<T>(id).is_some()
+    }
+
+    /// Unity `FindObjectsByType<T>()`: active objects with an enabled `T`.
+    pub fn find_objects_by_type<T: Component>(&self) -> Vec<GameObjectId> {
+        self.world.query::<T>().map(|(id, _)| id).collect()
+    }
+
+    /// Unity `FindAnyObjectByType<T>()`.
+    pub fn find_any_object_by_type<T: Component>(&self) -> Option<GameObjectId> {
+        self.world.query::<T>().map(|(id, _)| id).next()
+    }
+
+    /// Unity `GameObject.FindGameObjectWithTag` (the first one).
+    pub fn find_game_object_with_tag(&self, tag: &str) -> Option<GameObjectId> {
+        self.world.find_with_tag(tag).into_iter().next()
+    }
+
+    /// Unity `gameObject.tag` / `layer` and their setters.
+    pub fn tag(&self) -> &str {
+        &self.game_object().tag
+    }
+
+    pub fn set_tag(&mut self, tag: &str) {
+        self.game_object_mut().tag = tag.to_owned();
+    }
+
+    pub fn layer(&self) -> u8 {
+        self.game_object().layer
+    }
+
+    pub fn set_layer(&mut self, layer: u8) {
+        self.game_object_mut().layer = layer.min(31);
+    }
+
+    /// Unity `activeSelf` / `activeInHierarchy`.
+    pub fn active_self(&self) -> bool {
+        self.game_object().active_self()
+    }
+
+    pub fn active_in_hierarchy(&self) -> bool {
+        self.game_object().active_in_hierarchy()
+    }
+
+    /// Unity `DontDestroyOnLoad(target)`: the object's root survives scene loads.
+    pub fn dont_destroy_on_load(&mut self, target: GameObjectId) {
+        let root = self.world.root_of(target);
+        if let Some(o) = self.world.get_mut(root) {
+            o.dont_destroy_on_load = true;
+        }
+    }
+
+    /// Unity `BroadcastMessage`: this object and its descendants.
+    pub fn broadcast_message(&mut self, message: &str, arg: oxide_core::reflect::Value) -> bool {
+        self.world.broadcast_message(self.this, message, arg)
+    }
+
+    /// Unity `SendMessageUpwards`: this object and its ancestors.
+    pub fn send_message_upwards(&mut self, message: &str, arg: oxide_core::reflect::Value) -> bool {
+        self.world.send_message_upwards(self.this, message, arg)
+    }
+
     /// Unity `Instantiate(original)`.
     pub fn instantiate(&mut self, original: GameObjectId) -> Option<GameObjectId> {
         self.world.instantiate(original)
@@ -268,6 +347,30 @@ impl<'w> Ctx<'w> {
         if let Some(t) = self.world.try_resource_mut::<crate::timers::Timers>() {
             t.message_at(id, message, at);
         }
+    }
+
+    /// Unity `InvokeRepeating`: `message` after `delay` seconds, then every `interval`.
+    pub fn invoke_repeating(&mut self, message: &str, delay: f32, interval: f32) {
+        let at = self.time().time() + delay;
+        let id = self.this;
+        if let Some(t) = self.world.try_resource_mut::<crate::timers::Timers>() {
+            t.repeat_at(id, message, at, interval);
+        }
+    }
+
+    /// Unity `CancelInvoke(name)`; `None` cancels every invoke on this object.
+    pub fn cancel_invoke(&mut self, message: Option<&str>) {
+        let id = self.this;
+        if let Some(t) = self.world.try_resource_mut::<crate::timers::Timers>() {
+            t.cancel(id, message);
+        }
+    }
+
+    /// Unity `IsInvoking(name)`; `None`: any.
+    pub fn is_invoking(&self, message: Option<&str>) -> bool {
+        self.world
+            .try_resource::<crate::timers::Timers>()
+            .is_some_and(|t| t.is_invoking(self.this, message))
     }
 }
 

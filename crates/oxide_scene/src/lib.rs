@@ -29,7 +29,7 @@ pub mod timers;
 pub mod volume;
 pub mod world;
 
-pub use application::Application;
+pub use application::{Application, RuntimePlatform, Screen};
 pub use builtin::*;
 pub use component::{Collision, Component, ComponentRegistry, ContactPoint, Gizmos};
 pub use constraints::{

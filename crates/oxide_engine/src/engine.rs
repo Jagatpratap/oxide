@@ -177,6 +177,7 @@ impl Engine {
             };
         }
         self.gamepads.poll(self.world.resource_mut::<Input>());
+        self.update_screen();
 
         // Debug lines live until the next frame starts (so screenshots taken between
         // frames still see them), or until their `until` time.
@@ -192,6 +193,9 @@ impl Engine {
             }
             let dt = if step { 1.0 / 60.0 } else { real_dt };
             self.tick(dt);
+        } else if !self.simulate {
+            // Edit mode: `[ExecuteAlways]` scripts still update.
+            self.world.run_execute_always();
         }
         for s in &mut self.systems {
             s.always(&mut self.world);
@@ -234,6 +238,28 @@ impl Engine {
         for s in &mut self.systems {
             s.late_update(w);
         }
+    }
+
+    /// Unity `Screen` and `Application.isEditor` for this frame (the Game view's size in
+    /// the editor, the window's in a player).
+    fn update_screen(&mut self) {
+        let size = self.window.inner_size();
+        let (w, h) = match self.game_viewport {
+            Some(v) => {
+                let s = if v.scale > 0.0 { v.scale } else { 1.0 };
+                ((v.width * s) as u32, (v.height * s) as u32)
+            }
+            None => (size.width, size.height),
+        };
+        let dpi = self.window.scale_factor() as f32 * 96.0;
+        let full_screen = self.window.fullscreen().is_some();
+        if self.world.try_resource::<oxide_scene::Screen>().is_none() {
+            self.world.resources.insert(oxide_scene::Screen::default());
+        }
+        let screen = self.world.resource_mut::<oxide_scene::Screen>();
+        (screen.width, screen.height, screen.dpi, screen.full_screen) = (w, h, dpi, full_screen);
+        let editor = self.shell.is_some();
+        self.world.resource_mut::<crate::AppControl>().is_editor = editor;
     }
 
     fn end_frame(&mut self) {
@@ -301,11 +327,41 @@ impl Engine {
             }
             self.window.set_cursor_visible(want.1);
         }
+        // Screen.SetResolution (players; the editor's Game view sets its own size).
+        if let Some((w, h, full)) = self
+            .world
+            .try_resource_mut::<oxide_scene::Screen>()
+            .and_then(|s| s.request.take())
+            && self.shell.is_none()
+        {
+            if full {
+                self.window
+                    .set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
+            } else {
+                self.window.set_fullscreen(None);
+                let _ = self
+                    .window
+                    .request_inner_size(winit::dpi::PhysicalSize::new(w, h));
+            }
+        }
+        // Application.targetFrameRate (players): wait out the rest of the frame.
+        let target = self.world.resource::<crate::AppControl>().target_frame_rate;
+        if target > 0 && self.shell.is_none() {
+            let frame = std::time::Duration::from_secs_f64(1.0 / target as f64);
+            let spent = self.last_frame.elapsed();
+            if spent < frame {
+                std::thread::sleep(frame - spent);
+            }
+        }
         // Application.Quit ends a player; in the editor (a shell) it is ignored, like Unity.
         if std::mem::take(&mut self.world.resource_mut::<crate::AppControl>().quit)
             && self.shell.is_none()
         {
             self.quit_requested = true;
+            // Unity writes PlayerPrefs on quit.
+            if let Err(e) = oxide_core::PlayerPrefs::save() {
+                oxide_core::debug_log_error!("PlayerPrefs: {e}");
+            }
         }
         if let Some(scene) = self
             .world

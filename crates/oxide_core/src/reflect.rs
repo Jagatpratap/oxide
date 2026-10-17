@@ -308,6 +308,48 @@ pub struct FieldInfo {
     /// Field layout of the nested struct this field holds, if any.
     #[serde(skip)]
     pub nested: fn() -> Option<TypeInfo>,
+    /// Inspector presentation (Unity's `[Header]`, `[HideInInspector]`, `[Min]`, ...).
+    #[serde(skip_serializing_if = "FieldUi::is_plain")]
+    pub ui: FieldUi,
+}
+
+/// How the Inspector shows a field: Unity's field attributes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+pub struct FieldUi {
+    /// A bold section title above the field (`[Header("...")]`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub header: Option<&'static str>,
+    /// Serialized but not shown (`[HideInInspector]`).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub hide: bool,
+    /// Lowest value accepted (`[Min]`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min: Option<f64>,
+    /// Empty space above the field in points (`[Space]`).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub space: f32,
+    /// A multi-line text box of this many lines (`[TextArea]` / `[Multiline]`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub multiline: Option<u32>,
+    /// Colors above 1 allowed (`[ColorUsage(hdr: true)]`).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub hdr: bool,
+    /// Applies when editing ends (Enter / focus lost), not per keystroke (`[Delayed]`).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub delayed: bool,
+    /// Shown name instead of the field's (`[InspectorName]`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<&'static str>,
+}
+
+fn is_zero(v: &f32) -> bool {
+    *v == 0.0
+}
+
+impl FieldUi {
+    pub fn is_plain(&self) -> bool {
+        *self == FieldUi::default()
+    }
 }
 
 impl FieldInfo {
@@ -324,6 +366,16 @@ impl FieldInfo {
             nullable: false,
             new_item: || None,
             nested: || None,
+            ui: FieldUi {
+                header: None,
+                hide: false,
+                min: None,
+                space: 0.0,
+                multiline: None,
+                hdr: false,
+                delayed: false,
+                label: None,
+            },
         }
     }
 }
@@ -392,6 +444,16 @@ macro_rules! reflect_struct {
                         nullable: $crate::reflect::field_nullable(&self.$field),
                         new_item: $crate::reflect::field_new_item(&self.$field),
                         nested: $crate::reflect::field_nested(&self.$field),
+                        ui: $crate::reflect::FieldUi {
+                            header: None,
+                            hide: false,
+                            min: None,
+                            space: 0.0,
+                            multiline: None,
+                            hdr: false,
+                            delayed: false,
+                            label: None,
+                        },
                     }),*],
                 }
             }
