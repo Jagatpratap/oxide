@@ -559,7 +559,7 @@ needs, and where the engine is:
 | Weapons, hits, ragdolls | | ✔ | ◐ raycasts, CharacterJoint, Ragdoll Wizard (from the humanoid map), animated ↔ limp switch; hit boxes ☐ |
 | Game scripts in the editor | ✔ | ✔ | ☑ project Scripts crate, hot reload in Edit and Play mode |
 | HUD, menus | ✔ | ✔ | ◐ Canvas UI + immediate GUI + UI Toolkit (UXML/USS, flexbox, controls, UI Builder) |
-| Audio (engine, 3D, mixer) | ✔ | ✔ | ◐ 3D sources, car audio; mixer ☐ |
+| Audio (engine, 3D, mixer) | ✔ | ✔ | ◐ 3D sources, car audio, Audio Mixer (groups, effects, snapshots, exposed parameters); sends and ducking ☐ |
 | AI (opponents, bots) | ✔ | ✔ | ☑ WaypointCircuit + CarAIControl racing AI; NavMesh baking over terrain, NavMeshAgent with avoidance, obstacles with carving, links (50 agents at 60 FPS in a debug build); behaviour trees / perception ☐ |
 | Multiplayer | ◐ | ✔ | ◐ UDP netcode: spawning, NetworkTransform with interpolation, NetworkRigidbody, RPCs; prediction, lag compensation, interest management, dedicated server ☐ |
 | Ship the game | ✔ | ✔ | ◐ desktop player builds (macOS/Windows/Linux); Android/iOS ☐ |
