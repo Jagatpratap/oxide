@@ -25,6 +25,9 @@ struct Frame {
     sun_right: vec4f,       // xyz the sun's right vector, w cookie layer (-1 = none)
     sky_params: vec4f,      // x 1 = textured skybox, y exposure, z rotation (radians)
     sky_tint: vec4f,        // linear tint × 2 (Unity's colour-space double)
+    mixed: vec4f,           // x lighting mode (0 indirect, 1 shadowmask, 2 subtractive), y shadowmask base layer, z direction base layer (-1 = none)
+    subtractive: vec4f,     // rgb Subtractive realtime shadow colour (linear)
+    sun_mixed: vec4f,       // x 1 = the sun is Mixed, y its shadowmask channel (-1 = none)
 };
 
 struct PunctualLight {
@@ -33,7 +36,7 @@ struct PunctualLight {
     dir: vec4f,             // spot direction
     spot: vec4f,            // x = cos(outer/2), y = 1 / (cos(inner/2) - cos(outer/2)), z = first shadow tile + 1, w = shadow strength
     shadow: vec4f,          // x depth bias, y normal bias, z soft, w texel size per metre
-    extra: vec4f,           // x rendering layers, y cookie layer (-1 = none)
+    extra: vec4f,           // x rendering layers, y cookie layer (-1 = none), z shadowmask channel (-1 = none), w 1 = Mixed
     right: vec4f,           // xyz the light's right vector (cookie orientation)
 };
 

@@ -80,14 +80,53 @@ struct InstanceGi {
 
 const NO_GI: u32 = 0xffffffffu;
 
-// Diffuse light from a lightmap (gamma-space RGBM, range 8) or light probe SH, else the sky.
-fn diffuse_light(n: vec3f, gi: u32, lm_uv: vec2f) -> vec3f {
+// Lightmap layer of a draw (-1: not lightmapped).
+fn lightmap_layer(gi: u32) -> i32 {
+    if (gi == NO_GI) {
+        return -1;
+    }
+    return i32(instance_gi[gi].info.x);
+}
+
+// The baked shadowmask of a lightmapped draw (1 = unshadowed; Shadowmask mode).
+fn baked_shadowmask(gi: u32, lm_uv: vec2f) -> vec4f {
+    let layer = lightmap_layer(gi);
+    if (layer < 0 || frame.mixed.y < 0.0) {
+        return vec4f(1.0);
+    }
+    return textureSampleLevel(lightmaps, probe_sampler, vec2f(lm_uv.x, 1.0 - lm_uv.y), i32(frame.mixed.y) + layer, 0.0);
+}
+
+// Subtractive: the main light's realtime shadow darkens baked light (Unity's
+// SubtractMainLightWithRealtimeAttenuationFromLightmap), down to the shadow colour.
+fn subtract_main_light(baked: vec3f, world_pos: vec3f, n: vec3f, geo_n: vec3f) -> vec3f {
+    let view_depth = (frame.view * vec4f(world_pos, 1.0)).z;
+    let atten = sun_shadow(world_pos, geo_n, view_depth);
+    let lambert = frame.sun_color.rgb * clamp(dot(sun_to_light(), n), 0.0, 1.0);
+    let subtracted = baked - lambert * (1.0 - atten);
+    return min(baked, max(subtracted, frame.subtractive.rgb));
+}
+
+// Diffuse light from a lightmap (gamma-space RGBM, range 8; with its dominant direction in
+// Directional mode) or light probe SH, else the sky.
+fn diffuse_light(world_pos: vec3f, n: vec3f, geo_n: vec3f, gi: u32, lm_uv: vec2f) -> vec3f {
     if (gi != NO_GI) {
         let g = instance_gi[gi];
         if (g.info.x >= 0.0) {
-            let p = textureSampleLevel(lightmaps, probe_sampler, vec2f(lm_uv.x, 1.0 - lm_uv.y), i32(g.info.x), 0.0);
-            let s = p.rgb * p.a * 2.828427;
-            return s * s;
+            let uv = vec2f(lm_uv.x, 1.0 - lm_uv.y);
+            let p = textureSampleLevel(lightmaps, probe_sampler, uv, i32(g.info.x), 0.0);
+            var s = p.rgb * p.a * 2.828427;
+            s = s * s;
+            if (frame.mixed.z >= 0.0) {
+                // Unity's DecodeDirectionalLightmap.
+                let d = textureSampleLevel(lightmaps, probe_sampler, uv, i32(frame.mixed.z) + i32(g.info.x), 0.0);
+                let half_lambert = dot(n, d.xyz - 0.5) + 0.5;
+                s = s * half_lambert / max(1e-4, d.w);
+            }
+            if (u32(frame.mixed.x + 0.5) == 2u && frame.sun_mixed.x > 0.5 && frame.sun_dir.w > 0.5) {
+                s = subtract_main_light(s, world_pos, n, geo_n);
+            }
+            return s;
         }
         if (g.info.y > 0.5) {
             let c = g.sh;
@@ -300,8 +339,45 @@ fn cookie(layer: f32, uv: vec2f) -> vec3f {
 // Rendering layers for lighting (8, which the deferred G-buffer keeps).
 const LIGHT_LAYERS: u32 = 0xffu;
 
-// `layers`: the object's rendering layers; lights reach it when their layers overlap.
-fn direct_light(world_pos: vec3f, n: vec3f, geo_n: vec3f, diffuse: vec3f, f0: vec3f, rough: f32, model: u32, receive_shadows: bool, frag_xy: vec2f, layers: u32) -> vec3f {
+// What a surface brings to direct lighting besides its material.
+struct DirectExtra {
+    // Rendering layers: lights reach it when their layers overlap.
+    layers: u32,
+    // Lightmapped (baked data may stand in for Mixed lights).
+    lightmapped: bool,
+    // Baked shadowmask (Shadowmask mode).
+    shadowmask: vec4f,
+    // Lights to add: 0 all, 1 only Mixed ones, 2 only the others.
+    select: u32,
+};
+
+fn no_extra() -> DirectExtra {
+    return DirectExtra(0xffffffffu, false, vec4f(1.0), 0u);
+}
+
+// Whether `ext.select` takes a light.
+fn selected(mixed: bool, ext: DirectExtra) -> bool {
+    return ext.select == 0u || (ext.select == 1u) == mixed;
+}
+
+// How a Mixed light reaches a surface: 0 when it is baked in (Subtractive lightmapped),
+// else its baked static shadow (1 = none).
+fn mixed_factor(mixed: bool, channel: f32, ext: DirectExtra) -> f32 {
+    if (!mixed || !ext.lightmapped) {
+        return 1.0;
+    }
+    let mode = u32(frame.mixed.x + 0.5);
+    if (mode == 2u) {
+        return 0.0;
+    }
+    if (mode == 1u && channel >= 0.0) {
+        return ext.shadowmask[u32(channel)];
+    }
+    return 1.0;
+}
+
+fn direct_light(world_pos: vec3f, n: vec3f, geo_n: vec3f, diffuse: vec3f, f0: vec3f, rough: f32, model: u32, receive_shadows: bool, frag_xy: vec2f, ext: DirectExtra) -> vec3f {
+    let layers = ext.layers;
     if (model == 2u) {
         return vec3f(0.0);
     }
@@ -309,12 +385,13 @@ fn direct_light(world_pos: vec3f, n: vec3f, geo_n: vec3f, diffuse: vec3f, f0: ve
     let direct_ao = mix(1.0, screen_ao(frag_xy), frame.ssao.y);
     let v = normalize(frame.camera_pos.xyz - world_pos);
     var color = vec3f(0.0);
-    if (frame.sun_dir.w > 0.5 && (u32(frame.cluster_params.z) & layers & LIGHT_LAYERS) != 0u) {
+    if (frame.sun_dir.w > 0.5 && (u32(frame.cluster_params.z) & layers & LIGHT_LAYERS) != 0u && selected(frame.sun_mixed.x > 0.5, ext)) {
         let view_depth = (frame.view * vec4f(world_pos, 1.0)).z;
         var shadow = 1.0;
         if (receive_shadows) {
             shadow = sun_shadow(world_pos, geo_n, view_depth);
         }
+        shadow = min(shadow, mixed_factor(frame.sun_mixed.x > 0.5, frame.sun_mixed.y, ext));
         var tint = vec3f(1.0);
         if (frame.sun_right.w >= 0.0) {
             // Tiled across the world along the light's right and up vectors.
@@ -329,7 +406,7 @@ fn direct_light(world_pos: vec3f, n: vec3f, geo_n: vec3f, diffuse: vec3f, f0: ve
     let cluster = cluster_of(frag_xy, view_z);
     for (var j = 0u; j < cluster.y; j++) {
         let L = lights[cluster_lights[cluster.x + j]];
-        if ((u32(L.extra.x) & layers & LIGHT_LAYERS) == 0u) {
+        if ((u32(L.extra.x) & layers & LIGHT_LAYERS) == 0u || !selected(L.extra.w > 0.5, ext)) {
             continue;
         }
         let to_l = L.pos_range.xyz - world_pos;
@@ -363,6 +440,7 @@ fn direct_light(world_pos: vec3f, n: vec3f, geo_n: vec3f, diffuse: vec3f, f0: ve
         if (L.spot.z > 0.5 && receive_shadows && atten > 0.0) {
             atten *= punctual_shadow(L, world_pos, geo_n, sqrt(d2));
         }
+        atten *= mixed_factor(L.extra.w > 0.5, L.extra.z, ext);
         color += light_brdf(model, n, v, l, diffuse, f0, rough) * L.color.rgb * tint * atten * direct_ao;
     }
     return color;
@@ -372,7 +450,7 @@ fn direct_light(world_pos: vec3f, n: vec3f, geo_n: vec3f, diffuse: vec3f, f0: ve
 // physically based model, reflections (probes / sky), with material and screen-space AO.
 fn indirect_light(world_pos: vec3f, n: vec3f, geo_n: vec3f, diffuse: vec3f, f0: vec3f, rough: f32, ao_in: f32, model: u32, probe_sel: vec2u, frag_xy: vec2f, gi: u32, lm_uv: vec2f) -> vec3f {
     let ao = min(ao_in, screen_ao(frag_xy));
-    let diffuse_amb = diffuse_light(n, gi, lm_uv) * diffuse;
+    let diffuse_amb = diffuse_light(world_pos, n, geo_n, gi, lm_uv) * diffuse;
     if (model != 0u) {
         return diffuse_amb * ao;
     }
@@ -388,7 +466,7 @@ fn indirect_light(world_pos: vec3f, n: vec3f, geo_n: vec3f, diffuse: vec3f, f0: 
 fn shade(world_pos: vec3f, n: vec3f, geo_n: vec3f, albedo: vec3f, metallic: f32, rough: f32, ao_in: f32, receive_shadows: bool, probe_sel: vec2u, frag_xy: vec2f, gi: u32, lm_uv: vec2f) -> vec3f {
     let diffuse = albedo * (1.0 - metallic);
     let f0 = mix(vec3f(0.04), albedo, metallic);
-    return direct_light(world_pos, n, geo_n, diffuse, f0, rough, 0u, receive_shadows, frag_xy, 0xffffffffu)
+    return direct_light(world_pos, n, geo_n, diffuse, f0, rough, 0u, receive_shadows, frag_xy, no_extra())
         + indirect_light(world_pos, n, geo_n, diffuse, f0, rough, ao_in, 0u, probe_sel, frag_xy, gi, lm_uv);
 }
 
@@ -422,7 +500,7 @@ fn debug_view(mode: u32, world_pos: vec3f, n: vec3f, geo_n: vec3f, albedo: vec3f
             return lit;
         }
         default: {
-            return diffuse_light(n, gi, lm_uv);
+            return diffuse_light(world_pos, n, geo_n, gi, lm_uv);
         }
     }
 }

@@ -307,6 +307,22 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
         frame_index: world.resource::<oxide_core::Time>().frame_count(),
         texture_cameras: texture_cameras(world),
         lightmaps: settings.lightmaps.iter().map(|h| h.id()).collect(),
+        shadowmasks: settings.shadowmasks.iter().map(|h| h.id()).collect(),
+        lightmap_directions: settings
+            .lightmap_directions
+            .iter()
+            .map(|h| h.id())
+            .collect(),
+        mixed_lighting: oxide_render::MixedLighting {
+            mode: match settings.baked_lighting_mode {
+                oxide_scene::MixedLightingMode::IndirectOnly => {
+                    oxide_render::MixedMode::IndirectOnly
+                }
+                oxide_scene::MixedLightingMode::Shadowmask => oxide_render::MixedMode::Shadowmask,
+                oxide_scene::MixedLightingMode::Subtractive => oxide_render::MixedMode::Subtractive,
+            },
+            shadow_color: settings.realtime_shadow_color,
+        },
         renderer_features: renderer_features(world),
         global_keywords: world
             .try_resource::<oxide_scene::Shader>()
@@ -326,6 +342,10 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
         }
         let right = world.rotation(id) * oxide_math::Vector3::X;
         let layers = l.rendering_layers;
+        let mixed = l.lightmap_bake_type == oxide_scene::LightmapBakeType::Mixed;
+        let shadowmask_channel = (0..4)
+            .contains(&l.shadowmask_channel)
+            .then_some(l.shadowmask_channel as u8);
         let c = l.color.linear();
         let color = [c.r * l.intensity, c.g * l.intensity, c.b * l.intensity];
         match l.light_type {
@@ -353,6 +373,8 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
                                 offset: l.cookie_offset.to_array(),
                             }),
                             right,
+                            mixed,
+                            shadowmask_channel,
                         },
                     ));
                 }
@@ -372,6 +394,8 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
                     .filter(|_| l.light_type == LightType::Spot)
                     .map(|c| c.id()),
                 right,
+                mixed,
+                shadowmask_channel,
             }),
             LightType::Rectangle | LightType::Disc => {}
         }

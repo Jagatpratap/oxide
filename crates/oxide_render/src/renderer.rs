@@ -62,6 +62,12 @@ struct FrameUniform {
     sky_params: [f32; 4],
     /// Linear tint × colour-space double.
     sky_tint: [f32; 4],
+    /// x lighting mode, y shadowmask base layer, z direction base layer (-1 = none).
+    mixed: [f32; 4],
+    /// Subtractive shadow colour (linear).
+    subtractive: [f32; 4],
+    /// x sun is Mixed, y its shadowmask channel (-1 = none).
+    sun_mixed: [f32; 4],
 }
 
 #[repr(C)]
@@ -216,8 +222,9 @@ struct GBuffer {
     group: wgpu::BindGroup,
 }
 
-/// In the shader's location order: both normals (octahedral), indirect light, diffuse +
-/// model/flags code, F0 + roughness (32 bytes per sample, the GPU's limit).
+/// In the shader's location order: both normals (octahedral), indirect light (alpha:
+/// rendering layers and flags), diffuse + model/flags code, F0 + roughness (32 bytes per
+/// sample, the GPU's limit).
 const GBUFFER_FORMATS: [wgpu::TextureFormat; 4] = [
     wgpu::TextureFormat::Rgba16Float,
     HDR_FORMAT,
@@ -300,6 +307,9 @@ pub struct SceneRenderer {
     /// Baked lightmaps as one texture array, and which assets (and versions) it holds.
     lightmap_array: wgpu::TextureView,
     lightmap_sources: Vec<(AssetId, u64)>,
+    /// First layer of the shadowmasks and of the direction textures in the lightmap array
+    /// (-1 = none).
+    lightmap_bases: (f32, f32),
     /// Light cookies: one layer each (resampled to `COOKIE_SIZE`), by texture.
     cookie_array: wgpu::TextureView,
     cookie_sampler: wgpu::Sampler,
@@ -903,6 +913,7 @@ impl SceneRenderer {
             rt_frames: HashMap::new(),
             lightmap_array: lightmap_array(device, &gpu.queue, &[], 1),
             lightmap_sources: Vec::new(),
+            lightmap_bases: (-1.0, -1.0),
             cookie_array: cookie_array(device, &gpu.queue, &[]),
             cookie_sampler: device.create_sampler(&wgpu::SamplerDescriptor {
                 label: Some("cookies"),
@@ -2317,7 +2328,7 @@ impl SceneRenderer {
             ..probe.clone()
         };
         // Lights, shadows and the sky need this frame's state.
-        self.update_lightmaps(gpu, assets, &frame.lightmaps);
+        self.update_lightmaps(gpu, assets, frame);
         let mut encoder = self.capture_probe_scene(gpu, assets, frame, Some(&probe), u32::MAX);
         let size = crate::reflection::PROBE_SIZE;
         let row = size * 8;
@@ -2466,7 +2477,7 @@ impl SceneRenderer {
         let mut graphs: Vec<(AssetId, u64)> = Vec::new();
         let mut gis: Vec<InstanceGi> = Vec::new();
         let exclude = capture.and_then(|c| c.exclude);
-        self.update_lightmaps(gpu, assets, &frame.lightmaps);
+        self.update_lightmaps(gpu, assets, frame);
         self.update_cookies(gpu, assets, frame);
         self.update_skybox(gpu, assets, &frame.environment);
         let mut resolved = Vec::with_capacity(frame.draws.len());
@@ -2691,7 +2702,12 @@ impl SceneRenderer {
                     dir: dir.extend(0.0).to_array(),
                     spot,
                     shadow,
-                    extra: [(l.rendering_layers & 0xFF) as f32, cookie, 0.0, 0.0],
+                    extra: [
+                        (l.rendering_layers & 0xFF) as f32,
+                        cookie,
+                        l.shadowmask_channel.map_or(-1.0, |c| c as f32),
+                        l.mixed as u32 as f32,
+                    ],
                     right: l.right.normalize_or(Vector3::X).extend(0.0).to_array(),
                 }
             })
@@ -3486,6 +3502,28 @@ impl SceneRenderer {
                     (Some(sb), true) => [1.0, sb.exposure, sb.rotation.to_radians(), 0.0],
                     _ => [0.0, 1.0, 0.0, 0.0],
                 },
+                mixed: [
+                    match frame.mixed_lighting.mode {
+                        crate::frame::MixedMode::IndirectOnly => 0.0,
+                        crate::frame::MixedMode::Shadowmask => 1.0,
+                        crate::frame::MixedMode::Subtractive => 2.0,
+                    },
+                    self.lightmap_bases.0,
+                    self.lightmap_bases.1,
+                    0.0,
+                ],
+                subtractive: {
+                    let c = frame.mixed_lighting.shadow_color.linear();
+                    [c.r, c.g, c.b, 0.0]
+                },
+                sun_mixed: frame.sun.as_ref().map_or([0.0, -1.0, 0.0, 0.0], |s| {
+                    [
+                        s.mixed as u32 as f32,
+                        s.shadowmask_channel.map_or(-1.0, |c| c as f32),
+                        0.0,
+                        0.0,
+                    ]
+                }),
                 sky_tint: env.skybox.map_or([1.0; 4], |sb| {
                     // Unity: texel × tint × unity_ColorSpaceDouble (2 in gamma) × exposure.
                     let t = sb.tint.linear();
@@ -4520,8 +4558,22 @@ impl SceneRenderer {
         self.groups_dirty = true;
     }
 
-    /// Rebuilds the lightmap array when the scene's lightmaps (or their files) change.
-    fn update_lightmaps(&mut self, gpu: &Gpu, assets: &AssetServer, ids: &[AssetId]) {
+    /// Rebuilds the lightmap array when the scene's lightmaps (or their files) change. Its
+    /// layers: the lightmaps, then their shadowmasks and direction textures when every one
+    /// is there.
+    fn update_lightmaps(&mut self, gpu: &Gpu, assets: &AssetServer, frame: &RenderFrame) {
+        let n = frame.lightmaps.len();
+        let complete = |extra: &[AssetId]| n > 0 && extra.len() == n;
+        let has_mask = complete(&frame.shadowmasks);
+        let has_dir = complete(&frame.lightmap_directions);
+        let mut all = frame.lightmaps.clone();
+        if has_mask {
+            all.extend(&frame.shadowmasks);
+        }
+        if has_dir {
+            all.extend(&frame.lightmap_directions);
+        }
+        let ids = &all[..];
         let sources: Vec<(AssetId, u64)> = ids
             .iter()
             .map(|id| (*id, assets.textures.version(*id).unwrap_or(0)))
@@ -4548,7 +4600,17 @@ impl SceneRenderer {
                 ids.len()
             );
         }
-        self.lightmap_count = layers.len();
+        self.lightmap_count = layers.len().min(n);
+        // The extras only count when every layer made it in.
+        let all_in = layers.len() == ids.len();
+        self.lightmap_bases = (
+            if has_mask && all_in { n as f32 } else { -1.0 },
+            if has_dir && all_in {
+                (n * (1 + has_mask as usize)) as f32
+            } else {
+                -1.0
+            },
+        );
         self.lightmap_array = lightmap_array(&gpu.device, &gpu.queue, &layers, size);
         self.groups_dirty = true;
     }

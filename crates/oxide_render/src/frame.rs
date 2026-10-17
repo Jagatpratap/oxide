@@ -216,6 +216,39 @@ pub struct SunLight {
     pub cookie: Option<SunCookie>,
     /// The light's right vector (cookie orientation).
     pub right: Vector3,
+    /// A Mixed light (baked data may stand in for it on lightmapped objects).
+    pub mixed: bool,
+    /// Its shadowmask channel (Shadowmask mode).
+    pub shadowmask_channel: Option<u8>,
+}
+
+/// The Lighting Mode of the baked data (Unity `MixedLightingMode`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MixedMode {
+    /// Mixed lights stay realtime (only their bounce is baked).
+    #[default]
+    IndirectOnly,
+    /// Lightmapped objects take Mixed lights' static shadows from the shadowmask.
+    Shadowmask,
+    /// Mixed lights are baked into lightmapped objects; the main light's realtime shadow is
+    /// subtracted from their lightmap.
+    Subtractive,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MixedLighting {
+    pub mode: MixedMode,
+    /// Subtractive: the darkest a realtime shadow makes baked light (sRGB).
+    pub shadow_color: Color,
+}
+
+impl Default for MixedLighting {
+    fn default() -> Self {
+        Self {
+            mode: MixedMode::IndirectOnly,
+            shadow_color: Color::rgb(0.42, 0.478, 0.627),
+        }
+    }
 }
 
 /// A directional light's cookie (URP "Cookie Size" and "Cookie Offset").
@@ -235,6 +268,8 @@ impl Default for SunLight {
             rendering_layers: u32::MAX,
             cookie: None,
             right: Vector3::X,
+            mixed: false,
+            shadowmask_channel: None,
         }
     }
 }
@@ -255,6 +290,8 @@ pub struct PunctualLight {
     pub cookie: Option<AssetId>,
     /// The light's right vector (cookie orientation).
     pub right: Vector3,
+    pub mixed: bool,
+    pub shadowmask_channel: Option<u8>,
 }
 
 impl Default for PunctualLight {
@@ -268,6 +305,8 @@ impl Default for PunctualLight {
             rendering_layers: u32::MAX,
             cookie: None,
             right: Vector3::X,
+            mixed: false,
+            shadowmask_channel: None,
         }
     }
 }
@@ -1038,6 +1077,11 @@ pub struct RenderFrame {
     pub renderer_features: Vec<RendererFeature>,
     /// Baked lightmaps (RGBM textures of one size; Unity `LightmapSettings.lightmaps`).
     pub lightmaps: Vec<AssetId>,
+    /// Per lightmap (when baked): shadowmask and dominant-direction textures.
+    pub shadowmasks: Vec<AssetId>,
+    pub lightmap_directions: Vec<AssetId>,
+    /// How Mixed lights combine with the baked data.
+    pub mixed_lighting: MixedLighting,
     /// Scene view draw mode (shaded, wireframe or a debug view of one input).
     pub debug_view: DebugView,
     /// From the Render Pipeline Asset (Graphics / Quality settings).

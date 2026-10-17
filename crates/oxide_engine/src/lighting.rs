@@ -19,13 +19,17 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 struct Job {
-    handle: std::thread::JoinHandle<Result<BakeOutput, String>>,
+    /// Taken when the bake is applied.
+    handle: Option<std::thread::JoinHandle<Result<BakeOutput, String>>>,
     progress: Arc<Progress>,
     /// The renderer object behind each bake object.
     objects: Vec<GameObjectId>,
     probes: Vec<Vector3>,
     folder: String,
     started: std::time::Instant,
+    mode: oxide_scene::MixedLightingMode,
+    /// Shadowmask channels given to Mixed lights (others get -1).
+    channels: Vec<(GameObjectId, i32)>,
 }
 
 /// World resource tracking the background bake.
@@ -163,7 +167,12 @@ pub fn start(world: &mut World) -> Result<usize, String> {
             "nothing to bake: mark objects Static (Contribute GI) to give them lightmaps".into(),
         );
     }
+    let (mode, directional) = match &lighting {
+        Some(l) => (l.lighting_mode, l.directional_mode),
+        None => (rs.lighting_mode, rs.directional_mode),
+    };
     let mut lights = Vec::new();
+    let mut channels: Vec<(GameObjectId, i32)> = Vec::new();
     let mut sun: Option<(f32, oxide_render::SunLight)> = None;
     for (id, l) in world.query::<Light>() {
         let c = l.color.linear();
@@ -229,11 +238,23 @@ pub fn start(world: &mut World) -> Result<usize, String> {
                 }
             }
         };
+        let mixed = !area && l.lightmap_bake_type == LightmapBakeType::Mixed;
+        let cast_shadows = l.shadows != oxide_scene::LightShadows::None;
+        // Shadowmask: the first four shadowed Mixed lights get a channel each (Unity limits
+        // overlapping Mixed lights to four).
+        let channel = (mixed && cast_shadows && mode == oxide_scene::MixedLightingMode::Shadowmask)
+            .then(|| channels.iter().filter(|(_, c)| *c >= 0).count())
+            .filter(|&n| n < 4);
+        channels.push((id, channel.map_or(-1, |c| c as i32)));
         lights.push(BakeLight {
             kind,
             color,
-            baked_direct: area || l.lightmap_bake_type == LightmapBakeType::Baked,
-            cast_shadows: l.shadows != oxide_scene::LightShadows::None,
+            // Subtractive bakes Mixed lights' direct light too.
+            baked_direct: area
+                || l.lightmap_bake_type == LightmapBakeType::Baked
+                || (mixed && mode == oxide_scene::MixedLightingMode::Subtractive),
+            cast_shadows,
+            shadowmask_channel: channel.map(|c| c as u8),
         });
     }
     let probes: Vec<Vector3> = world
@@ -272,6 +293,7 @@ pub fn start(world: &mut World) -> Result<usize, String> {
                 bounces: l.max_bounces.min(8),
                 padding: l.lightmap_padding.clamp(1, 16),
                 denoise: l.filtering,
+                directional: directional == oxide_scene::LightmapsMode::CombinedDirectional,
             },
             None => BakeSettings {
                 texels_per_unit: rs.lightmap_resolution.max(0.1),
@@ -280,6 +302,7 @@ pub fn start(world: &mut World) -> Result<usize, String> {
                 bounces: rs.bake_bounces.min(8),
                 padding: rs.lightmap_padding.clamp(1, 16),
                 denoise: true,
+                directional: directional == oxide_scene::LightmapsMode::CombinedDirectional,
             },
         },
     };
@@ -295,12 +318,14 @@ pub fn start(world: &mut World) -> Result<usize, String> {
         world.resources.insert(LightingBake::default());
     }
     world.resource_mut::<LightingBake>().job = Some(Job {
-        handle,
+        handle: Some(handle),
         progress,
         objects: ids,
         probes,
         folder,
         started: std::time::Instant::now(),
+        mode,
+        channels,
     });
     Ok(count)
 }
@@ -335,8 +360,16 @@ pub fn clear(world: &mut World) {
             r.lightmap_scale_offset = Vector4::new(1.0, 1.0, 0.0, 0.0);
         }
     }
+    for id in world.query::<Light>().map(|(id, _)| id).collect::<Vec<_>>() {
+        if let Some(l) = world.get_component_mut::<Light>(id) {
+            l.shadowmask_channel = -1;
+        }
+    }
     let rs = world.resource_mut::<RenderSettings>();
     rs.lightmaps.clear();
+    rs.shadowmasks.clear();
+    rs.lightmap_directions.clear();
+    rs.baked_lighting_mode = oxide_scene::MixedLightingMode::IndirectOnly;
     rs.light_probe_positions.clear();
     rs.light_probe_coefficients.clear();
 }
@@ -346,14 +379,15 @@ pub fn poll(world: &mut World) -> Option<Result<String, String>> {
     let done = world
         .try_resource::<LightingBake>()
         .and_then(|b| b.job.as_ref())
-        .is_some_and(|j| j.handle.is_finished());
+        .is_some_and(|j| j.handle.as_ref().is_some_and(|h| h.is_finished()));
     if !done {
         return None;
     }
-    let job = world.resource_mut::<LightingBake>().job.take()?;
+    let mut job = world.resource_mut::<LightingBake>().job.take()?;
     let seconds = job.started.elapsed().as_secs_f32();
-    let result = match job.handle.join() {
-        Ok(Ok(out)) => apply(world, &job.objects, &job.probes, &job.folder, out).map(|n| {
+    let handle = job.handle.take()?;
+    let result = match handle.join() {
+        Ok(Ok(out)) => apply(world, &job, out).map(|n| {
             format!(
                 "Baked {n} lightmap(s) in {seconds:.1} s into {}",
                 job.folder
@@ -379,13 +413,35 @@ fn write_png(path: &std::path::Path, size: u32, rgba: &[u8]) -> Result<(), Strin
         .map_err(|e| format!("{}: {e}", path.display()))
 }
 
-fn apply(
-    world: &mut World,
-    objects: &[GameObjectId],
-    probes: &[Vector3],
-    folder: &str,
-    out: BakeOutput,
-) -> Result<usize, String> {
+fn apply(world: &mut World, job: &Job, out: BakeOutput) -> Result<usize, String> {
+    let (objects, probes, folder) = (&job.objects, &job.probes, &job.folder);
+    // Shadowmask and direction textures: plain data, like the lightmaps.
+    let data_importer = oxide_assets::TextureImporter {
+        srgb: false,
+        compression: oxide_assets::TextureCompression::None,
+        generate_mip_maps: false,
+        max_size: 8192,
+        wrap_mode: oxide_assets::TextureWrapMode::Clamp,
+        filter_mode: oxide_assets::FilterMode::Bilinear,
+        ..Default::default()
+    };
+    let mut extra = |suffix: &str, maps: &[Vec<u8>]| -> Result<Vec<_>, String> {
+        let mut out_handles = Vec::new();
+        for (i, (data, lm)) in maps.iter().zip(&out.lightmaps).enumerate() {
+            let path = format!("{folder}/Lightmap-{i}_comp_{suffix}.png");
+            let assets = world.resource_mut::<AssetServer>();
+            write_png(&assets.full_path(&path), lm.size, data)?;
+            out_handles.push(assets.set_texture_importer(&path, &data_importer)?);
+        }
+        Ok(out_handles)
+    };
+    let shadowmasks = extra("shadowmask", &out.shadowmasks)?;
+    let directions = extra("dir", &out.directions)?;
+    for (id, ch) in &job.channels {
+        if let Some(l) = world.get_component_mut::<Light>(*id) {
+            l.shadowmask_channel = *ch;
+        }
+    }
     let mut handles = Vec::new();
     for (i, lm) in out.lightmaps.iter().enumerate() {
         let path = format!("{folder}/Lightmap-{i}_comp_light.png");
@@ -416,6 +472,9 @@ fn apply(
     }
     let rs = world.resource_mut::<RenderSettings>();
     rs.lightmaps = handles;
+    rs.shadowmasks = shadowmasks;
+    rs.lightmap_directions = directions;
+    rs.baked_lighting_mode = job.mode;
     rs.light_probe_positions = probes.to_vec();
     rs.light_probe_coefficients = out
         .probes

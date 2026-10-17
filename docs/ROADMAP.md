@@ -395,13 +395,17 @@ from the fixed edge and each object along its matching local axis).
   imported as a Cube — set as its `baked_texture` and used from then on) and Custom (a Cubemap asset);
   importance, blend distance, box projection, up to 15 + sky, GGX-prefiltered cube array; Inspector per Type
   ([Reflections](https://docs.unity3d.com/Manual/reflections-landing.html))
-- ◐ Global illumination ☑: CPU path-traced lightmapper (`oxide_lightmapper`): Baked / Mixed
+- ☑ Global illumination: CPU path-traced lightmapper (`oxide_lightmapper`): Baked / Mixed
   (Baked Indirect) / Realtime light modes, Contribute GI static objects, generated lightmap UVs
   (planar charts), atlas packing by surface area × Lightmap Resolution, shadows, bounces, sky,
   emission, edge-aware denoise, RGBM lightmaps saved next to the scene; Light Probe Groups baked
   to L2 SH and interpolated for dynamic objects; background bake with progress (Window →
-  Rendering → Lighting, MCP `bake_lighting`); SSAO. ☐: GPU baking, shadowmask / subtractive
-  modes, directional lightmaps, probe tetrahedralization, Adaptive Probe Volumes
+  Rendering → Lighting, MCP `bake_lighting`); SSAO; Lighting Modes — Baked Indirect, Shadowmask
+  (static shadows of up to 4 Mixed lights per channel, `Light.shadowmask_channel`, combined with realtime
+  shadows) and Subtractive (Mixed direct baked, the main light's realtime shadow subtracted down to the
+  Realtime Shadow Color) — in Forward+ and Deferred; Directional lightmaps (dominant direction + rebalancing,
+  Unity's decode). ☐: GPU baking, probe tetrahedralization, Adaptive Probe Volumes, Shadowmask light-probe
+  occlusion for dynamic objects
   ([Direct and indirect lighting](https://docs.unity3d.com/Manual/direct-and-indirect-lighting.html))
 - ◐ Lighting window: Generate Lighting / Clear Baked Data menu items, settings in
   RenderSettings (Inspector), progress in the status bar; a dedicated window and Light Explorer ☐

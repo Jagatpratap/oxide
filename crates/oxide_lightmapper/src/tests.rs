@@ -31,6 +31,7 @@ fn sun(direction: Vector3, baked: bool) -> BakeLight {
         color: Vector3::splat(1.0),
         baked_direct: baked,
         cast_shadows: true,
+        shadowmask_channel: None,
     }
 }
 
@@ -48,6 +49,7 @@ fn input(objects: Vec<BakeObject>, lights: Vec<BakeLight>, probes: Vec<Vector3>)
             bounces: 1,
             padding: 2,
             denoise: true,
+            directional: false,
         },
     }
 }
@@ -227,6 +229,7 @@ fn area_lights_bake_soft_one_sided_light() {
         color: Vector3::splat(4.0),
         baked_direct: true,
         cast_shadows: true,
+        shadowmask_channel: None,
     };
     // A 2 m square 1 m above the floor, facing down: its form factor there is ≈ 0.55.
     let mut inp = input(vec![floor()], vec![area(Vector3::NEG_Y, false)], vec![]);
@@ -244,4 +247,83 @@ fn area_lights_bake_soft_one_sided_light() {
     let out = bake(&inp, &Progress::default()).unwrap();
     let under = floor_light(&inp, &out, 0, Vector3::ZERO);
     assert!(under.x < 0.01, "back side {under:?}");
+}
+
+/// Texel of an extra atlas (shadowmask / directions) at world point `p` on the floor.
+fn floor_texel(inp: &BakeInput, out: &BakeOutput, data: &[Vec<u8>], p: Vector3) -> [u8; 4] {
+    let o = &inp.objects[0];
+    let m = &o.mesh;
+    let (atlas, st) = out.placements[0].expect("lightmapped");
+    for t in m.indices.as_chunks::<3>().0 {
+        let idx = [t[0], t[1], t[2]].map(|i| i as usize);
+        let w = idx.map(|i| o.model.transform_point3(m.vertices[i]));
+        if (w[1] - w[0]).cross(w[2] - w[0]).y.abs() < 1e-6 {
+            continue;
+        }
+        let b = bary(Vector3::new(p.x, w[0].y, p.z), w);
+        if b.min_element() < -1e-4 {
+            continue;
+        }
+        let uv = m.uv2[idx[0]] * b.x + m.uv2[idx[1]] * b.y + m.uv2[idx[2]] * b.z;
+        let size = out.lightmaps[atlas as usize].size;
+        let a = Vector2::new(uv.x * st.x + st.z, uv.y * st.y + st.w);
+        let (x, y) = (
+            (a.x * size as f32) as u32,
+            ((1.0 - a.y) * size as f32) as u32,
+        );
+        let i = ((y * size + x) * 4) as usize;
+        let d = &data[atlas as usize];
+        return [d[i], d[i + 1], d[i + 2], d[i + 3]];
+    }
+    panic!("{p:?} is not on the floor");
+}
+
+#[test]
+fn shadowmask_and_directional_lightmaps() {
+    let floor = object(
+        PrimitiveType::Plane,
+        Vector3::ZERO,
+        Vector3::ONE,
+        Vector3::splat(0.8),
+        true,
+    );
+    let cube = object(
+        PrimitiveType::Cube,
+        Vector3::new(0.0, 0.5, 0.0),
+        Vector3::ONE,
+        Vector3::splat(0.8),
+        false,
+    );
+    // A Mixed sun from +X and above: realtime direct, static shadows in channel 0.
+    let mut mixed = sun(Vector3::new(-1.0, -2.0, 0.0), false);
+    mixed.shadowmask_channel = Some(0);
+    let mut inp = input(vec![floor, cube], vec![mixed], vec![]);
+    inp.settings.directional = true;
+    let out = bake(&inp, &Progress::default()).unwrap();
+    assert_eq!(out.shadowmasks.len(), out.lightmaps.len());
+    assert_eq!(out.directions.len(), out.lightmaps.len());
+    // The cube's shadow falls toward -X.
+    let shadowed = floor_texel(&inp, &out, &out.shadowmasks, Vector3::new(-1.0, 0.0, 0.0));
+    let open = floor_texel(&inp, &out, &out.shadowmasks, Vector3::new(3.0, 0.0, 3.0));
+    assert!(shadowed[0] < 30, "shadowed {shadowed:?}");
+    assert!(open[0] > 225, "open {open:?}");
+    // Unused channels stay unshadowed.
+    assert!(shadowed[1] > 250 && shadowed[3] > 250);
+    // Mixed lights aren't baked as direct light: the open floor gets only bounce and sky.
+    let lit = floor_light(&inp, &out, 0, Vector3::new(3.0, 0.0, 3.0));
+    assert!(lit.x < 1.0, "no direct light baked: {lit:?}");
+    // Directions: mostly up (sky and bounce) on the open floor.
+    let d = floor_texel(&inp, &out, &out.directions, Vector3::new(3.0, 0.0, 3.0));
+    assert!(d[1] > 160, "dominant light from above: {d:?}");
+    // Subtractive bakes the Mixed sun's direct light too.
+    let mut inp2 = input(
+        vec![inp.objects[0].clone(), inp.objects[1].clone()],
+        vec![sun(Vector3::new(-1.0, -2.0, 0.0), true)],
+        vec![],
+    );
+    inp2.settings.directional = false;
+    let out2 = bake(&inp2, &Progress::default()).unwrap();
+    let lit2 = floor_light(&inp2, &out2, 0, Vector3::new(3.0, 0.0, 3.0));
+    assert!(lit2.x > lit.x + 0.5, "direct baked: {lit2:?} vs {lit:?}");
+    assert!(out2.directions.is_empty() && out2.shadowmasks.is_empty());
 }

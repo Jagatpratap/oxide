@@ -313,7 +313,8 @@ fn fs_main(in: VertexOut, @builtin(front_facing) front: bool) -> FragOut {
     }
     let t = material_terms(albedo, metallic, s.specular);
     // Instance flags: bit 0 receive shadows, bits 8.. rendering layers.
-    var color = direct_light(in.world_pos, n, geo, t.diffuse, t.f0, rough, t.model, (in.receive_shadows & 1u) != 0u, in.clip.xy, in.receive_shadows >> 8u)
+    let ext = DirectExtra(in.receive_shadows >> 8u, lightmap_layer(in.gi) >= 0, baked_shadowmask(in.gi, in.lm_uv), 0u);
+    var color = direct_light(in.world_pos, n, geo, t.diffuse, t.f0, rough, t.model, (in.receive_shadows & 1u) != 0u, in.clip.xy, ext)
         + indirect_light(in.world_pos, n, geo, t.diffuse, t.f0, rough, ao, t.model, in.probes, in.clip.xy, in.gi, in.lm_uv);
     color += s.emission;
     out.color = vec4f(apply_fog(color, in.world_pos), alpha);
@@ -360,8 +361,21 @@ fn fs_gbuffer(in: VertexOut, @builtin(front_facing) front: bool) -> GBufferOut {
     let flags = select(0u, 1u, (in.receive_shadows & 1u) != 0u);
     out.normals = vec4f(oct_encode(n), oct_encode(geo));
     let indirect = indirect_light(in.world_pos, n, geo, t.diffuse, t.f0, rough, ao, t.model, in.probes, in.clip.xy, in.gi, in.lm_uv);
-    // Alpha keeps the rendering layers for the lighting pass.
-    out.indirect = vec4f(indirect + s.emission, f32((in.receive_shadows >> 8u) & 0xffu));
+    // Lightmapped surfaces take their Mixed lights here and flag them done (+256) in the
+    // alpha, which also keeps the rendering layers: Shadowmask needs the mask (the lighting
+    // pass has none), Subtractive has them in the lightmap already.
+    let layers = (in.receive_shadows >> 8u) & 0xffu;
+    let mode = u32(frame.mixed.x + 0.5);
+    var mixed_done = 0u;
+    var direct_mixed = vec3f(0.0);
+    if (lightmap_layer(in.gi) >= 0 && mode != 0u) {
+        mixed_done = 256u;
+        if (mode == 1u && t.model != 2u) {
+            let ext = DirectExtra(layers, true, baked_shadowmask(in.gi, in.lm_uv), 1u);
+            direct_mixed = direct_light(in.world_pos, n, geo, t.diffuse, t.f0, rough, t.model, (in.receive_shadows & 1u) != 0u, in.clip.xy, ext);
+        }
+    }
+    out.indirect = vec4f(indirect + s.emission + direct_mixed, f32(layers + mixed_done));
     out.diffuse_code = vec4f(t.diffuse, f32(t.model * 3u + flags) / 15.0);
     out.f0_rough = vec4f(t.f0, rough);
     return out;

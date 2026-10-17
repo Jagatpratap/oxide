@@ -35,7 +35,10 @@ fn fs_light(@builtin(position) p: vec4f) -> @location(0) vec4f {
     let indirect = textureLoad(gb_indirect, xy, 0);
     var color = indirect.rgb;
     if (flags != 2u) {
-        color += direct_light(world_pos, oct_decode(normals.xy), oct_decode(normals.zw), dc.rgb, fr.rgb, fr.a, model, flags == 1u, p.xy, u32(indirect.a + 0.5));
+        let bits = u32(indirect.a + 0.5);
+        // Bit 8: Mixed lights were already added in the G-buffer pass.
+        let ext = DirectExtra(bits & 0xffu, false, vec4f(1.0), select(0u, 2u, bits >= 256u));
+        color += direct_light(world_pos, oct_decode(normals.xy), oct_decode(normals.zw), dc.rgb, fr.rgb, fr.a, model, flags == 1u, p.xy, ext);
     }
     return vec4f(apply_fog(color, world_pos), 1.0);
 }

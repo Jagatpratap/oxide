@@ -236,6 +236,27 @@ pub enum LightShadows {
     Soft,
 }
 
+/// Unity `MixedLightingMode` (Lighting Settings "Lighting Mode"): what Mixed lights bake.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
+pub enum MixedLightingMode {
+    /// Indirect light only; direct light and shadows stay realtime.
+    #[default]
+    IndirectOnly,
+    /// Also static shadows, into a shadowmask (up to 4 overlapping Mixed lights).
+    Shadowmask,
+    /// Direct light baked into lightmaps; the main light's realtime shadow is subtracted.
+    Subtractive,
+}
+
+/// Unity `LightmapsMode` (Lighting Settings "Directional Mode").
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
+pub enum LightmapsMode {
+    NonDirectional,
+    /// A second texture keeps the dominant light direction, for normal-mapped detail.
+    #[default]
+    CombinedDirectional,
+}
+
 /// How a light takes part in baked lighting (Unity `LightmapBakeType`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
 pub enum LightmapBakeType {
@@ -291,6 +312,9 @@ pub struct Light {
     /// The rendering layers this light affects (URP light "Rendering Layers"; a renderer
     /// is lit when its Rendering Layer Mask overlaps). 8 layers are used for lighting.
     pub rendering_layers: u32,
+    /// Set by baking in Shadowmask mode: the shadowmask channel of this Mixed light (-1 =
+    /// none; Unity `bakingOutput.occlusionMaskChannel`).
+    pub shadowmask_channel: i32,
 }
 
 impl Default for Light {
@@ -313,6 +337,7 @@ impl Default for Light {
             cookie_size: oxide_math::Vector2::ONE,
             cookie_offset: oxide_math::Vector2::ZERO,
             rendering_layers: 1,
+            shadowmask_channel: -1,
         }
     }
 }
@@ -523,6 +548,17 @@ pub struct RenderSettings {
     pub vignette: f32,
     /// Baked lightmaps (Unity `LightmapSettings.lightmaps`), written by Generate Lighting.
     pub lightmaps: Vec<Handle<oxide_assets::Texture2D>>,
+    /// Per lightmap: the shadowmask (Shadowmask mode) and dominant-direction (Directional
+    /// mode) textures of the last bake.
+    pub shadowmasks: Vec<Handle<oxide_assets::Texture2D>>,
+    pub lightmap_directions: Vec<Handle<oxide_assets::Texture2D>>,
+    /// The Lighting Mode the current baked data was made with.
+    pub baked_lighting_mode: MixedLightingMode,
+    /// Lighting Mode and Directional Mode (when no Lighting Settings asset is set).
+    pub lighting_mode: MixedLightingMode,
+    pub directional_mode: LightmapsMode,
+    /// Subtractive: the darkest a realtime shadow makes baked light.
+    pub realtime_shadow_color: Color,
     /// Baked light probes: world positions and 27 SH floats (9 RGB coefficients) each.
     pub light_probe_positions: Vec<Vector3>,
     pub light_probe_coefficients: Vec<f32>,
@@ -578,6 +614,12 @@ impl Default for RenderSettings {
             bloom_threshold: 1.0,
             vignette: 0.15,
             lightmaps: Vec::new(),
+            shadowmasks: Vec::new(),
+            lightmap_directions: Vec::new(),
+            baked_lighting_mode: MixedLightingMode::IndirectOnly,
+            lighting_mode: MixedLightingMode::IndirectOnly,
+            directional_mode: LightmapsMode::CombinedDirectional,
+            realtime_shadow_color: Color::rgb(0.42, 0.478, 0.627),
             light_probe_positions: Vec::new(),
             light_probe_coefficients: Vec::new(),
             lightmap_resolution: 10.0,
@@ -997,6 +1039,7 @@ impl Component for LightProbeGroup {
 /// Unity's Lighting Settings asset (`.lighting`): lightmapping settings shared by scenes.
 /// <https://docs.unity3d.com/Manual/class-LightingSettings.html>
 #[derive(Clone, Debug, Reflect)]
+#[reflect(default)]
 pub struct LightingSettings {
     /// Bake lightmaps and light probes at all (Unity "Baked Global Illumination").
     pub baked_global_illumination: bool,
@@ -1013,6 +1056,11 @@ pub struct LightingSettings {
     pub filtering: bool,
     /// Used by renderers without their own Lightmap Parameters.
     pub default_lightmap_parameters: Option<Handle<LightmapParameters>>,
+    /// What Mixed lights bake (Unity "Lighting Mode").
+    pub lighting_mode: MixedLightingMode,
+    pub directional_mode: LightmapsMode,
+    /// Subtractive mode's shadow colour.
+    pub realtime_shadow_color: Color,
 }
 
 impl Default for LightingSettings {
@@ -1026,6 +1074,9 @@ impl Default for LightingSettings {
             lightmap_padding: 2,
             filtering: true,
             default_lightmap_parameters: None,
+            lighting_mode: MixedLightingMode::IndirectOnly,
+            directional_mode: LightmapsMode::CombinedDirectional,
+            realtime_shadow_color: Color::rgb(0.42, 0.478, 0.627),
         }
     }
 }

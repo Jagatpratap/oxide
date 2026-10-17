@@ -38,6 +38,8 @@ pub struct BakeSettings {
     pub padding: u32,
     /// Edge-aware blur of indirect light (Unity "Filtering").
     pub denoise: bool,
+    /// Also bake each texel's dominant light direction (Unity "Directional Mode": Directional).
+    pub directional: bool,
 }
 
 impl Default for BakeSettings {
@@ -49,6 +51,7 @@ impl Default for BakeSettings {
             bounces: 2,
             padding: 2,
             denoise: true,
+            directional: false,
         }
     }
 }
@@ -221,6 +224,8 @@ pub struct BakeLight {
     /// (their direct light stays realtime).
     pub baked_direct: bool,
     pub cast_shadows: bool,
+    /// Shadowmask lighting mode: the channel (0-3) its static shadows are baked into.
+    pub shadowmask_channel: Option<u8>,
 }
 
 pub struct BakeInput {
@@ -243,6 +248,12 @@ pub struct Lightmap {
 #[derive(Clone, Debug, Default)]
 pub struct BakeOutput {
     pub lightmaps: Vec<Lightmap>,
+    /// Per lightmap, when any light has a shadowmask channel: RGBA8, 255 = unshadowed, one
+    /// channel per light (Unity's `_shadowmask` textures).
+    pub shadowmasks: Vec<Vec<u8>>,
+    /// Per lightmap with `directional`: RGBA8, rgb = dominant direction × 0.5 + 0.5, a = the
+    /// rebalancing term (Unity's `_dir` textures).
+    pub directions: Vec<Vec<u8>>,
     /// Per input object: lightmap index and Unity `lightmapScaleOffset`.
     pub placements: Vec<Option<(u32, Vector4)>>,
     /// Per probe: L2 SH, cosine-convolved, divided by π (renderer ambient units).
@@ -730,17 +741,68 @@ pub fn bake(input: &BakeInput, progress: &Progress) -> Result<BakeOutput, String
 
     let bounces = input.settings.bounces;
     let samples = input.settings.samples.max(1);
-    // Per texel: (baked direct, indirect).
-    let lit: Vec<(Vector3, Vector3)> = parallel_map(&texels, progress, |i, t| {
+    let shadowmask = input.lights.iter().any(|l| l.shadowmask_channel.is_some());
+    let directional = input.settings.directional;
+    let luminance = |c: Vector3| c.dot(Vector3::new(0.2126, 0.7152, 0.0722));
+    // Per texel: baked direct, indirect, shadowmask, dominant direction.
+    let lit: Vec<TexelLight> = parallel_map(&texels, progress, |i, t| {
         let mut rng = Rng::new(i as u64 + 1);
         let direct = scene.direct(t.pos, t.normal, |l| l.baked_direct);
         let o = t.pos + t.normal * 2e-3;
         let mut indirect = Vector3::ZERO;
+        let (mut dir_sum, mut dir_weight) = (Vector3::ZERO, 0.0);
         for _ in 0..samples {
             let d = cosine_dir(t.normal, &mut rng);
-            indirect += scene.radiance(o, d, bounces, &mut rng);
+            let l = scene.radiance(o, d, bounces, &mut rng);
+            indirect += l;
+            dir_sum += d * luminance(l);
+            dir_weight += luminance(l);
         }
-        (direct, indirect / samples as f32)
+        // Static shadows of shadowmask lights: the share of their rays that reach it.
+        let mut mask = [1.0f32; 4];
+        if shadowmask {
+            for l in &input.lights {
+                let (Some(ch), true) = (l.shadowmask_channel, l.cast_shadows) else {
+                    continue;
+                };
+                let rays = l.kind.rays(t.pos);
+                if rays.is_empty() {
+                    continue;
+                }
+                let lit = rays
+                    .iter()
+                    .filter(|(d, dist, _)| !scene.occluded(o, *d, (dist - 2e-3).max(0.0)))
+                    .count();
+                mask[ch as usize & 3] = mask[ch as usize & 3].min(lit as f32 / rays.len() as f32);
+            }
+        }
+        // Direct light's directions count by their contribution.
+        if directional {
+            for l in input.lights.iter().filter(|l| l.baked_direct) {
+                for (d, dist, atten) in l.kind.rays(t.pos) {
+                    let nl = t.normal.dot(d);
+                    if nl > 0.0
+                        && atten > 0.0
+                        && !(l.cast_shadows && scene.occluded(o, d, (dist - 2e-3).max(0.0)))
+                    {
+                        let w = luminance(l.color * (nl * atten)) * samples as f32;
+                        dir_sum += d * w;
+                        dir_weight += w;
+                    }
+                }
+            }
+        }
+        TexelLight {
+            direct,
+            indirect: indirect / samples as f32,
+            mask,
+            // Average incoming direction: long for one strong light, short for even light.
+            dir: if dir_weight > 0.0 {
+                dir_sum / dir_weight
+            } else {
+                Vector3::ZERO
+            },
+        }
     });
     let probes: Vec<[Vector3; 9]> = parallel_map(&input.probes, progress, |i, &p| {
         let mut rng = Rng::new(0x9e37_79b9 ^ i as u64);
@@ -791,20 +853,59 @@ pub fn bake(input: &BakeInput, progress: &Progress) -> Result<BakeOutput, String
         .unwrap_or(0);
     let n = (size * size) as usize;
     let mut lightmaps = Vec::new();
+    let mut shadowmasks = Vec::new();
+    let mut directions = Vec::new();
     for a in 0..atlases {
         let mut direct = vec![Vector3::ZERO; n];
         let mut indirect = vec![Vector3::ZERO; n];
         let mut normal = vec![Vector3::ZERO; n];
+        let mut mask = vec![Vector4::ONE; n];
+        let mut dirs = vec![Vector4::ZERO; n];
         let mut valid = vec![false; n];
-        for (t, (d, i)) in texels.iter().zip(&lit) {
+        for (t, l) in texels.iter().zip(&lit) {
             if t.atlas != a {
                 continue;
             }
             let k = (t.y * size + t.x) as usize;
-            direct[k] = *d;
-            indirect[k] = *i;
+            direct[k] = l.direct;
+            indirect[k] = l.indirect;
             normal[k] = t.normal;
+            mask[k] = Vector4::from_array(l.mask);
+            // Unity's encoding: rgb = direction × 0.5 + 0.5, a = the half-Lambert term at
+            // the surface normal (so flat surfaces decode unchanged).
+            let d = if l.dir.length_squared() > 1e-8 {
+                l.dir
+            } else {
+                t.normal * 0.5
+            };
+            dirs[k] = d.extend((t.normal.dot(d) + 1.0) * 0.5);
             valid[k] = true;
+        }
+        let pad = input.settings.padding.max(1) + 1;
+        if shadowmask {
+            let mut v = valid.clone();
+            dilate(&mut mask, &mut v, size, pad);
+            shadowmasks.push(
+                mask.iter()
+                    .flat_map(|m| {
+                        m.to_array()
+                            .map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8)
+                    })
+                    .collect(),
+            );
+        }
+        if directional {
+            let mut v = valid.clone();
+            dilate(&mut dirs, &mut v, size, pad);
+            directions.push(
+                dirs.iter()
+                    .flat_map(|d| {
+                        let rgb = d.truncate() * 0.5 + Vector3::splat(0.5);
+                        [rgb.x, rgb.y, rgb.z, d.w]
+                            .map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8)
+                    })
+                    .collect(),
+            );
         }
         if input.settings.denoise {
             indirect = denoise(&indirect, &normal, &valid, size);
@@ -833,6 +934,8 @@ pub fn bake(input: &BakeInput, progress: &Progress) -> Result<BakeOutput, String
         .collect();
     Ok(BakeOutput {
         lightmaps,
+        shadowmasks,
+        directions,
         placements,
         probes,
     })
@@ -875,7 +978,20 @@ fn denoise(src: &[Vector3], normal: &[Vector3], valid: &[bool], size: u32) -> Ve
 
 /// Fills empty texels next to filled ones (so bilinear filtering at chart edges and mips
 /// don't pull in black), `passes` texels deep.
-fn dilate(color: &mut [Vector3], valid: &mut [bool], size: u32, passes: u32) {
+/// One lightmap texel's bake.
+#[derive(Clone, Default)]
+struct TexelLight {
+    direct: Vector3,
+    indirect: Vector3,
+    mask: [f32; 4],
+    /// Luminance-weighted average of incoming directions.
+    dir: Vector3,
+}
+
+fn dilate<T>(color: &mut [T], valid: &mut [bool], size: u32, passes: u32)
+where
+    T: Copy + Default + std::ops::AddAssign + std::ops::Div<f32, Output = T>,
+{
     let s = size as i32;
     for _ in 0..passes {
         let mut fill = Vec::new();
@@ -885,7 +1001,7 @@ fn dilate(color: &mut [Vector3], valid: &mut [bool], size: u32, passes: u32) {
                 if valid[k] {
                     continue;
                 }
-                let (mut sum, mut n) = (Vector3::ZERO, 0);
+                let (mut sum, mut n) = (T::default(), 0);
                 for (dx, dy) in [
                     (-1, 0),
                     (1, 0),
