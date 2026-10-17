@@ -239,7 +239,8 @@ Orientation, Cameras (live preview of a scene camera) and ProBuilder; drag by th
 (top toolbar wraps onto more rows), double-click or right-click to collapse, Dock menu, Hide; Overlay menu on `` ` ``
 with Show All / Hide All and saved presets; layouts kept in Preferences; MCP `editor_overlays`.
 MCP: `editor_*` tools drive all of it (`editor_project`, `editor_shortcuts`, `editor_search` added). Not yet: Scene view
-audio toggle, Rect tool for multiple objects at once (it resizes the active object).
+audio toggle. The Rect tool works on several objects ☑ (one rect around the selection; resizing scales the group
+from the fixed edge and each object along its matching local axis).
 
 ### P3 — Asset pipeline
 - ☑ AssetDatabase with GUIDs (`oxide_assets::database`): every file and folder under `Assets/` gets a

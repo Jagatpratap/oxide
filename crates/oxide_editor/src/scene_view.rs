@@ -1498,6 +1498,53 @@ impl RectGeom {
         })
     }
 
+    /// One rect around several objects (Unity's Rect tool on a multi-selection), on the plane
+    /// of the active object that faces the camera most. Objects without a mesh count as a point.
+    fn of_group(
+        world: &World,
+        ids: &[GameObjectId],
+        active: GameObjectId,
+        view_dir: Vector3,
+    ) -> Option<Self> {
+        let frame = Self::of(world, active, view_dir)?;
+        let (mut lo, mut hi) = (Vector3::splat(f32::MAX), Vector3::splat(f32::MIN));
+        let assets = world.resource::<AssetServer>();
+        for &id in ids {
+            let m = world.local_to_world(id);
+            let corners: Vec<Vector3> = match mesh_of(world, id)
+                .and_then(|(h, _)| assets.meshes.get(&h).map(|mesh| mesh.bounds))
+            {
+                Some(b) => (0..8)
+                    .map(|i| {
+                        let (mn, mx) = (b.min(), b.max());
+                        Vector3::new(
+                            if i & 1 == 0 { mn.x } else { mx.x },
+                            if i & 2 == 0 { mn.y } else { mx.y },
+                            if i & 4 == 0 { mn.z } else { mx.z },
+                        )
+                    })
+                    .map(|c| m.transform_point3(c))
+                    .collect(),
+                None => vec![world.position(id)],
+            };
+            for c in corners {
+                let p = Vector3::new(c.dot(frame.u), c.dot(frame.v), c.dot(frame.n));
+                lo = lo.min(p);
+                hi = hi.max(p);
+            }
+        }
+        if lo.x > hi.x {
+            return None;
+        }
+        let mid = (lo + hi) * 0.5;
+        Some(Self {
+            center: frame.u * mid.x + frame.v * mid.y + frame.n * mid.z,
+            hu: ((hi.x - lo.x) * 0.5).max(1e-4),
+            hv: ((hi.y - lo.y) * 0.5).max(1e-4),
+            ..frame
+        })
+    }
+
     /// Dragging edge/corner `(su, sv)` by `(du, dv)` along `u`/`v`: the object's new
     /// position and local scale (from `p0`, `s0` at the start) and the resulting rect.
     fn resize(
@@ -1593,9 +1640,10 @@ struct RectResize {
     rect: RectGeom,
 }
 
-/// Unity's Rect tool for 3D objects: drag an edge or corner to resize the active object
-/// (the opposite side stays put; Alt resizes around the center, Shift keeps the aspect
-/// ratio), or drag inside to move the selection on the rect's plane.
+/// Unity's Rect tool for 3D objects: drag an edge or corner to resize the active object, or
+/// with several objects selected, one rect around them all that resizes the group (the
+/// opposite side stays put; Alt resizes around the center, Shift keeps the aspect ratio), or
+/// drag inside to move the selection on the rect's plane.
 fn rect_tool(
     st: &mut EditorState,
     engine: &mut Engine,
@@ -1607,13 +1655,14 @@ fn rect_tool(
 ) -> bool {
     let w = &engine.world;
     let view_dir = st.scene_cam.forward();
-    let Some(geom) = st
-        .scene_ui
-        .drag
-        .as_ref()
-        .and_then(|d| d.rect)
-        .or_else(|| RectGeom::of(w, active, view_dir))
-    else {
+    let selected = st.top_level_selection(w);
+    let Some(geom) = st.scene_ui.drag.as_ref().and_then(|d| d.rect).or_else(|| {
+        if selected.len() > 1 {
+            RectGeom::of_group(w, &selected, active, view_dir)
+        } else {
+            RectGeom::of(w, active, view_dir)
+        }
+    }) else {
         return false;
     };
     let (mouse, press_origin, primary_down, mods) = ui.input(|i| {
@@ -1691,13 +1740,45 @@ fn rect_tool(
                     w.set_position(*id, *p0 + delta);
                 }
                 live.center = geom.center + delta;
-            } else if let Some(&(id, p0, _, s0)) = d.objects.first() {
+            } else if d.objects.len() == 1 {
+                let (id, p0, _, s0) = d.objects[0];
                 let r = geom.resize(p0, s0, (su, sv), (du, dv), mods.alt, mods.shift);
                 w.set_position(id, r.position);
                 if let Some(t) = w.transform_mut(id) {
                     t.local_scale = r.scale;
                 }
                 live = r.rect;
+            } else {
+                // Several objects: positions scale away from the fixed edge, and each object
+                // grows along its own local axes that line up with the rect's.
+                for &(id, p0, rot, s0) in &d.objects {
+                    let r = geom.resize(p0, s0, (su, sv), (du, dv), mods.alt, mods.shift);
+                    let (fu, fv) = (r.rect.hu / geom.hu, r.rect.hv / geom.hv);
+                    let along = |dir: Vector3| {
+                        (0..3)
+                            .max_by(|&a, &b| {
+                                let ax = |i: usize| {
+                                    let mut e = Vector3::ZERO;
+                                    e[i] = 1.0;
+                                    (rot * e).dot(dir).abs()
+                                };
+                                ax(a).total_cmp(&ax(b))
+                            })
+                            .unwrap_or(0)
+                    };
+                    let mut scale = s0;
+                    if su != 0 {
+                        scale[along(geom.u)] *= fu;
+                    }
+                    if sv != 0 {
+                        scale[along(geom.v)] *= fv;
+                    }
+                    w.set_position(id, r.position);
+                    if let Some(t) = w.transform_mut(id) {
+                        t.local_scale = scale;
+                    }
+                    live = r.rect;
+                }
             }
         }
     }
@@ -2060,5 +2141,34 @@ mod tests {
         // A pivot off the bounds center: the fixed edge still stays put.
         let off = r.resize(p0 - Vector3::X, s0, (1, 0), (1.0, 0.0), false, false);
         assert!(near(off.position, Vector3::new(0.0, 2.0, 3.0)));
+    }
+
+    #[test]
+    fn rect_encloses_a_multi_selection() {
+        let mut w = World::new();
+        oxide_engine::init_world(&mut w, std::env::temp_dir());
+        w.run_scripts = false;
+        let a = oxide_engine::objects::create_primitive(&mut w, oxide_assets::PrimitiveType::Cube);
+        let b = oxide_engine::objects::create_primitive(&mut w, oxide_assets::PrimitiveType::Cube);
+        w.set_position(a, Vector3::new(-2.0, 0.0, 0.0));
+        w.set_position(b, Vector3::new(3.0, 1.0, 0.0));
+        let r = RectGeom::of_group(&w, &[a, b], a, Vector3::Z).unwrap();
+        // X from -2.5 to 3.5, Y from -0.5 to 1.5.
+        assert!(
+            (r.hu - 3.0).abs() < 1e-4 && (r.hv - 1.0).abs() < 1e-4,
+            "{r:?}"
+        );
+        assert!((r.center - Vector3::new(0.5, 0.5, 0.0)).length() < 1e-4);
+        // Doubling the width keeps the left edge (-2.5): B, 5.5 m from it, ends 11 m away.
+        let out = r.resize(
+            w.position(b),
+            Vector3::ONE,
+            (1, 0),
+            (6.0, 0.0),
+            false,
+            false,
+        );
+        assert!((out.position.x - 8.5).abs() < 1e-4, "{:?}", out.position);
+        assert!((out.rect.hu / r.hu - 2.0).abs() < 1e-4);
     }
 }
