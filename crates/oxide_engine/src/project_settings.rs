@@ -103,6 +103,10 @@ impl PhysicsSettings {
 pub struct QualityFile {
     pub current: usize,
     pub levels: Vec<QualityLevel>,
+    /// The level a player built for each platform starts with (Unity's "Default" row),
+    /// keyed by build target name (`Standalone`, `Android`, `iOS`, `WebGL`). Platforms not
+    /// listed start with `current`.
+    pub platform_defaults: std::collections::BTreeMap<String, usize>,
 }
 
 impl Default for QualityFile {
@@ -111,9 +115,43 @@ impl Default for QualityFile {
         Self {
             current: q.quality_level(),
             levels: q.levels,
+            platform_defaults: [("Android", 2), ("iOS", 2), ("WebGL", 2)]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect(),
         }
     }
 }
+
+impl QualityFile {
+    /// The level a player for `target` starts with.
+    pub fn default_for(&self, target: oxide_assets::BuildTarget) -> usize {
+        self.platform_defaults
+            .get(target.name())
+            .copied()
+            .unwrap_or(self.current)
+            .min(self.levels.len().saturating_sub(1))
+    }
+
+    /// Removing level `i` keeps every platform default on the same level (or the one before).
+    pub fn remove_level(&mut self, i: usize) {
+        self.levels.remove(i);
+        for v in self
+            .platform_defaults
+            .values_mut()
+            .chain([&mut self.current])
+        {
+            if *v >= i && *v > 0 {
+                *v -= 1;
+            }
+        }
+    }
+}
+
+/// The Quality page's per-platform default levels, kept while the World runs so saving
+/// Project Settings writes them back.
+#[derive(Clone, Debug, Default)]
+pub struct QualityPlatformDefaults(pub std::collections::BTreeMap<String, usize>);
 
 /// Input Manager. <https://docs.unity3d.com/Manual/class-InputManager.html>
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -172,10 +210,12 @@ pub struct ProjectSettings {
     pub graphics: oxide_scene::GraphicsSettings,
     /// Script Execution Order.
     pub script_execution_order: oxide_scene::ScriptExecutionOrder,
+    /// Adaptive Performance (indexer and scalers).
+    pub adaptive_performance: crate::adaptive_performance::AdaptivePerformanceSettings,
 }
 
 /// The pages and their files, for MCP and error messages.
-pub const SECTIONS: [(&str, &str); 11] = [
+pub const SECTIONS: [(&str, &str); 12] = [
     ("tags_and_layers", "TagManager.yaml"),
     ("time", "TimeManager.yaml"),
     ("physics", "DynamicsManager.yaml"),
@@ -187,6 +227,7 @@ pub const SECTIONS: [(&str, &str); 11] = [
     ("preset_manager", "PresetManager.yaml"),
     ("graphics", "GraphicsSettings.yaml"),
     ("script_execution_order", "ScriptExecutionOrder.yaml"),
+    ("adaptive_performance", "AdaptivePerformance.yaml"),
 ];
 
 fn read<T: DeserializeOwned + Default>(dir: &Path, file: &str, warnings: &mut Vec<String>) -> T {
@@ -218,6 +259,7 @@ impl ProjectSettings {
             preset_manager: read(&dir, SECTIONS[8].1, &mut w),
             graphics: read(&dir, SECTIONS[9].1, &mut w),
             script_execution_order: read(&dir, SECTIONS[10].1, &mut w),
+            adaptive_performance: read(&dir, SECTIONS[11].1, &mut w),
         };
         (s, w)
     }
@@ -238,6 +280,7 @@ impl ProjectSettings {
             serde_yaml_ng::to_string(&self.preset_manager),
             serde_yaml_ng::to_string(&self.graphics),
             serde_yaml_ng::to_string(&self.script_execution_order),
+            serde_yaml_ng::to_string(&self.adaptive_performance),
         ];
         for ((_, file), text) in SECTIONS.iter().zip(texts) {
             let text = text.map_err(|e| e.to_string())?;
@@ -279,6 +322,10 @@ impl ProjectSettings {
             quality: QualityFile {
                 current: q.quality_level(),
                 levels: q.levels,
+                platform_defaults: world
+                    .try_resource::<QualityPlatformDefaults>()
+                    .map(|d| d.0.clone())
+                    .unwrap_or_else(|| QualityFile::default().platform_defaults),
             },
             input: InputSettings {
                 axes: input.axes().to_vec(),
@@ -307,6 +354,10 @@ impl ProjectSettings {
                 .unwrap_or_default(),
             script_execution_order: world
                 .try_resource::<oxide_scene::ScriptExecutionOrder>()
+                .cloned()
+                .unwrap_or_default(),
+            adaptive_performance: world
+                .try_resource::<crate::adaptive_performance::AdaptivePerformanceSettings>()
                 .cloned()
                 .unwrap_or_default(),
         }
@@ -351,6 +402,9 @@ impl ProjectSettings {
             self.quality.levels.clone(),
             self.quality.current,
         ));
+        world.resources.insert(QualityPlatformDefaults(
+            self.quality.platform_defaults.clone(),
+        ));
         world
             .resource_mut::<Input>()
             .set_mappings(self.input.axes.clone(), self.input.buttons.clone());
@@ -381,6 +435,7 @@ impl ProjectSettings {
         world.resources.insert(self.preset_manager.clone());
         world.resources.insert(self.graphics.clone());
         world.resources.insert(self.script_execution_order.clone());
+        world.resources.insert(self.adaptive_performance.clone());
         // The pipeline assets in use are loaded now so rendering can read them.
         let pipelines: Vec<_> = self
             .graphics
@@ -420,6 +475,7 @@ impl ProjectSettings {
                 "preset_manager" => serde_json::to_value(&self.preset_manager),
                 "graphics" => serde_json::to_value(&self.graphics),
                 "script_execution_order" => serde_json::to_value(&self.script_execution_order),
+                "adaptive_performance" => serde_json::to_value(&self.adaptive_performance),
                 _ => return None,
             }
             .unwrap_or_default(),
@@ -454,6 +510,7 @@ impl ProjectSettings {
             "preset_manager" => self.preset_manager = parse(current)?,
             "graphics" => self.graphics = parse(current)?,
             "script_execution_order" => self.script_execution_order = parse(current)?,
+            "adaptive_performance" => self.adaptive_performance = parse(current)?,
             _ => self.player = parse(current)?,
         }
         Ok(())

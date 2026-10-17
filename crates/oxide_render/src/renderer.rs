@@ -300,6 +300,10 @@ pub struct SceneRenderer {
     decals: crate::decals::DecalGpu,
     /// GPU pass times for the Profiler (made when profiling starts).
     gpu_timer: Option<crate::gpu_timer::GpuTimer>,
+    /// Time the GPU passes even while the Profiler is off (Adaptive Performance).
+    pub gpu_timing: bool,
+    /// GPU time of the latest frame whose timestamps came back, in ms.
+    last_gpu_ms: Option<f64>,
     /// Frame Debugger: record each frame's draw events.
     pub frame_debugger: bool,
     /// Frame Debugger: stop drawing objects after this many draw events.
@@ -375,6 +379,8 @@ pub struct SceneRenderer {
     lightmap_count: usize,
     gi_buffer: wgpu::Buffer,
     fullscreen: crate::fullscreen::FullscreenGpu,
+    /// Render Scale's offscreen target and stretch pass.
+    upscaler: crate::upscale::Upscaler,
     graph_pool: crate::render_graph::TexturePool,
     /// Render graph passes that ran in the last frame: the scene's, then post-processing's
     /// (for the Frame Debugger).
@@ -564,11 +570,17 @@ impl SceneRenderer {
         let device = &gpu.device;
         let hdr_flags = gpu.adapter.get_texture_format_features(HDR_FORMAT).flags;
         let depth_flags = gpu.adapter.get_texture_format_features(DEPTH_FORMAT).flags;
+        // Counts beyond WebGPU's guaranteed 1 and 4 need the adapter-specific feature.
+        let specific = device
+            .features()
+            .contains(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES);
         let supported_samples = [1, 2, 4, 8]
             .into_iter()
             .filter(|&n| {
                 n == 1
-                    || hdr_flags.sample_count_supported(n) && depth_flags.sample_count_supported(n)
+                    || (specific || n == 4)
+                        && hdr_flags.sample_count_supported(n)
+                        && depth_flags.sample_count_supported(n)
             })
             .collect();
         let gpu_assets = GpuAssets::new(device, &gpu.queue);
@@ -932,6 +944,8 @@ impl SceneRenderer {
             particles,
             decals,
             gpu_timer: None,
+            gpu_timing: false,
+            last_gpu_ms: None,
             frame_debugger: false,
             frame_debug_limit: None,
             frame_events: Vec::new(),
@@ -1001,6 +1015,7 @@ impl SceneRenderer {
             lightmap_count: 0,
             gi_buffer: buf("baked lighting", 176 * 64, wgpu::BufferUsages::STORAGE),
             fullscreen: crate::fullscreen::FullscreenGpu::new(device, &gpu.queue),
+            upscaler: crate::upscale::Upscaler::new(device),
             graph_pool: Default::default(),
             scene_passes: Vec::new(),
             post_passes: Vec::new(),
@@ -1850,13 +1865,42 @@ impl SceneRenderer {
                 self.texture_write_serials.insert(w.target, w.serial);
             }
         }
+        self.gpu_assets.set_texture_quality(
+            frame.texture_mip_limit,
+            frame.texture_anisotropy.unwrap_or(8),
+        );
         let captures = self.update_reflections(gpu, assets, frame);
         self.render_texture_cameras(gpu, assets, frame);
-        let mut stats = self.render_view(gpu, assets, frame, target, format, width, height);
+        let scale = frame
+            .render_scale
+            .filter(|r| r.size(width, height) != (width.max(1), height.max(1)));
+        let mut stats = match scale {
+            // Render Scale: scene and post at the scaled size, then stretched to the target.
+            Some(r) => {
+                let (sw, sh) = r.size(width, height);
+                let view = self.upscaler.target(&gpu.device, sw, sh, format);
+                let stats = self.render_view(gpu, assets, frame, &view, format, sw, sh);
+                self.upscaler
+                    .run(&gpu.device, &gpu.queue, &view, target, format, r.point);
+                stats
+            }
+            None => self.render_view(gpu, assets, frame, target, format, width, height),
+        };
         stats.reflection_probes = self.reflections.active_count();
         stats.probe_captures = captures;
         self.last_stats = stats;
         stats
+    }
+
+    /// GPU passes are timed (Profiler recording, or [`Self::gpu_timing`]).
+    fn timing(&self) -> bool {
+        self.gpu_timing || oxide_core::profiler::Profiler::enabled()
+    }
+
+    /// GPU time of the latest timed frame (ms), a frame or two behind; None until timing
+    /// is on and results arrive.
+    pub fn last_gpu_ms(&self) -> Option<f64> {
+        self.last_gpu_ms.filter(|_| self.timing())
     }
 
     /// The Frame Debugger's events of the last frame rendered with it on.
@@ -1912,12 +1956,13 @@ impl SceneRenderer {
     ) -> RenderStats {
         let (w, h) = (width.max(1), height.max(1));
         // GPU pass times of earlier frames reach the Profiler; this view is timed too.
-        if oxide_core::profiler::Profiler::enabled() {
+        if self.timing() {
             if self.gpu_timer.is_none() {
                 self.gpu_timer = crate::gpu_timer::GpuTimer::new(&gpu.device, &gpu.queue);
             }
             if let Some(t) = &mut self.gpu_timer {
                 for (frame_index, passes) in t.collect(&gpu.device) {
+                    self.last_gpu_ms = Some(passes.iter().map(|p| p.1).sum());
                     oxide_core::profiler::Profiler::set_gpu_times(frame_index, passes);
                 }
                 t.begin(oxide_core::profiler::Profiler::current_frame());
@@ -2076,17 +2121,14 @@ impl SceneRenderer {
         let before = full_screen(RenderPassEvent::BeforeRenderingPostProcessing);
         let after = full_screen(RenderPassEvent::AfterRenderingPostProcessing);
         let depth_copy = targets.fx.as_ref().map(|f| &f.depth);
+        let timing = self.timing();
         let post = std::cell::RefCell::new(&mut self.post);
         let aa = std::cell::RefCell::new(&mut self.aa);
         let fsg = std::cell::RefCell::new(&mut self.fullscreen);
         let (aspect, time) = (w as f32 / h as f32, frame.time);
         let srgb = wgpu::TextureFormat::Rgba8UnormSrgb;
         let mut graph = crate::render_graph::RenderGraph::new();
-        graph.set_timer(
-            self.gpu_timer
-                .as_ref()
-                .filter(|_| oxide_core::profiler::Profiler::enabled()),
-        );
+        graph.set_timer(self.gpu_timer.as_ref().filter(|_| timing));
         let mut cur = graph.import(hdr);
         let mut slot = 0;
         for (shader, params) in before {
@@ -3999,11 +4041,8 @@ impl SceneRenderer {
             None => (&targets.resolve, None),
         };
         let mut graph = crate::render_graph::RenderGraph::new();
-        graph.set_timer(
-            this.gpu_timer
-                .as_ref()
-                .filter(|_| oxide_core::profiler::Profiler::enabled()),
-        );
+        let timing = this.timing();
+        graph.set_timer(this.gpu_timer.as_ref().filter(|_| timing));
         // Imported targets: what the passes write and what later steps (TAA, post) read.
         let shadow_tex = this.shadow_layers.first().map(|v| graph.import(v));
         let atlas_tex = graph.import(&this.atlas);

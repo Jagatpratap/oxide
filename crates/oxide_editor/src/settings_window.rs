@@ -26,9 +26,11 @@ pub enum Page {
     PresetManager,
     Graphics,
     ScriptExecutionOrder,
+    AdaptivePerformance,
 }
 
-pub const PAGES: [(Page, &str); 10] = [
+pub const PAGES: [(Page, &str); 11] = [
+    (Page::AdaptivePerformance, "Adaptive Performance"),
     (Page::Graphics, "Graphics"),
     (Page::Input, "Input Manager"),
     (Page::Localization, "Localization"),
@@ -125,6 +127,20 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
         Page::PresetManager => preset_manager(ui, w, &mut s.preset_manager),
         Page::Graphics => graphics(ui, w, &mut s.graphics),
         Page::ScriptExecutionOrder => script_execution_order(ui, w, &mut s.script_execution_order),
+        Page::AdaptivePerformance => {
+            ui.label(
+                "Scalers lower quality step by step when frames run over budget or the \
+                      device heats up, and restore it when there's headroom. Live state: \
+                      Window > Analysis > Adaptive Performance.",
+            );
+            ui.add_space(4.0);
+            crate::inspector::reflect_grid(
+                ui,
+                w,
+                &mut s.adaptive_performance,
+                "adaptive-performance",
+            );
+        }
     });
     ss.page = page;
     if *build != build_before
@@ -387,10 +403,7 @@ fn quality(
             }
         });
     if let Some(i) = remove {
-        q.levels.remove(i);
-        if q.current >= i && q.current > 0 {
-            q.current -= 1;
-        }
+        q.remove_level(i);
         *selected = Some(q.current);
     }
     if ui.button("Add Quality Level").clicked() {
@@ -399,6 +412,32 @@ fn quality(
         q.levels.push(l);
         *selected = Some(q.levels.len() - 1);
     }
+    ui.add_space(6.0);
+    ui.label("Default level per platform (what a built player starts with)");
+    egui::Grid::new("quality-platform-defaults")
+        .num_columns(2)
+        .show(ui, |ui| {
+            for t in [
+                oxide_assets::BuildTarget::Standalone,
+                oxide_assets::BuildTarget::Android,
+                oxide_assets::BuildTarget::IOS,
+                oxide_assets::BuildTarget::WebGL,
+            ] {
+                ui.label(t.name());
+                let mut v = q.default_for(t);
+                egui::ComboBox::from_id_salt(("quality-default", t.name()))
+                    .selected_text(q.levels.get(v).map_or("", |l| l.name.as_str()))
+                    .show_ui(ui, |ui| {
+                        for (i, l) in q.levels.iter().enumerate() {
+                            ui.selectable_value(&mut v, i, &l.name);
+                        }
+                    });
+                if v != q.default_for(t) {
+                    q.platform_defaults.insert(t.name().to_string(), v);
+                }
+                ui.end_row();
+            }
+        });
     let sel = selected.unwrap_or(0).min(q.levels.len() - 1);
     ui.add_space(8.0);
     let level: &mut QualityLevel = &mut q.levels[sel];

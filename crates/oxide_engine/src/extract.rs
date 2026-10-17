@@ -278,6 +278,23 @@ pub fn environment(rs: &RenderSettings, q: &QualityLevel) -> Environment {
     }
 }
 
+/// Keeps the `limit` most important point and spot lights (URP's additional lights limit):
+/// brightness over squared distance from the camera, lights around the camera first.
+pub fn limit_lights(lights: &mut Vec<PunctualLight>, camera: oxide_math::Vector3, limit: usize) {
+    if lights.len() <= limit {
+        return;
+    }
+    let importance = |l: &PunctualLight| {
+        let lum = 0.2126 * l.color[0] + 0.7152 * l.color[1] + 0.0722 * l.color[2];
+        let d2 = (l.position - camera).length_squared();
+        let r2 = (l.range * l.range).max(1e-4);
+        let reach = if d2 <= r2 { 2.0 } else { 1.0 };
+        reach * lum * r2 / d2.max(1.0)
+    };
+    lights.sort_by(|a, b| importance(b).total_cmp(&importance(a)));
+    lights.truncate(limit);
+}
+
 /// Builds the frame. `cameras` overrides the scene cameras (editor Scene view, screenshots).
 pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> RenderFrame {
     let assets = world.resource::<AssetServer>();
@@ -297,7 +314,21 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
             .filter(|(_, c)| c.target_texture.is_none())
             .min_by(|a, b| a.1.depth.total_cmp(&b.1.depth))
             .is_none_or(|(_, c)| c.post_processing);
+    // Render Scale applies to game cameras only (not the Scene view or screenshots).
+    let render_scale = cameras_override
+        .is_none()
+        .then_some(oxide_render::RenderScale {
+            scale: quality.render_scale,
+            point: quality.upscaling_filter == oxide_scene::UpscalingFilter::Point,
+        });
     let mut frame = RenderFrame {
+        render_scale,
+        texture_mip_limit: quality.texture_quality.mip_limit(),
+        texture_anisotropy: Some(match quality.anisotropic_textures {
+            oxide_scene::AnisotropicFiltering::Disable => 1,
+            oxide_scene::AnisotropicFiltering::PerTexture => 8,
+            oxide_scene::AnisotropicFiltering::ForceEnable => 16,
+        }),
         cameras: cameras_override.unwrap_or_else(|| cameras(world)),
         environment: oxide_render::Environment {
             skybox: skybox(&settings, assets),
@@ -458,6 +489,11 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
     oxide_terrain::extract_details(world, cam_pos, &mut frame.grass, &mut frame.draws);
     oxide_particles::extract(world, &mut frame.particles);
     oxide_particles::extract_lights(world, &mut frame.lights);
+    limit_lights(
+        &mut frame.lights,
+        cam_pos,
+        quality.additional_lights_limit as usize,
+    );
     oxide_particles::effects::extract_draws(world, &mut frame.draws);
     oxide_particles::effects::extract_decals(world, cam_pos, &mut frame.decals);
     oxide_particles::effects::extract_billboards(world, cam_pos, &mut frame.particles);

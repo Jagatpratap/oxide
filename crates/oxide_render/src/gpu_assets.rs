@@ -108,6 +108,10 @@ pub struct GpuAssets {
     samplers: HashMap<(TextureWrapMode, FilterMode), wgpu::Sampler>,
     /// Bumped whenever any texture is (re)uploaded so dependent materials rebuild.
     texture_generation: u64,
+    /// Quality settings: largest mips skipped at upload, and the anisotropy of trilinear
+    /// samplers.
+    mip_limit: u32,
+    anisotropy: u16,
     pub material_layout: wgpu::BindGroupLayout,
     white: wgpu::TextureView,
     black: wgpu::TextureView,
@@ -210,11 +214,28 @@ impl GpuAssets {
             materials: HashMap::new(),
             samplers: HashMap::new(),
             texture_generation: 0,
+            mip_limit: 0,
+            anisotropy: 8,
             material_layout,
             white: solid(device, queue, [255; 4], true),
             black: solid(device, queue, [0, 0, 0, 255], true),
             normal: solid(device, queue, [128, 128, 255, 255], false),
         }
+    }
+
+    /// Applies the quality level's Texture Quality (mips skipped) and anisotropic filtering
+    /// (anisotropy of trilinear textures: 1 = off). A change re-uploads textures and
+    /// rebuilds samplers and materials.
+    pub fn set_texture_quality(&mut self, mip_limit: u32, anisotropy: u16) {
+        if (mip_limit, anisotropy) == (self.mip_limit, self.anisotropy) {
+            return;
+        }
+        if mip_limit != self.mip_limit {
+            self.textures.retain(|_, t| t.render_target);
+        }
+        self.samplers.clear();
+        (self.mip_limit, self.anisotropy) = (mip_limit, anisotropy);
+        self.texture_generation += 1;
     }
 
     pub fn sampler(
@@ -223,6 +244,7 @@ impl GpuAssets {
         wrap: TextureWrapMode,
         filter: FilterMode,
     ) -> &wgpu::Sampler {
+        let anisotropy = self.anisotropy.max(1);
         self.samplers.entry((wrap, filter)).or_insert_with(|| {
             let mode = match wrap {
                 TextureWrapMode::Repeat => wgpu::AddressMode::Repeat,
@@ -238,9 +260,11 @@ impl GpuAssets {
                 FilterMode::Bilinear => {
                     (wgpu::FilterMode::Linear, wgpu::MipmapFilterMode::Nearest, 1)
                 }
-                FilterMode::Trilinear => {
-                    (wgpu::FilterMode::Linear, wgpu::MipmapFilterMode::Linear, 8)
-                }
+                FilterMode::Trilinear => (
+                    wgpu::FilterMode::Linear,
+                    wgpu::MipmapFilterMode::Linear,
+                    anisotropy,
+                ),
             };
             device.create_sampler(&wgpu::SamplerDescriptor {
                 label: Some("material sampler"),
@@ -294,8 +318,10 @@ impl GpuAssets {
             .textures
             .get_by_id(id)
             .expect("versioned texture exists");
-        self.textures
-            .insert(id, upload_texture(device, queue, tex, version));
+        self.textures.insert(
+            id,
+            upload_texture(device, queue, tex, version, self.mip_limit),
+        );
         self.texture_generation += 1;
         true
     }
@@ -998,11 +1024,26 @@ pub(crate) fn upload_layers(
     })
 }
 
+/// How many of the largest mips Texture Quality skips: at most `limit`, always keeping one,
+/// and (for block-compressed formats) only while the new top mip is whole blocks.
+fn mip_skip<T>(limit: u32, mips: &[T], width: u32, height: u32, block: (u32, u32)) -> usize {
+    let mut skip = 0;
+    while skip < limit as usize && skip + 1 < mips.len() {
+        let (w, h) = (width >> (skip + 1), height >> (skip + 1));
+        if w == 0 || h == 0 || w % block.0 != 0 || h % block.1 != 0 {
+            break;
+        }
+        skip += 1;
+    }
+    skip
+}
+
 fn upload_texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     t: &Texture2D,
     version: u64,
+    mip_limit: u32,
 ) -> GpuTexture {
     // The block-compressed copy when the GPU supports its format, else RGBA8.
     let compressed = t
@@ -1015,8 +1056,24 @@ fn upload_texture(
         wgpu::TextureFormat::Rgba8Unorm
     };
     let (format, data, mips, (width, height)) = match compressed {
-        Some((f, c)) => (f, c.mips.concat(), c.mips.len() as u32, (t.width, t.height)),
-        None if !t.mips.is_empty() => (rgba8, t.mips.concat(), t.mip_count(), (t.width, t.height)),
+        Some((f, c)) => {
+            let skip = mip_skip(mip_limit, &c.mips, t.width, t.height, f.block_dimensions());
+            (
+                f,
+                c.mips[skip..].concat(),
+                (c.mips.len() - skip) as u32,
+                (t.width >> skip, t.height >> skip),
+            )
+        }
+        None if !t.mips.is_empty() => {
+            let skip = mip_skip(mip_limit, &t.mips, t.width, t.height, (1, 1));
+            (
+                rgba8,
+                t.mips[skip..].concat(),
+                (t.mips.len() - skip) as u32,
+                ((t.width >> skip).max(1), (t.height >> skip).max(1)),
+            )
+        }
         None => {
             // A pre-compressed texture in a format this GPU can't sample.
             oxide_core::debug_log_warning!(

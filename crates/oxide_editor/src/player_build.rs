@@ -435,6 +435,12 @@ fn main() -> std::process::ExitCode {
             &project.join("ProjectSettings"),
             &data.join("ProjectSettings"),
         )?;
+        // The player starts on its platform's default quality level.
+        let (mut settings, _) = oxide_engine::project_settings::ProjectSettings::load(project);
+        settings.quality.current = settings
+            .quality
+            .default_for(oxide_assets::BuildTarget::Standalone);
+        settings.save(&data)?;
     }
     let info = format!(
         "product_name: {:?}\nscenes:\n{}width: {}\nheight: {}\nfullscreen: {}\n",

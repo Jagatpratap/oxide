@@ -1,6 +1,7 @@
 //! Oxide runtime: the window, Unity's player loop, scene → renderer extraction, the
 //! GameObject menu (primitives, lights, cameras, models) and the built-in MCP server tools.
 
+pub mod adaptive_performance;
 pub mod app;
 pub mod builtin_assets;
 pub mod bus;
@@ -13,6 +14,7 @@ pub mod input_map;
 pub mod lens_flares;
 pub mod lighting;
 mod mcp_accessibility;
+mod mcp_adaptive;
 pub mod mcp_animation;
 pub mod mcp_asset_database;
 pub mod mcp_audio;

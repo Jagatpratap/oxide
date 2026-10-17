@@ -3183,6 +3183,7 @@ dependencies = [
  "gilrs",
  "libloading 0.9.0",
  "log",
+ "objc2-foundation 0.3.2",
  "oxide_animation",
  "oxide_assets",
  "oxide_audio",

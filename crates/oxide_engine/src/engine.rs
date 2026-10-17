@@ -111,6 +111,8 @@ pub struct Engine {
     pub game_viewport: Option<GameViewport>,
     cursor: (CursorLockMode, bool),
     last_frame: Instant,
+    /// Time spent waiting for the swapchain this frame (not CPU work; Adaptive Performance).
+    present_wait: std::time::Duration,
     /// Vsync the surface is configured with (follows the active quality level).
     vsync: bool,
     /// Forces VSync on or off regardless of Quality Settings (the Game view's VSync toggle).
@@ -155,6 +157,7 @@ impl Engine {
             game_viewport: None,
             cursor: (CursorLockMode::None, true),
             last_frame: Instant::now(),
+            present_wait: std::time::Duration::ZERO,
             vsync: true,
             vsync_override: None,
             auto_refresh: true,
@@ -182,6 +185,8 @@ impl Engine {
     /// One iteration of the player loop, then render.
     pub(crate) fn frame(&mut self) {
         let now = Instant::now();
+        let now_instant = now;
+        self.present_wait = std::time::Duration::ZERO;
         let real_dt = now.duration_since(self.last_frame).as_secs_f64();
         self.last_frame = now;
         if real_dt > 0.0 {
@@ -245,6 +250,26 @@ impl Engine {
                 oxide_scene::coroutines::Stage::EndOfFrame,
             );
         }
+        // Adaptive Performance runs in Play mode and in players.
+        let cpu = now_instant.elapsed().saturating_sub(self.present_wait);
+        let display_hz = self
+            .window
+            .current_monitor()
+            .and_then(|m| m.refresh_rate_millihertz())
+            .map_or(60.0, |mhz| mhz as f32 / 1000.0);
+        crate::adaptive_performance::update(
+            &mut self.world,
+            self.simulate || self.shell.is_none(),
+            oxide_core::time::realtime_since_startup(),
+            real_dt as f32,
+            cpu.as_secs_f32(),
+            self.renderer.last_gpu_ms().map(|ms| (ms / 1000.0) as f32),
+            display_hz,
+        );
+        self.renderer.gpu_timing = self
+            .world
+            .try_resource::<crate::adaptive_performance::AdaptivePerformance>()
+            .is_some_and(|ap| ap.active());
         self.end_frame();
         crate::profiling::record_counters(self);
         oxide_core::profiler::Profiler::end_frame();
@@ -474,6 +499,7 @@ impl Engine {
         crate::tree_billboards::update(self);
         // Waiting for the next swapchain image (vsync) — Unity's Gfx.WaitForPresent.
         let wait = oxide_core::profile_scope!("Gfx.WaitForPresent");
+        let wait_start = Instant::now();
         let frame = match self.surface.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f) => f,
             wgpu::CurrentSurfaceTexture::Suboptimal(f) => {
@@ -496,6 +522,7 @@ impl Engine {
             }
         };
         drop(wait);
+        self.present_wait = wait_start.elapsed();
         let (w, h) = self.surface.size();
         let ui_view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
             format: Some(self.surface.format().remove_srgb_suffix()),

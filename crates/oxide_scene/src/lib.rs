@@ -52,7 +52,10 @@ pub use lens_flare::{
 pub use player_input::PlayerInput;
 pub use prefab::{ObjectProperty, PrefabOverride, is_prefab_path};
 pub use presets::{CurvePreset, CurvePresetLibrary, GradientPreset, GradientPresetLibrary};
-pub use quality::{QualityLevel, QualitySettings, ShadowQuality};
+pub use quality::{
+    AnisotropicFiltering, QualityLevel, QualityOverrides, QualitySettings, ShadowQuality,
+    TextureQuality, UpscalingFilter,
+};
 pub use render_pipeline::{
     GraphicsSettings, PipelineMsaa, RenderingPath, Shader, UniversalRenderPipelineAsset,
 };

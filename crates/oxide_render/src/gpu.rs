@@ -35,7 +35,9 @@ fn compression_features(adapter: &wgpu::Adapter) -> wgpu::Features {
             // Scene view wireframe draw modes.
             | wgpu::Features::POLYGON_MODE_LINE
             // The Profiler's GPU pass times.
-            | wgpu::Features::TIMESTAMP_QUERY)
+            | wgpu::Features::TIMESTAMP_QUERY
+            // MSAA 2× and 8× (only 1 and 4 samples are guaranteed without it).
+            | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES)
 }
 
 /// The GPU: adapter, logical device and submission queue.

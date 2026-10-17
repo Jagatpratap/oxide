@@ -8,6 +8,7 @@
 //! References: <https://docs.unity3d.com/Manual/UsingTheEditor.html>,
 //! <https://docs.unity3d.com/Manual/GameView.html>, <https://docs.unity3d.com/Manual/UndoWindow.html>
 
+mod adaptive_window;
 mod anim_inspectors;
 mod animation_window;
 mod animator_window;
@@ -106,6 +107,7 @@ pub enum Tab {
     PackageManager,
     Profiler,
     FrameDebugger,
+    AdaptivePerformance,
     /// A window from a script's editor extensions (Unity `EditorWindow`), by title hash.
     Custom(u32),
 }
@@ -149,6 +151,7 @@ impl Tab {
             Tab::PackageManager => "Package Manager",
             Tab::Profiler => "Profiler",
             Tab::FrameDebugger => "Frame Debugger",
+            Tab::AdaptivePerformance => "Adaptive Performance",
             Tab::Timeline => "Timeline",
             Tab::ShaderGraph => "Shader Graph",
             Tab::VfxGraph => "VFX Graph",
@@ -793,6 +796,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::PackageManager => package_manager::window_ui(self.st, self.engine, ui),
             Tab::Profiler => profiler_window::window_ui(self.st, self.engine, ui),
             Tab::FrameDebugger => profiler_window::frame_debugger_ui(self.st, self.engine, ui),
+            Tab::AdaptivePerformance => adaptive_window::window_ui(self.engine, ui),
             Tab::Timeline => timeline_window::window_ui(self.st, self.engine, ui),
             Tab::ShaderGraph => shader_graph_window::window_ui(self.st, self.engine, ui),
             Tab::VfxGraph => vfx_graph_window::window_ui(self.st, self.engine, ui),

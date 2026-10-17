@@ -323,6 +323,10 @@ pub fn menu_items(world: &World, keymap: &Keymap) -> Vec<MenuItem> {
         Action::OpenTab(Tab::FrameDebugger),
     ));
     v.push(item(
+        "Window/Analysis/Adaptive Performance",
+        Action::OpenTab(Tab::AdaptivePerformance),
+    ));
+    v.push(item(
         "Window/Rendering/Lighting/Generate Lighting",
         Action::GenerateLighting,
     ));

@@ -1198,6 +1198,32 @@ pub struct RenderFrame {
     /// Frame number (Unity `Time.frameCount`): drives TAA jitter, and tells repeated renders
     /// of one frame (Scene and Game views) apart from new frames.
     pub frame_index: u64,
+    /// URP Render Scale of game views: the scene and post-processing render at this size and
+    /// are stretched to the target. None (or 1) renders at full size.
+    pub render_scale: Option<RenderScale>,
+    /// Texture Quality: the largest mips skipped when textures upload.
+    pub texture_mip_limit: u32,
+    /// Anisotropy of trilinear textures (1 = off); None keeps the default (8×).
+    pub texture_anisotropy: Option<u16>,
+}
+
+/// See [`RenderFrame::render_scale`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RenderScale {
+    pub scale: f32,
+    /// Nearest-pixel upscaling instead of bilinear.
+    pub point: bool,
+}
+
+impl RenderScale {
+    /// The scaled size of a `width`×`height` target (at least 1×1).
+    pub fn size(self, width: u32, height: u32) -> (u32, u32) {
+        let s = self.scale.clamp(0.1, 2.0);
+        (
+            ((width as f32 * s).round() as u32).max(1),
+            ((height as f32 * s).round() as u32).max(1),
+        )
+    }
 }
 
 impl RenderFrame {

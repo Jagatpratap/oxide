@@ -30,6 +30,7 @@ pub mod sprites;
 pub mod ssao;
 pub mod terrain;
 pub mod text;
+pub(crate) mod upscale;
 pub mod vfx;
 
 pub use capture::{CapturedImage, capture_frame};

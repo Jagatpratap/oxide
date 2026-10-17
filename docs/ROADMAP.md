@@ -625,7 +625,7 @@ project's editor and its Scripts both link.
   ([Profiler](https://docs.unity3d.com/Manual/Profiler.html),
   [Graphics performance](https://docs.unity3d.com/Manual/graphics-performance-profiling.html),
   [Memory](https://docs.unity3d.com/Manual/performance-memory.html))
-- ☐ Quality levels / adaptive performance scaling
+- ◐ Quality levels / adaptive performance scaling: Quality levels gain Render Scale (game cameras render smaller and are stretched, bilinear or point; UI and Scene view stay full size), Texture Quality (global mipmap limit), Anisotropic Textures (Disable / Per Texture / Force Enable), an additional lights limit (brightest and nearest kept) and per-platform default levels applied to player builds ☑; Adaptive Performance: thermal state (macOS `NSProcessInfo.thermalState`), CPU/GPU frame times (GPU timestamp queries) and bottleneck detection, an indexer with Unity's Decrease / FastDecrease / Increase actions and delays, and Resolution, LOD, Shadow Distance, Shadow Quality, MSAA, Lights, Texture Quality and Framerate scalers (visual impact, targets, bounds, levels, `OverrideLevel`), events, Project Settings page, Window > Analysis > Adaptive Performance with a thermal/bottleneck simulator, `adaptive_performance` MCP tool ☑; Android/iOS thermal providers and CPU/GPU performance levels (need those platforms) ☐
   ([Runtime performance scaling](https://docs.unity3d.com/Manual/runtime-performance-scaling.html))
 - ☐ Project auditor (static checks)
   ([Project Auditor](https://docs.unity3d.com/Manual/project-auditor/project-auditor.html))
