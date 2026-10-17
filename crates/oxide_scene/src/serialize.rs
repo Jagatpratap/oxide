@@ -104,6 +104,10 @@ pub struct SceneFile {
     /// Scene lighting and environment (`RenderSettings` fields).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub render_settings: BTreeMap<String, Value>,
+    /// GUID of every asset file referenced here (Unity's GUID references). References are
+    /// written as paths; when a path no longer exists, its GUID finds where the asset went.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub guids: BTreeMap<String, String>,
 }
 
 pub const SCENE_FORMAT: u32 = 1;
@@ -166,6 +170,46 @@ impl SceneFile {
                 None => k,
             };
             self.prefabs.insert(key, file);
+        }
+        n
+    }
+
+    /// Every asset path referenced (fields, prefab links, base, nested prefabs).
+    pub fn asset_paths(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut copy = self.clone();
+        copy.remap_asset_paths(&mut |p| {
+            out.push(p.to_owned());
+            None
+        });
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// Fills [`guids`](Self::guids) from the project's AssetDatabase.
+    pub fn record_guids(&mut self, db: &oxide_assets::database::AssetDatabase) {
+        let paths = self.asset_paths();
+        self.guids = db.guid_table(paths.iter().map(String::as_str));
+    }
+
+    /// Points references to assets that moved (outside the editor) at their new paths, using
+    /// the GUID table. Returns how many changed.
+    pub fn fix_moved_assets(&mut self, db: &oxide_assets::database::AssetDatabase) -> usize {
+        if self.guids.is_empty() || !db.is_scanned() {
+            return 0;
+        }
+        let guids = self.guids.clone();
+        let n = self.remap_asset_paths(&mut |p| {
+            db.resolve(
+                p,
+                guids
+                    .get(oxide_assets::database::file_of(p))
+                    .map(String::as_str),
+            )
+        });
+        if n > 0 {
+            self.record_guids(db);
         }
         n
     }
@@ -286,6 +330,7 @@ impl World {
             objects,
             prefabs: BTreeMap::new(),
             render_settings: BTreeMap::new(),
+            guids: BTreeMap::new(),
         }
     }
 

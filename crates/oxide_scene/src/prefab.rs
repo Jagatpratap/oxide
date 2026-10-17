@@ -620,7 +620,10 @@ impl World {
             None => {
                 let text = std::fs::read_to_string(&full)
                     .map_err(|e| format!("cannot read prefab {}: {e}", full.display()))?;
-                let f = SceneFile::from_yaml(&text).map_err(|e| format!("{path}: {e}"))?;
+                let mut f = SceneFile::from_yaml(&text).map_err(|e| format!("{path}: {e}"))?;
+                if let Some(fixed) = self.with_moved_assets_fixed(&f) {
+                    f = fixed;
+                }
                 self.resource_mut::<PrefabCache>()
                     .files
                     .insert(path.to_owned(), (mtime, f.clone()));
@@ -679,6 +682,8 @@ impl World {
         if let Some(dir) = full.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
+        let mut file = file.clone();
+        self.record_guids(&mut file);
         std::fs::write(&full, file.to_yaml()?)
             .map_err(|e| format!("cannot write {}: {e}", full.display()))?;
         if let Some(c) = self.try_resource_mut::<PrefabCache>() {
@@ -833,7 +838,25 @@ impl World {
         let full = self.prefab_full_path(path);
         let text = std::fs::read_to_string(&full)
             .map_err(|e| format!("cannot read prefab {}: {e}", full.display()))?;
-        SceneFile::from_yaml(&text)
+        let f = SceneFile::from_yaml(&text)?;
+        Ok(self.with_moved_assets_fixed(&f).unwrap_or(f))
+    }
+
+    /// A copy of `file` with references to assets that moved outside the editor pointed at
+    /// their new paths (by GUID), or `None` if nothing moved.
+    pub fn with_moved_assets_fixed(&self, file: &SceneFile) -> Option<SceneFile> {
+        let db = &self.try_resource::<oxide_assets::AssetServer>()?.database;
+        let mut f = file.clone();
+        (f.fix_moved_assets(db) > 0).then_some(f)
+    }
+
+    /// Records the GUIDs of the assets `file` refers to (before writing it).
+    pub fn record_guids(&self, file: &mut SceneFile) {
+        if let Some(a) = self.try_resource::<oxide_assets::AssetServer>()
+            && a.database.is_scanned()
+        {
+            file.record_guids(&a.database);
+        }
     }
 
     /// Prefab contents used by instances in this scene (embedded when the scene is saved).

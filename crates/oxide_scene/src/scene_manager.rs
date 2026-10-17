@@ -251,6 +251,8 @@ impl World {
         path: &str,
         additive: bool,
     ) -> (SceneHandle, Vec<String>) {
+        let fixed = self.with_moved_assets_fixed(file);
+        let file = fixed.as_ref().unwrap_or(file);
         let mut warnings = self.load_assets_of(file);
         let handle = if additive {
             self.create_scene(&file.name, Some(path))

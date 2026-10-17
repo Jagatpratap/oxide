@@ -160,7 +160,8 @@ pause/step advances exactly N frames. Checked live over MCP, including screensho
   keep it; `SceneManager.GetActiveScene/SetActiveScene`; MCP `editor_scenes`)
   ([Scenes](https://docs.unity3d.com/Manual/working-with-scenes.html),
   [Multi-scene](https://docs.unity3d.com/Manual/MultiSceneEditing.html))
-- ◐ Text YAML scene format with fileIDs + GUID references
+- ☑ Text YAML scene format with fileIDs + GUID references (asset references stay readable paths; each scene
+  and prefab records the GUID of every asset it uses, so references survive assets moved outside the editor)
   ([Text-based scene files](https://docs.unity3d.com/Manual/TextSceneFormat.html),
   [UnityYAML](https://docs.unity3d.com/Manual/UnityYAML.html))
 - ☑ Prefabs: create, instantiate, nested, variants, overrides, apply/revert, unpack
@@ -237,7 +238,12 @@ MCP: `editor_*` tools drive all of it (`editor_project`, `editor_shortcuts`, `ed
 toggle, Rect tool for multiple objects at once (it resizes the active object).
 
 ### P3 — Asset pipeline
-- ☐ AssetDatabase with GUIDs, `.meta` files, Library cache, dependency tracking
+- ☑ AssetDatabase with GUIDs (`oxide_assets::database`): every file and folder under `Assets/` gets a
+  `.meta` with a 32-digit `guid` (other `.meta` fields kept), scan cached in `Library/AssetDatabase.yaml`,
+  moves made outside the editor (Finder, git) detected by GUID and their references fixed in every text asset,
+  copied `.meta` files get new GUIDs, orphan `.meta` files removed, duplicates get fresh GUIDs;
+  `GUIDToAssetPath` / `AssetPathToGUID` / `FindAssets` (`t:Type`, folders) / `GetDependencies` (recursive) /
+  dependents; refreshed at editor start and every 3 s; MCP `asset_database`
   ([Asset Database](https://docs.unity3d.com/Manual/AssetDatabase.html),
   [Caching](https://docs.unity3d.com/Manual/importing-caching-assets.html))
 - ◐ Importers: textures (PNG/JPG/TGA/EXR/HDR/PSD-flat), models (glTF, FBX, OBJ), audio (WAV/OGG/MP3/FLAC), fonts, shaders

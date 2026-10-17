@@ -383,6 +383,8 @@ pub struct EditorState {
     pub unloaded_scenes: Vec<String>,
     /// The scene the Save Scene As dialog saves.
     save_as_scene: SceneHandle,
+    /// Last AssetDatabase refresh (realtime seconds).
+    db_synced: f64,
     /// Requested from inside window code; applied after the UI pass.
     pub actions: Vec<Action>,
     /// Scene view NavMesh display options (Navigation window).
@@ -458,6 +460,7 @@ impl EditorState {
             dirty_scenes: HashSet::new(),
             unloaded_scenes: Vec::new(),
             save_as_scene: SceneHandle::MAIN,
+            db_synced: 0.0,
             actions: Vec::new(),
             nav_display: Default::default(),
             nav_window: Default::default(),
@@ -1077,9 +1080,10 @@ impl Editor {
                 st.dirty_scenes.remove(&h);
                 st.dirty = !st.dirty_scenes.is_empty();
                 if let (Some(p), false) = (sc.path.clone(), remove)
-                    && !st.unloaded_scenes.contains(&p) {
-                        st.unloaded_scenes.push(p);
-                    }
+                    && !st.unloaded_scenes.contains(&p)
+                {
+                    st.unloaded_scenes.push(p);
+                }
                 launch::remember_scene_setup(w, &st.unloaded_scenes);
                 format!(
                     "{} {}",
@@ -1356,6 +1360,10 @@ impl Editor {
                 String::new()
             }
             Action::RefreshAssets => {
+                if let Some(msg) = asset_ops::refresh_database(st, engine) {
+                    debug_log!("{msg}");
+                }
+                let w = &mut engine.world;
                 let n = w.resource_mut::<AssetServer>().reload_changed().len();
                 st.project.invalidate();
                 st.previews.clear();
@@ -2057,8 +2065,23 @@ impl Shell for Editor {
         project::sync_asset_types(&engine.world.resource::<oxide_assets::AssetServer>().types);
         // Terrain tool edits queued by the Inspector.
         terrain_tools::apply_commands(&mut self.st, engine);
-        // Curve / gradient preset libraries for the Curve and Gradient Editors.
+        // AssetDatabase: GUIDs for new assets, references to assets moved outside the editor.
         let now = oxide_core::time::realtime_since_startup();
+        if let Some(r) = engine.world.resources.remove::<launch::StartupRefresh>() {
+            self.st.db_synced = now;
+            if let Some(msg) = asset_ops::apply_refresh(&mut self.st, engine, &r.0) {
+                debug_log!("{msg}");
+            }
+        } else if self.st.prefs.auto_refresh
+            && self.st.play == PlayState::Edit
+            && now - self.st.db_synced > 3.0
+        {
+            self.st.db_synced = now;
+            if let Some(msg) = asset_ops::refresh_database(&mut self.st, engine) {
+                debug_log!("{msg}");
+            }
+        }
+        // Curve / gradient preset libraries for the Curve and Gradient Editors.
         if now - self.st.presets_synced > 1.0 {
             self.st.presets_synced = now;
             curve_editor::sync_presets(engine.world.resource_mut::<oxide_assets::AssetServer>());

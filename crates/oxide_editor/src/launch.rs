@@ -86,7 +86,16 @@ fn initial_scene(project: &Path, arg: Option<String>) -> Option<String> {
 /// Opens the editor's first scene: `scene` if given, otherwise the scene setup from the
 /// last session (main scene, additive and unloaded scenes, active scene), otherwise
 /// `Assets/Scenes/Main.scene`, otherwise a new default scene.
+/// The editor's first AssetDatabase scan (before the first scene loads, so references to
+/// assets moved while the editor was closed resolve); the editor fixes files on its first frame.
+pub struct StartupRefresh(pub oxide_assets::database::RefreshReport);
+
 pub fn load_initial_scenes(world: &mut oxide_scene::World, project: &Path, scene: Option<String>) {
+    let report = world
+        .resource_mut::<oxide_assets::AssetServer>()
+        .database
+        .refresh();
+    world.resources.insert(StartupRefresh(report));
     // The saved multi-scene setup applies only when reopening the last scene.
     let (additive, unloaded, active) = if scene.is_none() {
         saved_setup(project)

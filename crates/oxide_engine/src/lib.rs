@@ -12,6 +12,7 @@ pub mod input_map;
 pub mod lens_flares;
 pub mod lighting;
 pub mod mcp_animation;
+pub mod mcp_asset_database;
 pub mod mcp_audio;
 pub mod mcp_constraints;
 pub mod mcp_data_assets;
@@ -364,6 +365,7 @@ pub fn save_scene_as(
     if let Some(dir) = full.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
+    world.record_guids(&mut file);
     let yaml = file.to_yaml()?;
     std::fs::write(&full, yaml).map_err(|e| format!("cannot write {}: {e}", full.display()))?;
     world.set_scene_path(scene, &name, path);

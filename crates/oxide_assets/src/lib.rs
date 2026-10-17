@@ -14,6 +14,7 @@ pub mod anim_files;
 pub mod animation;
 pub mod animator_controller;
 pub mod asset_types;
+pub mod database;
 pub mod gltf_import;
 pub mod handle;
 pub mod ktx2_import;

@@ -429,3 +429,45 @@ fn active_scene_receives_new_objects_and_falls_back_on_unload() {
     let b = w.create("B");
     assert_eq!(w.get(b).unwrap().scene(), SceneHandle::MAIN);
 }
+
+#[test]
+fn scene_guid_table_finds_assets_moved_outside_the_editor() {
+    use oxide_assets::database::AssetDatabase;
+    let dir = std::env::temp_dir().join(format!("oxide_scene_guids_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("Assets/Materials")).unwrap();
+    std::fs::write(dir.join("Assets/Materials/Red.mat"), "a: 1\n").unwrap();
+    let mut db = AssetDatabase::new(&dir);
+    db.refresh();
+
+    let mut w = world();
+    let a = w.create("A");
+    w.add_component(
+        a,
+        MeshRenderer {
+            materials: vec![oxide_assets::Handle::from_path("Assets/Materials/Red.mat")],
+            ..Default::default()
+        },
+    );
+    let mut file = w.serialize(&[], "S");
+    file.record_guids(&db);
+    assert_eq!(file.guids.len(), 1);
+    let mut back = SceneFile::from_yaml(&file.to_yaml().unwrap()).unwrap();
+
+    std::fs::create_dir_all(dir.join("Assets/Art")).unwrap();
+    std::fs::rename(
+        dir.join("Assets/Materials/Red.mat"),
+        dir.join("Assets/Art/Blue.mat"),
+    )
+    .unwrap();
+    std::fs::rename(
+        dir.join("Assets/Materials/Red.mat.meta"),
+        dir.join("Assets/Art/Blue.mat.meta"),
+    )
+    .unwrap();
+    let mut db = AssetDatabase::new(&dir);
+    db.refresh();
+    assert_eq!(back.fix_moved_assets(&db), 1);
+    assert_eq!(back.asset_paths(), vec!["Assets/Art/Blue.mat".to_owned()]);
+    assert!(back.guids.contains_key("Assets/Art/Blue.mat"));
+}

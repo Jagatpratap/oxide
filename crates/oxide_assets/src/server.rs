@@ -39,7 +39,7 @@ pub fn labels_in_meta(text: &str) -> Vec<String> {
 }
 
 /// `.meta` fields that belong to every asset rather than to an importer.
-const META_KEYS: &[&str] = &["labels"];
+const META_KEYS: &[&str] = &["labels", "guid"];
 
 pub struct AssetServer {
     /// Project folder; asset paths like `Assets/x.png` are relative to it.
@@ -67,6 +67,9 @@ pub struct AssetServer {
     pub types: crate::asset_types::AssetTypeRegistry,
     /// Loaded data assets (Unity ScriptableObjects): Physics Materials, Volume Profiles, ...
     pub data: crate::asset_types::DataAssets,
+    /// GUIDs of every asset under `Assets/` (Unity's AssetDatabase). Scanned by the editor
+    /// ([`AssetDatabase::refresh`](crate::database::AssetDatabase::refresh)); empty in players.
+    pub database: crate::database::AssetDatabase,
     /// Modification times of files read, for [`AssetServer::reload_changed`].
     mtimes: std::sync::Mutex<std::collections::HashMap<String, std::time::SystemTime>>,
 }
@@ -77,8 +80,10 @@ impl AssetServer {
     /// Creates the stores and registers the built-in assets (primitive meshes, default
     /// material, white/black/normal textures).
     pub fn new(root: impl Into<PathBuf>) -> Self {
+        let root: PathBuf = root.into();
         let mut s = Self {
-            root: root.into(),
+            database: crate::database::AssetDatabase::new(root.clone()),
+            root,
             meshes: Assets::default(),
             materials: Assets::default(),
             textures: Assets::default(),

@@ -1,9 +1,10 @@
 //! Asset file operations for the Project window: rename, move, duplicate, delete and
 //! "Reveal in Finder". Each asset's `.meta` file goes with it.
 //!
-//! Oxide refers to assets by path (there are no GUIDs yet), so moving or renaming an asset
-//! rewrites the references to it: in scene, prefab and material files, in project
-//! settings, in the open scene and in the Undo history.
+//! Assets have GUIDs in their `.meta` files (Unity's AssetDatabase), but references are
+//! written as paths, so moving or renaming an asset rewrites the references to it: in every
+//! text asset, in project settings, in the open scene and in the Undo history. Assets moved
+//! outside the editor are found by GUID on the next refresh and fixed the same way.
 //! Reference: <https://docs.unity3d.com/Manual/AssetWorkflow.html>
 
 use crate::EditorState;
@@ -11,8 +12,38 @@ use oxide_assets::AssetServer;
 use oxide_engine::Engine;
 use std::path::{Path, PathBuf};
 
-/// Text asset files that can hold references to other assets.
-const REFERENCING: [&str; 6] = ["scene", "prefab", "mat", "asset", "controller", "yaml"];
+/// Binary asset files, which never hold references to other assets; every other file under
+/// `Assets/` that parses as YAML is checked.
+const BINARY: [&str; 28] = [
+    "png",
+    "jpg",
+    "jpeg",
+    "tga",
+    "bmp",
+    "hdr",
+    "exr",
+    "ktx2",
+    "psd",
+    "tif",
+    "tiff",
+    "glb",
+    "fbx",
+    "obj",
+    "wav",
+    "ogg",
+    "mp3",
+    "flac",
+    "ttf",
+    "otf",
+    "bytes",
+    "terraindata",
+    "navmesh",
+    "lightmap",
+    "mp4",
+    "webm",
+    "dylib",
+    "so",
+];
 
 /// `p` after `old` moved to `new` (`old` itself, a sub-asset `old#mesh0`, or a file inside
 /// the moved folder `old/x.png`), or `None` if `p` doesn't refer to it.
@@ -36,7 +67,16 @@ fn remap_yaml(v: &mut serde_yaml_ng::Value, old: &str, new: &str) -> usize {
             None => 0,
         },
         Y::Sequence(items) => items.iter_mut().map(|i| remap_yaml(i, old, new)).sum(),
-        Y::Mapping(m) => m.iter_mut().map(|(_, i)| remap_yaml(i, old, new)).sum(),
+        Y::Mapping(m) => {
+            // Keys too: GUID tables and prefab snapshots are keyed by asset path.
+            let mut n = 0;
+            let entries: Vec<(Y, Y)> = std::mem::take(m).into_iter().collect();
+            for (mut k, mut v) in entries {
+                n += remap_yaml(&mut k, old, new) + remap_yaml(&mut v, old, new);
+                m.insert(k, v);
+            }
+            n
+        }
         Y::Tagged(t) => remap_yaml(&mut t.value, old, new),
         _ => 0,
     }
@@ -118,7 +158,7 @@ fn fix_files(root: &Path, old: &str, new: &str) -> Vec<String> {
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_ascii_lowercase();
-        if !REFERENCING.contains(&ext.as_str()) {
+        if BINARY.contains(&ext.as_str()) || ext == "meta" || ext == "rs" {
             continue;
         }
         let Ok(text) = std::fs::read_to_string(&f) else {
@@ -188,7 +228,26 @@ pub fn move_asset(
     if meta(&from).exists() {
         let _ = std::fs::rename(meta(&from), meta(&to));
     }
+    engine
+        .world
+        .resource_mut::<AssetServer>()
+        .database
+        .moved(old, new);
+    let (files, refs) = update_references(st, engine, old, new);
+    Ok(format!(
+        "Moved {old} to {new} ({files} files and {refs} scene references updated)"
+    ))
+}
 
+/// After `old` moved to `new` (by the editor or outside it): rewrites references in files on
+/// disk, loaded materials, the open scenes and the Undo history. Returns (files, scene refs).
+pub fn update_references(
+    st: &mut EditorState,
+    engine: &mut Engine,
+    old: &str,
+    new: &str,
+) -> (usize, usize) {
+    let root = engine.world.resource::<AssetServer>().full_path("");
     let files = fix_files(&root, old, new);
     // Loaded materials that pointed at the moved asset pick up the new path.
     let assets = engine.world.resource_mut::<AssetServer>();
@@ -222,10 +281,53 @@ pub fn move_asset(
     if let Some(n) = remap(&st.project.folder, old, new) {
         st.project.folder = n;
     }
-    Ok(format!(
-        "Moved {old} to {new} ({} files and {refs} scene references updated)",
-        files.len()
-    ))
+    (files.len(), refs)
+}
+
+/// Scans `Assets/` for new, moved and deleted assets (Unity's AssetDatabase.Refresh) and
+/// fixes references to assets moved outside the editor. Returns a summary, or `None` if
+/// nothing changed.
+pub fn refresh_database(st: &mut EditorState, engine: &mut Engine) -> Option<String> {
+    let report = engine
+        .world
+        .resource_mut::<AssetServer>()
+        .database
+        .refresh();
+    apply_refresh(st, engine, &report)
+}
+
+/// Fixes references after a refresh found moved assets; a summary if anything changed.
+pub fn apply_refresh(
+    st: &mut EditorState,
+    engine: &mut Engine,
+    report: &oxide_assets::database::RefreshReport,
+) -> Option<String> {
+    let mut fixed = 0;
+    for (old, new) in &report.moved {
+        let (f, r) = update_references(st, engine, old, new);
+        fixed += f + r;
+        oxide_core::debug_log!("{old} was moved to {new}; updated {} references", f + r);
+    }
+    for p in &report.new_guids {
+        oxide_core::debug_log_warning!(
+            "{p} had a copy of another asset's .meta; it got a new GUID"
+        );
+    }
+    let changed = !report.moved.is_empty()
+        || !report.imported.is_empty()
+        || !report.deleted.is_empty()
+        || !report.new_guids.is_empty();
+    if changed {
+        st.project.invalidate();
+    }
+    changed.then(|| {
+        format!(
+            "Asset database: {} new, {} moved ({fixed} references updated), {} deleted",
+            report.imported.len(),
+            report.moved.len(),
+            report.deleted.len()
+        )
+    })
 }
 
 /// Copies an asset or folder (with `.meta` files) next to itself. Returns the new path.
@@ -236,7 +338,28 @@ pub fn duplicate_asset(root: &Path, path: &str) -> Result<String, String> {
     if meta.is_file() {
         let _ = std::fs::copy(meta, root.join(format!("{new}.meta")));
     }
+    // The copy keeps the import settings and labels but needs GUIDs of its own; the next
+    // AssetDatabase refresh gives it new ones.
+    strip_guids(&root.join(format!("{new}.meta")));
+    let mut metas = Vec::new();
+    walk(&root.join(&new), &mut metas, 0);
+    for m in metas
+        .iter()
+        .filter(|m| m.extension().is_some_and(|e| e == "meta"))
+    {
+        strip_guids(m);
+    }
     Ok(new)
+}
+
+fn strip_guids(meta: &Path) {
+    let Ok(text) = std::fs::read_to_string(meta) else {
+        return;
+    };
+    let kept: Vec<&str> = text.lines().filter(|l| !l.starts_with("guid:")).collect();
+    if kept.len() != text.lines().count() {
+        let _ = std::fs::write(meta, kept.join("\n") + "\n");
+    }
 }
 
 fn copy(from: &Path, to: &Path) -> Result<(), String> {
