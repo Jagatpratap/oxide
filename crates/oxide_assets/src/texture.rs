@@ -45,7 +45,30 @@ pub enum TextureCompression {
     HighQuality,
 }
 
-/// GPU block-compressed formats (4×4 blocks).
+/// Unity `TextureImporterShape`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Reflect)]
+pub enum TextureShape {
+    #[default]
+    Texture2D,
+    /// Six faces made from the image ([`CubemapMapping`]): a [`TextureCube`] asset.
+    Cube,
+    /// Layers cut from a grid of cells (Columns × Rows): a [`Texture2DArray`] asset.
+    Texture2DArray,
+}
+
+/// Unity cubemap "Mapping": how the image holds the six faces.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Reflect)]
+pub enum CubemapMapping {
+    /// From the aspect ratio: 6 frames (cross, strip) or a 2:1 panorama.
+    #[default]
+    Auto,
+    /// A horizontal or vertical cross, or a row or column of six faces.
+    SixFramesLayout,
+    /// An equirectangular (latitude-longitude) panorama.
+    LatitudeLongitude,
+}
+
+/// GPU block-compressed formats.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Reflect)]
 pub enum CompressedFormat {
     Bc1,
@@ -54,6 +77,95 @@ pub enum CompressedFormat {
     Bc5,
     Bc7,
     Astc4x4,
+    Astc6x6,
+    Astc8x8,
+    /// ETC2 RGB (4 bits per pixel; ETC1 blocks are valid ETC2).
+    Etc2Rgb8,
+    /// ETC2 RGB plus an EAC alpha block (8 bits per pixel).
+    Etc2Rgba8,
+    /// One channel (EAC R11).
+    EacR11,
+    /// Two channels (EAC RG11), for normal maps.
+    EacRg11,
+}
+
+impl CompressedFormat {
+    /// Block size in pixels.
+    pub fn block(self) -> (u32, u32) {
+        match self {
+            CompressedFormat::Astc6x6 => (6, 6),
+            CompressedFormat::Astc8x8 => (8, 8),
+            _ => (4, 4),
+        }
+    }
+}
+
+/// Unity `TextureImporterFormat`: a platform's explicit texture format.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Reflect)]
+pub enum TextureImporterFormat {
+    /// The platform's default for the Compression setting.
+    #[default]
+    Automatic,
+    RGBA32,
+    DXT1,
+    DXT5,
+    BC4,
+    BC5,
+    BC7,
+    Etc2Rgb4,
+    Etc2Rgba8,
+    EacR,
+    EacRg,
+    Astc4x4,
+    Astc6x6,
+    Astc8x8,
+}
+
+/// The platform textures are imported for (Unity's build target groups).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Reflect)]
+pub enum BuildTarget {
+    /// Windows, macOS and Linux.
+    #[default]
+    Standalone,
+    Android,
+    IOS,
+    WebGL,
+}
+
+impl BuildTarget {
+    /// The platform this program runs on.
+    pub fn current() -> Self {
+        if cfg!(target_os = "android") {
+            BuildTarget::Android
+        } else if cfg!(target_os = "ios") {
+            BuildTarget::IOS
+        } else if cfg!(target_arch = "wasm32") {
+            BuildTarget::WebGL
+        } else {
+            BuildTarget::Standalone
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            BuildTarget::Standalone => "Standalone",
+            BuildTarget::Android => "Android",
+            BuildTarget::IOS => "iOS",
+            BuildTarget::WebGL => "WebGL",
+        }
+    }
+}
+
+/// Unity `TextureImporterPlatformSettings`: a platform's override of the import settings.
+#[derive(Clone, Debug, Default, PartialEq, Reflect)]
+#[reflect(default)]
+pub struct TexturePlatformSettings {
+    pub platform: BuildTarget,
+    /// Off: the platform uses the default settings.
+    pub overridden: bool,
+    pub max_texture_size: u32,
+    pub format: TextureImporterFormat,
+    pub compression: TextureCompression,
 }
 
 /// A texture's block-compressed mip chain (what the GPU gets when it supports the format).
@@ -90,6 +202,15 @@ pub struct TextureImporter {
     pub sprite_border: oxide_math::Vector4,
     /// Multiple: the slices (Sprite Editor).
     pub sprites: Vec<crate::sprite::SpriteRect>,
+    /// 2D, Cube or 2D Array (Unity "Texture Shape").
+    pub texture_shape: TextureShape,
+    /// Cube: how the image holds the faces.
+    pub cubemap_mapping: CubemapMapping,
+    /// 2D Array: the grid of layers (left to right, top to bottom).
+    pub columns: u32,
+    pub rows: u32,
+    /// Per-platform overrides (Unity's platform tabs: max size, format, compression).
+    pub platform_settings: Vec<TexturePlatformSettings>,
 }
 
 impl Default for TextureImporter {
@@ -108,11 +229,66 @@ impl Default for TextureImporter {
             sprite_pivot: oxide_math::Vector2::new(0.5, 0.5),
             sprite_border: oxide_math::Vector4::ZERO,
             sprites: Vec::new(),
+            texture_shape: TextureShape::Texture2D,
+            cubemap_mapping: CubemapMapping::Auto,
+            columns: 1,
+            rows: 1,
+            platform_settings: Vec::new(),
         }
     }
 }
 
 impl TextureImporter {
+    /// The settings a platform imports with: its override, else the defaults.
+    pub fn platform(&self, target: BuildTarget) -> TexturePlatformSettings {
+        self.platform_settings
+            .iter()
+            .find(|p| p.platform == target && p.overridden)
+            .cloned()
+            .unwrap_or(TexturePlatformSettings {
+                platform: target,
+                overridden: false,
+                max_texture_size: self.max_size,
+                format: TextureImporterFormat::Automatic,
+                compression: self.compression,
+            })
+    }
+
+    /// Max size and GPU format for a platform (`None`: uncompressed RGBA8).
+    pub fn resolve(&self, target: BuildTarget, has_alpha: bool) -> (u32, Option<CompressedFormat>) {
+        use CompressedFormat as C;
+        use TextureImporterFormat as F;
+        let p = self.platform(target);
+        let normal = self.texture_type == TextureImporterType::NormalMap;
+        let format = match p.format {
+            F::Automatic => match (target, p.compression) {
+                (_, TextureCompression::None) => None,
+                // Unity's mobile default: ASTC, block size by quality.
+                (BuildTarget::Android | BuildTarget::IOS, q) => Some(match q {
+                    TextureCompression::LowQuality => C::Astc8x8,
+                    TextureCompression::HighQuality => C::Astc4x4,
+                    _ if normal => C::Astc4x4,
+                    _ => C::Astc6x6,
+                }),
+                (_, q) => crate::texture_compress::choose_format(q, self.texture_type, has_alpha),
+            },
+            F::RGBA32 => None,
+            F::DXT1 => Some(C::Bc1),
+            F::DXT5 => Some(C::Bc3),
+            F::BC4 => Some(C::Bc4),
+            F::BC5 => Some(C::Bc5),
+            F::BC7 => Some(C::Bc7),
+            F::Etc2Rgb4 => Some(C::Etc2Rgb8),
+            F::Etc2Rgba8 => Some(C::Etc2Rgba8),
+            F::EacR => Some(C::EacR11),
+            F::EacRg => Some(C::EacRg11),
+            F::Astc4x4 => Some(C::Astc4x4),
+            F::Astc6x6 => Some(C::Astc6x6),
+            F::Astc8x8 => Some(C::Astc8x8),
+        };
+        (p.max_texture_size.max(1), format)
+    }
+
     /// Defaults for a file, guessing data maps from its name like before (normal maps are
     /// Normal Map type; masks, roughness, metallic and height are linear).
     pub fn guess(path: &str) -> Self {

@@ -351,9 +351,14 @@ from the fixed edge and each object along its matching local axis).
   probes only), Unlit, Particles, Sprite, Skybox; all work in Forward+ and Deferred; the material Inspector shows
   each shader's own inputs
   ([Prebuilt materials and shaders](https://docs.unity3d.com/Manual/built-in-materials-and-shaders.html))
-- ◐ Textures: mipmaps, import-time BC7/BC5/BC1/BC3 compression (Intel ISPC, cached in
-  `Library/TextureCache`), KTX2 load/save (BC1–7, ASTC 4×4, RGBA8, Zstandard), sampler states,
-  Render Textures + `Camera.targetTexture` ☑; ETC2, Basis Universal, user cubemap/array assets ☐
+- ☑ Textures: mipmaps, import-time compression cached in `Library/TextureCache` — BC7/BC5/BC1/BC3/BC4
+  (Intel ISPC) on desktop, ASTC 4×4/6×6/8×8 (Oxide's own encoder) and ETC2 RGB/RGBA + EAC R/RG (Oxide's ETC1
+  and EAC encoders) for mobile, all checked against GPU hardware decoders; Texture Importer platform tabs
+  (Standalone/Android/iOS/WebGL overrides of max size, format, compression; Unity's mobile ASTC default) and
+  the active build target; Texture Shape Cube (horizontal/vertical cross, strips, latitude-longitude
+  panorama) and 2D Array (columns × rows) making `Cubemap` / `Texture2DArray` assets uploaded as cube and
+  array views; KTX2 load/save (BC, ASTC, ETC2/EAC, RGBA8, Zstandard), sampler states, Render Textures +
+  `Camera.targetTexture`. Not yet: Basis Universal, 3D textures
   ([Textures](https://docs.unity3d.com/Manual/Textures-landing.html))
 - ☑ Linear color space, HDR render targets
   ([Color and HDR](https://docs.unity3d.com/Manual/graphics-color.html))

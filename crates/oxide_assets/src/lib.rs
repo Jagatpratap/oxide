@@ -14,6 +14,8 @@ pub mod anim_files;
 pub mod animation;
 pub mod animator_controller;
 pub mod asset_types;
+pub mod astc;
+pub mod cubemap;
 pub mod database;
 pub mod fbx_import;
 pub mod gltf_import;
@@ -51,6 +53,7 @@ pub use animator_controller::{
     StatePath, SyncedMotion, Transition, TransitionSource, TransitionTarget,
 };
 pub use asset_types::{AssetTypeInfo, AssetTypeRegistry, CreateKind, DataAsset, DataAssets};
+pub use cubemap::{CubemapFace, Texture2DArray, TextureCube};
 pub use handle::{Asset, AssetId, Assets, Handle};
 pub use material::{Material, MaterialProperty, ShaderKind, SurfaceType, WorkflowMode};
 pub use mesh::Mesh;
@@ -67,8 +70,9 @@ pub use terrain::{
     TerrainVersions, TreeInstance, TreePrototype, WindSettings,
 };
 pub use texture::{
-    CompressedFormat, CompressedMips, FilterMode, Texture2D, TextureCompression, TextureImporter,
-    TextureImporterType, TextureWrapMode,
+    BuildTarget, CompressedFormat, CompressedMips, CubemapMapping, FilterMode, Texture2D,
+    TextureCompression, TextureImporter, TextureImporterFormat, TextureImporterType,
+    TexturePlatformSettings, TextureShape, TextureWrapMode,
 };
 
 /// Whether `path` is a model file the importer reads (glTF, FBX, OBJ).

@@ -26,11 +26,12 @@ impl fmt::Display for GpuError {
 impl std::error::Error for GpuError {}
 
 /// Block-compressed texture formats the adapter supports (BC on desktop and Apple GPUs,
-/// ASTC on mobile and Apple GPUs).
+/// ASTC and ETC2 on mobile and Apple GPUs).
 fn compression_features(adapter: &wgpu::Adapter) -> wgpu::Features {
     adapter.features()
         & (wgpu::Features::TEXTURE_COMPRESSION_BC
             | wgpu::Features::TEXTURE_COMPRESSION_ASTC
+            | wgpu::Features::TEXTURE_COMPRESSION_ETC2
             // Scene view wireframe draw modes.
             | wgpu::Features::POLYGON_MODE_LINE)
 }

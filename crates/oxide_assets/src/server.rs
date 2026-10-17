@@ -47,6 +47,13 @@ pub struct AssetServer {
     pub meshes: Assets<Mesh>,
     pub materials: Assets<Material>,
     pub textures: Assets<Texture2D>,
+    /// Textures imported with Texture Shape Cube (at the texture's path).
+    pub cubemaps: Assets<crate::cubemap::TextureCube>,
+    /// Textures imported with Texture Shape 2D Array (at the texture's path).
+    pub texture_arrays: Assets<crate::cubemap::Texture2DArray>,
+    /// The platform textures are imported for (platform overrides; Unity's active build
+    /// target).
+    pub build_target: crate::texture::BuildTarget,
     pub models: Assets<Model>,
     pub animations: Assets<AnimationClip>,
     pub controllers: Assets<AnimatorController>,
@@ -79,7 +86,16 @@ pub struct AssetServer {
     mtimes: std::sync::Mutex<std::collections::HashMap<String, std::time::SystemTime>>,
 }
 
-type PreparedTexture = Result<(Texture2D, (u32, u32), crate::TextureImporter), String>;
+type PreparedTexture = Result<(Prepared, crate::TextureImporter), String>;
+
+/// A texture import's results: the 2D texture, the source image size, and the Cube or 2D
+/// Array made by its Texture Shape.
+struct Prepared {
+    tex: Texture2D,
+    source_size: (u32, u32),
+    cube: Option<crate::cubemap::TextureCube>,
+    array: Option<crate::cubemap::Texture2DArray>,
+}
 
 #[derive(Default)]
 struct BackgroundImports {
@@ -102,6 +118,9 @@ impl AssetServer {
             meshes: Assets::default(),
             materials: Assets::default(),
             textures: Assets::default(),
+            cubemaps: Assets::default(),
+            texture_arrays: Assets::default(),
+            build_target: crate::texture::BuildTarget::current(),
             models: Assets::default(),
             animations: Assets::default(),
             controllers: Assets::default(),
@@ -512,10 +531,8 @@ impl AssetServer {
             tex.filter_mode = imp.filter_mode;
             return Ok(self.textures.insert(path.to_owned(), tex));
         }
-        let (tex, (w, h)) = prepare_texture(&self.root, name, &bytes, &imp)?;
-        let handle = self.textures.insert(path.to_owned(), tex);
-        self.make_sprites(path, &imp, w, h);
-        Ok(handle)
+        let p = prepare_texture(&self.root, name, &bytes, &imp, self.build_target)?;
+        Ok(self.store_prepared(path, p, &imp))
     }
 
     /// Re-imports a texture on a worker thread (decode, resize, mipmaps, GPU compression);
@@ -535,6 +552,7 @@ impl AssetServer {
         let bytes = self.read(path)?;
         let imp = self.texture_importer(path);
         let root = self.root.clone();
+        let target = self.build_target;
         let queue = self.background.clone();
         let path = path.to_owned();
         std::thread::Builder::new()
@@ -545,7 +563,7 @@ impl AssetServer {
                     .and_then(|s| s.to_str())
                     .unwrap_or("texture")
                     .to_owned();
-                let r = prepare_texture(&root, &name, &bytes, &imp).map(|(t, size)| (t, size, imp));
+                let r = prepare_texture(&root, &name, &bytes, &imp, target).map(|p| (p, imp));
                 let mut q = queue.lock().expect("background lock");
                 q.in_flight.remove(&path);
                 q.done.push((path, r));
@@ -560,15 +578,43 @@ impl AssetServer {
         let mut out = Vec::new();
         for (path, r) in done {
             match r {
-                Ok((tex, (w, h), imp)) => {
-                    self.textures.insert(path.clone(), tex);
-                    self.make_sprites(&path, &imp, w, h);
+                Ok((p, imp)) => {
+                    self.store_prepared(&path, p, &imp);
                     out.push(path);
                 }
                 Err(e) => oxide_core::debug_log_error!("{e}"),
             }
         }
         out
+    }
+
+    /// Stores an imported texture and what its shape made (replacing old ones).
+    fn store_prepared(
+        &mut self,
+        path: &str,
+        p: Prepared,
+        imp: &crate::TextureImporter,
+    ) -> Handle<Texture2D> {
+        let handle = self.textures.insert(path.to_owned(), p.tex);
+        match p.cube {
+            Some(c) => {
+                self.cubemaps.insert(path.to_owned(), c);
+            }
+            None => {
+                self.cubemaps.remove(&Handle::from_path(path.to_owned()));
+            }
+        }
+        match p.array {
+            Some(a) => {
+                self.texture_arrays.insert(path.to_owned(), a);
+            }
+            None => {
+                self.texture_arrays
+                    .remove(&Handle::from_path(path.to_owned()));
+            }
+        }
+        self.make_sprites(path, imp, p.source_size.0, p.source_size.1);
+        handle
     }
 
     /// Background re-imports still running.
@@ -1058,27 +1104,100 @@ fn prepare_texture(
     name: &str,
     bytes: &[u8],
     imp: &crate::TextureImporter,
-) -> Result<(Texture2D, (u32, u32)), String> {
+    target: crate::texture::BuildTarget,
+) -> Result<Prepared, String> {
+    use crate::texture::TextureShape;
     let mut tex = Texture2D::decode(name, bytes, imp.srgb)?;
     // Sprite rects are in the source image's pixels, whatever the import size.
     let source_size = (tex.width, tex.height);
-    tex.limit_size(imp.max_size);
-    if !imp.generate_mip_maps {
-        tex.mips.truncate(1);
-    }
-    tex.wrap_mode = imp.wrap_mode;
-    tex.filter_mode = imp.filter_mode;
-    tex.aniso_level = imp.aniso_level.clamp(1, 16) as u8;
     let has_alpha = tex.mips[0].as_chunks::<4>().0.iter().any(|p| p[3] < 255);
-    let format =
-        crate::texture_compress::choose_format(imp.compression, imp.texture_type, has_alpha);
-    if let Some(format) = format
-        && tex.width % 4 == 0
-        && tex.height % 4 == 0
-    {
-        tex.compressed = Some(compressed_cached(root, bytes, imp, format, &tex));
+    let (max_size, format) = imp.resolve(target, has_alpha);
+    // Mips, sampler settings and GPU compression of one texture (`part` keeps the cache
+    // entries of a cube's faces or an array's layers apart).
+    let finish = |t: &mut Texture2D, part: u32| {
+        t.limit_size(max_size);
+        if !imp.generate_mip_maps {
+            t.mips.truncate(1);
+        }
+        t.wrap_mode = imp.wrap_mode;
+        t.filter_mode = imp.filter_mode;
+        t.aniso_level = imp.aniso_level.clamp(1, 16) as u8;
+        // GPUs need the top level in whole blocks; ASTC 6×6 / 8×8 sizes that aren't fall
+        // back to 4×4 blocks.
+        let whole = |f: crate::CompressedFormat| {
+            let (bw, bh) = f.block();
+            t.width.is_multiple_of(bw) && t.height.is_multiple_of(bh)
+        };
+        let format = format.and_then(|f| match f {
+            _ if whole(f) => Some(f),
+            crate::CompressedFormat::Astc6x6 | crate::CompressedFormat::Astc8x8
+                if whole(crate::CompressedFormat::Astc4x4) =>
+            {
+                Some(crate::CompressedFormat::Astc4x4)
+            }
+            _ => None,
+        });
+        if let Some(format) = format {
+            t.compressed = Some(compressed_cached(root, bytes, imp, format, t, part));
+        }
+    };
+    let (mut cube, mut array) = (None, None);
+    match imp.texture_shape {
+        TextureShape::Texture2D => {}
+        TextureShape::Cube => {
+            let (size, faces) = crate::cubemap::cube_faces(
+                &tex.mips[0],
+                tex.width,
+                tex.height,
+                imp.cubemap_mapping,
+            )
+            .map_err(|e| format!("{name}: {e}"))?;
+            let mut faces: Vec<Texture2D> = faces
+                .into_iter()
+                .map(|f| Texture2D::from_rgba8(name, size, size, f, imp.srgb))
+                .collect();
+            for (i, f) in faces.iter_mut().enumerate() {
+                finish(f, 1 + i as u32);
+            }
+            cube = Some(crate::cubemap::TextureCube {
+                name: name.to_owned(),
+                faces,
+            });
+        }
+        TextureShape::Texture2DArray => {
+            let (w, h, layers) = crate::cubemap::array_layers(
+                &tex.mips[0],
+                tex.width,
+                tex.height,
+                imp.columns,
+                imp.rows,
+            )
+            .map_err(|e| format!("{name}: {e}"))?;
+            let mut layers: Vec<Texture2D> = layers
+                .into_iter()
+                .map(|l| Texture2D::from_rgba8(name, w, h, l, imp.srgb))
+                .collect();
+            for (i, l) in layers.iter_mut().enumerate() {
+                finish(l, 100 + i as u32);
+            }
+            array = Some(crate::cubemap::Texture2DArray {
+                name: name.to_owned(),
+                layers,
+            });
+        }
     }
-    Ok((tex, source_size))
+    if imp.texture_shape == TextureShape::Texture2D {
+        finish(&mut tex, 0);
+    } else {
+        // The flat image stays for previews, uncompressed.
+        tex.limit_size(max_size);
+    }
+    Ok(Prepared {
+        tex,
+        source_size,
+        cube,
+        array,
+    })
 }
 
 fn compressed_cached(
@@ -1087,13 +1206,14 @@ fn compressed_cached(
     imp: &crate::TextureImporter,
     format: crate::CompressedFormat,
     tex: &Texture2D,
+    part: u32,
 ) -> crate::CompressedMips {
     use crate::texture_compress::{compress_mips, level_size};
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     source.hash(&mut h);
     format!(
-        "{imp:?} {format:?} {}x{} {} v1",
+        "{imp:?} {format:?} {}x{} {} part {part} v2",
         tex.width,
         tex.height,
         tex.mips.len()

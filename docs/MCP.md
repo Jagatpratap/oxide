@@ -136,7 +136,7 @@ only when the editor is running (not with `--player`).
 | `editor_capture` | PNG of the whole editor window (menus, Hierarchy, Scene/Game views, Inspector, ...), as the user sees it | no |
 | `reflection_probes` | Lists Reflection Probes (box, mode, refresh mode, importance) and the last frame's reflection stats (`active` = probes with a captured cubemap, up to 15; `captures` = cubemaps captured that frame, sky included). | yes |
 | `create_render_texture` | Creates a `.renderTexture` asset (Unity RenderTexture) for a Camera's `target_texture` and for materials (mirrors, screens, scopes) | yes |
-| `texture_import_settings` | Gets a texture's import settings (its `.meta` file, Unity's Texture Importer) and what the import produced (size, mips, GPU format). | yes |
+| `texture_import_settings` | Gets a texture's import settings (its `.meta` file, Unity's Texture Importer) and what the import produced (size, mips, GPU format, cube/array shape); `settings` edits them (incl. `texture_shape`, `platform_settings` overrides) and re-imports; `build_target` switches the import platform (Standalone/Android/IOS/WebGL) and re-imports textures. | yes |
 | `editor_scripts` | The project's Rust scripts: `status` (compile state, errors, script component types), `recompile`, or `create` a new script component named `name` (Unity Create > Script). | yes |
 | `editor_build` | Unity Build Settings: `status` (default), `settings` (read; or change with `scenes`, `product_name`, `width`, `height`, `fullscreen`, `output`), `build` or `build_and_run` (starts in the background; poll `status`). | yes |
 | `bake_lighting` | Unity's Lighting window: `start` bakes lightmaps and light probes in the background, `status` (progress, last result), `cancel`, `clear` | yes |

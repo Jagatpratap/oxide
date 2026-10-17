@@ -97,6 +97,9 @@ pub struct GpuMaterial {
 pub struct GpuAssets {
     pub meshes: HashMap<AssetId, GpuMesh>,
     pub textures: HashMap<AssetId, GpuTexture>,
+    /// Cubemap assets (cube views) and Texture2DArray assets (2D array views).
+    pub cubemaps: HashMap<AssetId, GpuTexture>,
+    pub texture_arrays: HashMap<AssetId, GpuTexture>,
     pub materials: HashMap<AssetId, GpuMaterial>,
     samplers: HashMap<(TextureWrapMode, FilterMode), wgpu::Sampler>,
     /// Bumped whenever any texture is (re)uploaded so dependent materials rebuild.
@@ -198,6 +201,8 @@ impl GpuAssets {
         Self {
             meshes: HashMap::new(),
             textures: HashMap::new(),
+            cubemaps: HashMap::new(),
+            texture_arrays: HashMap::new(),
             materials: HashMap::new(),
             samplers: HashMap::new(),
             texture_generation: 0,
@@ -384,6 +389,44 @@ impl GpuAssets {
             return None;
         }
         self.textures.get(&id).map(|t| &t.view)
+    }
+
+    /// GPU cube view of a Cubemap asset (uploading it if needed).
+    pub fn cubemap_view(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        assets: &AssetServer,
+        id: AssetId,
+    ) -> Option<&wgpu::TextureView> {
+        let version = assets.cubemaps.version(id)?;
+        if self.cubemaps.get(&id).is_none_or(|t| t.version != version) {
+            let c = assets.cubemaps.get_by_id(id)?;
+            let t = upload_layers(device, queue, &c.name, &c.faces, true, version)?;
+            self.cubemaps.insert(id, t);
+        }
+        self.cubemaps.get(&id).map(|t| &t.view)
+    }
+
+    /// GPU 2D-array view of a Texture2DArray asset (uploading it if needed).
+    pub fn texture_array_view(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        assets: &AssetServer,
+        id: AssetId,
+    ) -> Option<&wgpu::TextureView> {
+        let version = assets.texture_arrays.version(id)?;
+        if self
+            .texture_arrays
+            .get(&id)
+            .is_none_or(|t| t.version != version)
+        {
+            let a = assets.texture_arrays.get_by_id(id)?;
+            let t = upload_layers(device, queue, &a.name, &a.layers, false, version)?;
+            self.texture_arrays.insert(id, t);
+        }
+        self.texture_arrays.get(&id).map(|t| &t.view)
     }
 
     /// Uploads a material (and its textures). Falls back to the default material.
@@ -739,6 +782,17 @@ fn compressed_format(
     let features = device.features();
     let bc = features.contains(wgpu::Features::TEXTURE_COMPRESSION_BC);
     let astc = features.contains(wgpu::Features::TEXTURE_COMPRESSION_ASTC);
+    let etc2 = features.contains(wgpu::Features::TEXTURE_COMPRESSION_ETC2);
+    let astc_block = |block| {
+        Some(T::Astc {
+            block,
+            channel: if srgb {
+                wgpu::AstcChannel::UnormSrgb
+            } else {
+                wgpu::AstcChannel::Unorm
+            },
+        })
+    };
     match f {
         C::Bc1 if bc => Some(if srgb {
             T::Bc1RgbaUnormSrgb
@@ -757,16 +811,127 @@ fn compressed_format(
         } else {
             T::Bc7RgbaUnorm
         }),
-        C::Astc4x4 if astc => Some(T::Astc {
-            block: wgpu::AstcBlock::B4x4,
-            channel: if srgb {
-                wgpu::AstcChannel::UnormSrgb
-            } else {
-                wgpu::AstcChannel::Unorm
-            },
+        C::Astc4x4 if astc => astc_block(wgpu::AstcBlock::B4x4),
+        C::Astc6x6 if astc => astc_block(wgpu::AstcBlock::B6x6),
+        C::Astc8x8 if astc => astc_block(wgpu::AstcBlock::B8x8),
+        C::Etc2Rgb8 if etc2 => Some(if srgb {
+            T::Etc2Rgb8UnormSrgb
+        } else {
+            T::Etc2Rgb8Unorm
         }),
+        C::Etc2Rgba8 if etc2 => Some(if srgb {
+            T::Etc2Rgba8UnormSrgb
+        } else {
+            T::Etc2Rgba8Unorm
+        }),
+        C::EacR11 if etc2 => Some(T::EacR11Unorm),
+        C::EacRg11 if etc2 => Some(T::EacRg11Unorm),
         _ => None,
     }
+}
+
+/// Uploads same-size layers as one texture: a cube (six faces) or a 2D array. Uses the
+/// layers' compressed copies when they all have one in a format the GPU supports.
+fn upload_layers(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    name: &str,
+    layers: &[Texture2D],
+    cube: bool,
+    version: u64,
+) -> Option<GpuTexture> {
+    let first = layers.first()?;
+    if (cube && layers.len() != 6)
+        || layers
+            .iter()
+            .any(|l| (l.width, l.height) != (first.width, first.height))
+    {
+        oxide_core::debug_log_warning!("{name}: layers differ in size or count");
+        return None;
+    }
+    let compressed = first.compressed.as_ref().and_then(|c| {
+        let f = compressed_format(device, c.format, first.srgb)?;
+        layers
+            .iter()
+            .all(|l| {
+                l.compressed
+                    .as_ref()
+                    .is_some_and(|x| x.format == c.format && x.mips.len() == c.mips.len())
+            })
+            .then_some((f, c.mips.len() as u32))
+    });
+    let (format, mips, data) = match compressed {
+        Some((f, n)) => (
+            f,
+            n,
+            layers
+                .iter()
+                .flat_map(|l| l.compressed.as_ref().unwrap().mips.concat())
+                .collect::<Vec<u8>>(),
+        ),
+        None => {
+            if layers
+                .iter()
+                .any(|l| l.mips.len() != first.mips.len() || l.mips.is_empty())
+            {
+                oxide_core::debug_log_warning!("{name}: layers have no matching pixels");
+                return None;
+            }
+            (
+                if first.srgb {
+                    wgpu::TextureFormat::Rgba8UnormSrgb
+                } else {
+                    wgpu::TextureFormat::Rgba8Unorm
+                },
+                first.mips.len() as u32,
+                layers.iter().flat_map(|l| l.mips.concat()).collect(),
+            )
+        }
+    };
+    let tex = device.create_texture_with_data(
+        queue,
+        &wgpu::TextureDescriptor {
+            label: Some(name),
+            size: wgpu::Extent3d {
+                width: first.width,
+                height: first.height,
+                depth_or_array_layers: layers.len() as u32,
+            },
+            mip_level_count: mips,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        },
+        wgpu::util::TextureDataOrder::LayerMajor,
+        &data,
+    );
+    let view = tex.create_view(&wgpu::TextureViewDescriptor {
+        dimension: Some(if cube {
+            wgpu::TextureViewDimension::Cube
+        } else {
+            wgpu::TextureViewDimension::D2Array
+        }),
+        ..Default::default()
+    });
+    // egui previews show the first layer.
+    let ui_view = tex.create_view(&wgpu::TextureViewDescriptor {
+        dimension: Some(wgpu::TextureViewDimension::D2),
+        base_array_layer: 0,
+        array_layer_count: Some(1),
+        ..Default::default()
+    });
+    Some(GpuTexture {
+        version,
+        view,
+        ui_view,
+        wrap: first.wrap_mode,
+        filter: first.filter_mode,
+        width: first.width,
+        height: first.height,
+        render_target: false,
+    })
 }
 
 fn upload_texture(

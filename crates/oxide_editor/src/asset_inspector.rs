@@ -15,6 +15,8 @@ use std::path::Path;
 pub struct AssetInspectorState {
     /// Texture import settings being edited (applied with Apply), by asset path.
     importer: Option<(String, TextureImporter)>,
+    /// Texture importer platform tab (None: Default).
+    platform_tab: Option<oxide_assets::BuildTarget>,
     /// Text shown for scripts and shaders, by path and file time.
     text: Option<(String, Option<std::time::SystemTime>, String)>,
     new_label: String,
@@ -167,7 +169,22 @@ fn texture(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: &
     let Some((_, imp)) = slot.as_mut() else {
         return;
     };
-    crate::inspector::reflect_grid(ui, &engine.world, imp, "texture-importer");
+    // Fields of the current Texture Shape and Texture Type only.
+    let (shape, kind) = (imp.texture_shape, imp.texture_type);
+    crate::inspector::reflect_grid_where(ui, &engine.world, imp, "texture-importer", &|f| {
+        use oxide_assets::{TextureImporterType as K, TextureShape as S};
+        match f {
+            "cubemap_mapping" => shape == S::Cube,
+            "columns" | "rows" => shape == S::Texture2DArray,
+            "sprite_mode" | "pixels_per_unit" | "sprite_pivot" | "sprite_border" => {
+                kind == K::Sprite
+            }
+            // Edited in the Sprite Editor and the platform tabs below.
+            "sprites" | "platform_settings" => false,
+            _ => true,
+        }
+    });
+    platform_tabs(ui, &mut st.asset_inspector.platform_tab, imp);
     let changed = *imp != saved;
     ui.add_space(4.0);
     let mut apply = false;
@@ -219,9 +236,135 @@ fn texture(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: &
         };
         let mips = t.compressed.as_ref().map_or(t.mips.len(), |c| c.mips.len());
         ui.weak(format!(
-            "{}×{}  {format}  {mips} mip levels",
-            t.width, t.height
+            "{}×{}  {format}  {mips} mip levels  ({} build)",
+            t.width,
+            t.height,
+            assets.build_target.name()
         ));
+    }
+    let id = oxide_assets::Handle::<oxide_assets::TextureCube>::from_path(path.to_owned());
+    if let Some(c) = assets.cubemaps.get(&id) {
+        let format = c.faces[0]
+            .compressed
+            .as_ref()
+            .map_or("RGBA32".into(), |c| format!("{:?}", c.format));
+        ui.weak(format!("Cubemap: 6 faces of {0}×{0}  {format}", c.size()));
+    }
+    let id = oxide_assets::Handle::<oxide_assets::Texture2DArray>::from_path(path.to_owned());
+    if let Some(a) = assets.texture_arrays.get(&id) {
+        ui.weak(format!(
+            "2D Array: {} layers of {}×{}",
+            a.depth(),
+            a.layers[0].width,
+            a.layers[0].height
+        ));
+    }
+}
+
+/// Unity's platform tabs under the texture settings: Default, then each platform's
+/// override (max size, format, compression).
+fn platform_tabs(
+    ui: &mut egui::Ui,
+    tab: &mut Option<oxide_assets::BuildTarget>,
+    imp: &mut TextureImporter,
+) {
+    use oxide_assets::{BuildTarget as B, TextureCompression, TextureImporterFormat as F};
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.selectable_value(tab, None, "Default");
+        for p in [B::Standalone, B::Android, B::IOS, B::WebGL] {
+            let overridden = imp
+                .platform_settings
+                .iter()
+                .any(|s| s.platform == p && s.overridden);
+            let label = if overridden {
+                format!("{} •", p.name())
+            } else {
+                p.name().to_owned()
+            };
+            ui.selectable_value(tab, Some(p), label);
+        }
+    });
+    let Some(p) = *tab else {
+        ui.weak("Max Size and Compression above apply to every platform without an override.");
+        return;
+    };
+    let i = match imp.platform_settings.iter().position(|s| s.platform == p) {
+        Some(i) => i,
+        None => {
+            let mut s = imp.platform(p);
+            s.overridden = false;
+            imp.platform_settings.push(s);
+            imp.platform_settings.len() - 1
+        }
+    };
+    let s = &mut imp.platform_settings[i];
+    ui.checkbox(&mut s.overridden, format!("Override For {}", p.name()));
+    ui.add_enabled_ui(s.overridden, |ui| {
+        egui::Grid::new("tex-platform")
+            .num_columns(2)
+            .show(ui, |ui| {
+                ui.label("Max Size");
+                egui::ComboBox::from_id_salt("tex-platform-size")
+                    .selected_text(s.max_texture_size.to_string())
+                    .show_ui(ui, |ui| {
+                        for v in [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384] {
+                            ui.selectable_value(&mut s.max_texture_size, v, v.to_string());
+                        }
+                    });
+                ui.end_row();
+                ui.label("Format");
+                egui::ComboBox::from_id_salt("tex-platform-format")
+                    .selected_text(format!("{:?}", s.format))
+                    .show_ui(ui, |ui| {
+                        for f in [
+                            F::Automatic,
+                            F::RGBA32,
+                            F::DXT1,
+                            F::DXT5,
+                            F::BC4,
+                            F::BC5,
+                            F::BC7,
+                            F::Etc2Rgb4,
+                            F::Etc2Rgba8,
+                            F::EacR,
+                            F::EacRg,
+                            F::Astc4x4,
+                            F::Astc6x6,
+                            F::Astc8x8,
+                        ] {
+                            ui.selectable_value(&mut s.format, f, format!("{f:?}"));
+                        }
+                    });
+                ui.end_row();
+                if s.format == F::Automatic {
+                    ui.label("Compression");
+                    egui::ComboBox::from_id_salt("tex-platform-compression")
+                        .selected_text(format!("{:?}", s.compression))
+                        .show_ui(ui, |ui| {
+                            for c in [
+                                TextureCompression::None,
+                                TextureCompression::LowQuality,
+                                TextureCompression::NormalQuality,
+                                TextureCompression::HighQuality,
+                            ] {
+                                ui.selectable_value(&mut s.compression, c, format!("{c:?}"));
+                            }
+                        });
+                    ui.end_row();
+                }
+            });
+    });
+    // Untouched tabs don't add entries to the .meta file.
+    let default = {
+        let mut d = imp.clone();
+        d.platform_settings.clear();
+        let mut d = d.platform(p);
+        d.overridden = false;
+        d
+    };
+    if imp.platform_settings[i] == default {
+        imp.platform_settings.remove(i);
     }
 }
 

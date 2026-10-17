@@ -1,4 +1,5 @@
-//! KTX2 textures (Khronos container for GPU-ready textures): BC1/3/4/5/7, ASTC 4×4 or RGBA8
+//! KTX2 textures (Khronos container for GPU-ready textures): BC1/3/4/5/7, ASTC 4×4/6×6/8×8,
+//! ETC2/EAC or RGBA8
 //! payloads with all their mips, optionally Zstandard-supercompressed. Block-compressed
 //! KTX2 textures go to the GPU as they are and have no CPU pixel copy (like Unity textures
 //! without Read/Write). Basis Universal payloads need transcoding and aren't supported yet.
@@ -29,6 +30,16 @@ pub fn decode(name: &str, bytes: &[u8]) -> Result<Texture2D, String> {
         Format::BC7_SRGB_BLOCK => (Some(CompressedFormat::Bc7), true),
         Format::ASTC_4x4_UNORM_BLOCK => (Some(CompressedFormat::Astc4x4), false),
         Format::ASTC_4x4_SRGB_BLOCK => (Some(CompressedFormat::Astc4x4), true),
+        Format::ASTC_6x6_UNORM_BLOCK => (Some(CompressedFormat::Astc6x6), false),
+        Format::ASTC_6x6_SRGB_BLOCK => (Some(CompressedFormat::Astc6x6), true),
+        Format::ASTC_8x8_UNORM_BLOCK => (Some(CompressedFormat::Astc8x8), false),
+        Format::ASTC_8x8_SRGB_BLOCK => (Some(CompressedFormat::Astc8x8), true),
+        Format::ETC2_R8G8B8_UNORM_BLOCK => (Some(CompressedFormat::Etc2Rgb8), false),
+        Format::ETC2_R8G8B8_SRGB_BLOCK => (Some(CompressedFormat::Etc2Rgb8), true),
+        Format::ETC2_R8G8B8A8_UNORM_BLOCK => (Some(CompressedFormat::Etc2Rgba8), false),
+        Format::ETC2_R8G8B8A8_SRGB_BLOCK => (Some(CompressedFormat::Etc2Rgba8), true),
+        Format::EAC_R11_UNORM_BLOCK => (Some(CompressedFormat::EacR11), false),
+        Format::EAC_R11G11_UNORM_BLOCK => (Some(CompressedFormat::EacRg11), false),
         Format::R8G8B8A8_UNORM => (None, false),
         Format::R8G8B8A8_SRGB => (None, true),
         other => return Err(format!("{name}: KTX2 format {other:?} is not supported")),
@@ -95,6 +106,16 @@ pub fn encode(tex: &Texture2D, zstd: bool) -> Vec<u8> {
                 (CompressedFormat::Bc7, true) => Format::BC7_SRGB_BLOCK,
                 (CompressedFormat::Astc4x4, false) => Format::ASTC_4x4_UNORM_BLOCK,
                 (CompressedFormat::Astc4x4, true) => Format::ASTC_4x4_SRGB_BLOCK,
+                (CompressedFormat::Astc6x6, false) => Format::ASTC_6x6_UNORM_BLOCK,
+                (CompressedFormat::Astc6x6, true) => Format::ASTC_6x6_SRGB_BLOCK,
+                (CompressedFormat::Astc8x8, false) => Format::ASTC_8x8_UNORM_BLOCK,
+                (CompressedFormat::Astc8x8, true) => Format::ASTC_8x8_SRGB_BLOCK,
+                (CompressedFormat::Etc2Rgb8, false) => Format::ETC2_R8G8B8_UNORM_BLOCK,
+                (CompressedFormat::Etc2Rgb8, true) => Format::ETC2_R8G8B8_SRGB_BLOCK,
+                (CompressedFormat::Etc2Rgba8, false) => Format::ETC2_R8G8B8A8_UNORM_BLOCK,
+                (CompressedFormat::Etc2Rgba8, true) => Format::ETC2_R8G8B8A8_SRGB_BLOCK,
+                (CompressedFormat::EacR11, _) => Format::EAC_R11_UNORM_BLOCK,
+                (CompressedFormat::EacRg11, _) => Format::EAC_R11G11_UNORM_BLOCK,
             },
             &c.mips,
         ),

@@ -52,11 +52,21 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
             "Gets a texture's import settings (its `.meta` file, Unity's Texture Importer) and what the import \
              produced (size, mips, GPU format). With `settings` (any of texture_type Default|NormalMap, srgb, \
              max_size, generate_mip_maps, wrap_mode, filter_mode, aniso_level, compression \
-             None|LowQuality|NormalQuality|HighQuality), writes the .meta and re-imports. Compression is BC7 for \
-             color and BC5 for normal maps (BC1/BC3 for LowQuality), cached in Library/TextureCache.",
+             None|LowQuality|NormalQuality|HighQuality, texture_shape Texture2D|Cube|Texture2DArray, cubemap_mapping \
+             Auto|SixFramesLayout|LatitudeLongitude, columns, rows, platform_settings [{platform \
+             Standalone|Android|IOS|WebGL, overridden, max_texture_size, format Automatic|RGBA32|DXT1|DXT5|BC4|BC5|BC7|\
+             Etc2Rgb4|Etc2Rgba8|EacR|EacRg|Astc4x4|Astc6x6|Astc8x8, compression}]), writes the .meta and \
+             re-imports. Automatic compression is BC7 for color and BC5 for normal maps (BC1/BC3 for LowQuality) on \
+             Standalone/WebGL, ASTC (6×6; 4×4 High or normal maps, 8×8 Low) on Android/iOS; cached in \
+             Library/TextureCache. `build_target` switches the platform textures import for (Unity's Switch \
+             Platform) and re-imports every loaded texture.",
             schema(
-                json!({ "path": { "type": "string" }, "settings": { "type": "object" } }),
-                &["path"],
+                json!({
+                    "path": { "type": "string" },
+                    "settings": { "type": "object" },
+                    "build_target": { "type": "string", "enum": ["Standalone", "Android", "IOS", "WebGL"] }
+                }),
+                &[],
             ),
         ),
         |args, e| {
@@ -66,6 +76,35 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
                 .unwrap_or_default()
                 .to_owned();
             let assets = e.world.resource_mut::<oxide_assets::AssetServer>();
+            if let Some(t) = args.get("build_target").and_then(Json::as_str) {
+                use oxide_assets::BuildTarget as B;
+                assets.build_target = match t {
+                    "Android" => B::Android,
+                    "IOS" | "iOS" => B::IOS,
+                    "WebGL" => B::WebGL,
+                    _ => B::Standalone,
+                };
+                let loaded: Vec<String> = assets
+                    .textures
+                    .iter()
+                    .map(|(p, _)| p.to_owned())
+                    .filter(|p| p.starts_with("Assets/"))
+                    .collect();
+                for p in &loaded {
+                    if let Err(err) = assets.load_texture(p) {
+                        return ToolResult::error(err);
+                    }
+                }
+                if path.is_empty() {
+                    return ToolResult::json(json!({
+                        "build_target": assets.build_target.name(),
+                        "reimported": loaded.len(),
+                    }));
+                }
+            }
+            if path.is_empty() {
+                return ToolResult::error("`path` is required");
+            }
             if let Some(Json::Object(fields)) = args.get("settings") {
                 let mut imp = assets.texture_importer(&path);
                 for (k, v) in fields {
@@ -104,8 +143,19 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
                 .textures
                 .handle_of(&path)
                 .and_then(|h| assets.textures.get(&h));
+            let id = oxide_assets::AssetId::from_path(&path);
+            let shape = match (
+                assets.cubemaps.get_by_id(id),
+                assets.texture_arrays.get_by_id(id),
+            ) {
+                (Some(c), _) => json!({ "cubemap_faces": 6, "face_size": c.size() }),
+                (_, Some(a)) => json!({ "array_layers": a.depth() }),
+                _ => Json::Null,
+            };
             ToolResult::json(json!({
                 "path": path,
+                "build_target": assets.build_target.name(),
+                "shape": shape,
                 "settings": settings,
                 "imported": tex.map(|t| json!({
                     "width": t.width,
