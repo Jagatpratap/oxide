@@ -9,8 +9,9 @@ use oxide_core::Reflect;
 use oxide_math::{Color, Vector2};
 use oxide_scene::{Component, GameObjectId, World};
 use oxide_text::{
-    FontAsset, FontLibrary, FontStyles, HorizontalAlignment, LayoutSettings, TextInput,
-    TextMaterial, TextMesh, TextOverflowModes, VerticalAlignment,
+    ColorGradient, FontAsset, FontLibrary, FontStyles, HorizontalAlignment, LayoutSettings,
+    SpriteAsset, TextInput, TextMaterial, TextMaterialPreset, TextMesh, TextOverflowModes,
+    VerticalAlignment,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -38,6 +39,15 @@ pub struct TextMeshProUGUI {
     pub overflow: TextOverflowModes,
     pub rich_text: bool,
     pub material: TextMaterial,
+    /// Sprite Asset `<sprite>` tags use (TMP "Sprite Asset").
+    pub sprite_asset: Option<Handle<SpriteAsset>>,
+    /// Per-character corner colours (TMP "Color Gradient").
+    pub enable_vertex_gradient: bool,
+    pub color_gradient: ColorGradient,
+    /// A Color Gradient preset; overrides `color_gradient`.
+    pub color_gradient_preset: Option<Handle<ColorGradient>>,
+    /// Shared material settings; override `material` when set.
+    pub material_preset: Option<Handle<TextMaterialPreset>>,
     pub anchor: Anchor,
     /// Offset from the anchor in reference pixels (+X right, +Y up).
     pub position: Vector2,
@@ -66,6 +76,11 @@ impl Default for TextMeshProUGUI {
             overflow: TextOverflowModes::Overflow,
             rich_text: true,
             material: TextMaterial::default(),
+            sprite_asset: None,
+            enable_vertex_gradient: false,
+            color_gradient: ColorGradient::default(),
+            color_gradient_preset: None,
+            material_preset: None,
             anchor: Anchor::Center,
             position: Vector2::ZERO,
             size: Vector2::new(200.0, 50.0),
@@ -96,10 +111,17 @@ impl TextMeshProUGUI {
                 paragraph_spacing: self.paragraph_spacing,
                 color: self.color,
                 style: self.font_style.to_style(),
+                ..Default::default()
             },
             auto_size: self
                 .auto_size
                 .then_some((self.font_size_min * k, self.font_size_max * k)),
+            sprite_asset: self.sprite_asset.as_ref(),
+            color_gradient: self.enable_vertex_gradient.then_some(&self.color_gradient),
+            color_gradient_preset: self
+                .color_gradient_preset
+                .as_ref()
+                .filter(|_| self.enable_vertex_gradient),
         }
     }
 }
@@ -182,6 +204,8 @@ struct UiGlyph {
     atlas: [f32; 4],
     /// Callback rect size in points (xy).
     rect: [f32; 4],
+    /// Corner colour multipliers bl, br, tr, tl (RGBA8; Color Gradients).
+    tint: [u32; 4],
 }
 
 /// An atlas page as the callback sees it.
@@ -264,7 +288,7 @@ impl UiTextGpu {
                     attributes: &wgpu::vertex_attr_array![
                         0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4,
                         4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4,
-                        8 => Float32x4, 9 => Float32x4
+                        8 => Float32x4, 9 => Float32x4, 10 => Uint32x4
                     ],
                 })],
             },
@@ -445,7 +469,44 @@ impl egui_wgpu::CallbackTrait for TextCallback {
     }
 }
 
+/// Sprite textures as UI text pages, by path (CPU pixels shared with the callback).
+#[derive(Default)]
+pub struct UiSpritePages {
+    pages: HashMap<String, PageRef>,
+}
+
+impl UiSpritePages {
+    fn get(&mut self, assets: &AssetServer, path: &str) -> Option<PageRef> {
+        let id = oxide_assets::AssetId::from_path(path);
+        let version = assets.textures.version(id).unwrap_or(0);
+        if let Some(p) = self.pages.get(path)
+            && p.version == version
+        {
+            return Some(p.clone());
+        }
+        let h: Handle<oxide_assets::Texture2D> = Handle::from_path(path);
+        let t = assets.textures.get(&h)?;
+        let pixels = t.mips.first()?.clone();
+        let page = PageRef {
+            key: format!("sprite:{path}"),
+            version,
+            size: [t.width, t.height],
+            pixels: Arc::new(pixels),
+        };
+        self.pages.insert(path.to_owned(), page.clone());
+        Some(page)
+    }
+}
+
+/// The `<link>` under the pointer in each TextMeshProUGUI this frame (by link id). Clicking
+/// one sends the object `OnLinkClicked` with the id.
+#[derive(Default)]
+pub struct UiTextLinks {
+    pub hovered: HashMap<GameObjectId, String>,
+}
+
 /// Paints a text mesh with its top-left at `origin` (points) inside `clip`.
+#[allow(clippy::too_many_arguments)]
 fn paint_text(
     painter: &egui::Painter,
     lib: &FontLibrary,
@@ -453,6 +514,7 @@ fn paint_text(
     material: &TextMaterial,
     origin: egui::Pos2,
     clip: egui::Rect,
+    sprite_pages: &[Option<PageRef>],
 ) {
     let mut pages: Vec<PageRef> = Vec::new();
     let mut page_index: HashMap<(u32, u32), usize> = HashMap::new();
@@ -460,7 +522,48 @@ fn paint_text(
     let m = material;
     let mut faces = Vec::new();
     let mut unders = Vec::new();
+    let tint = |q: &oxide_text::GlyphQuad| match q.gradient {
+        Some(g) => g.map(|c| oxide_render::pack_rgba8([c.r, c.g, c.b, c.a])),
+        None => [u32::MAX; 4],
+    };
+    // Text space (+y up from the top) → callback rect points (+y down).
+    let p = |c: [f32; 2]| [origin.x - clip.min.x + c[0], origin.y - clip.min.y - c[1]];
     for q in &mesh.quads {
+        if let Some(si) = q.sprite {
+            let Some(page) = sprite_pages.get(si as usize).cloned().flatten() else {
+                continue;
+            };
+            let idx = match pages.iter().position(|x| x.key == page.key) {
+                Some(i) => i,
+                None => {
+                    pages.push(page);
+                    pages.len() - 1
+                }
+            };
+            let (bl, br, tr, tl) = (
+                p(q.corners[0]),
+                p(q.corners[1]),
+                p(q.corners[2]),
+                p(q.corners[3]),
+            );
+            faces.push((
+                idx,
+                UiGlyph {
+                    c01: [bl[0], bl[1], br[0], br[1]],
+                    c23: [tr[0], tr[1], tl[0], tl[1]],
+                    uv: q.uv,
+                    face: srgb(q.color),
+                    outline: [0.0; 4],
+                    underlay: [0.0; 4],
+                    shape: [0.0; 4],
+                    under: [0.0; 4],
+                    atlas: [1.0, 1.0, 0.0, 3.0],
+                    rect: [clip.width(), clip.height(), 0.0, 0.0],
+                    tint: tint(q),
+                },
+            ));
+            continue;
+        }
         let Some(atlas) = mesh.fonts.get(q.font as usize).and_then(|k| lib.get(k)) else {
             continue;
         };
@@ -476,8 +579,6 @@ fn paint_text(
             });
             pages.len() - 1
         });
-        // Text space (+y up from the top) → callback rect points (+y down).
-        let p = |c: [f32; 2]| [origin.x - clip.min.x + c[0], origin.y - clip.min.y - c[1]];
         let (bl, br, tr, tl) = (
             p(q.corners[0]),
             p(q.corners[1]),
@@ -527,6 +628,7 @@ fn paint_text(
                 if m.underlay { 2.0 } else { 0.0 },
             ],
             rect: [clip.width(), clip.height(), 0.0, 0.0],
+            tint: tint(q),
         };
         if m.underlay {
             let mut u = g;
@@ -567,6 +669,24 @@ pub(crate) fn draw(
         t.size = Vector2::new(r.width() / k, r.height() / k);
     }
     let mesh = layout_ui_text(world, id, &t, k);
+    let material = {
+        let assets = world.resource_mut::<AssetServer>();
+        oxide_text::assets::effective_material(assets, &t.material, t.material_preset.as_ref())
+    };
+    if world.try_resource::<UiSpritePages>().is_none() {
+        world.resources.insert(UiSpritePages::default());
+    }
+    let sprite_pages: Vec<Option<PageRef>> = {
+        let mut cache = world.resources.remove::<UiSpritePages>().expect("inserted");
+        let assets = world.resource::<AssetServer>();
+        let v = mesh
+            .sprite_textures
+            .iter()
+            .map(|p| cache.get(assets, p))
+            .collect();
+        world.resources.insert(cache);
+        v
+    };
     let Some(lib) = world.try_resource::<FontLibrary>() else {
         return;
     };
@@ -594,15 +714,43 @@ pub(crate) fn draw(
     );
     let top_left = placed.map_or(anchor_point - egui::vec2(w * fx, h * fy), |r| r.min);
     let painter = ctx.layer_painter(egui::LayerId::new(
-        egui::Order::Middle,
+        egui::Order::Background,
         egui::Id::new(("oxide-tmp", id.to_bits())),
     ));
+    let origin = top_left + shift;
     paint_text(
         &painter.with_clip_rect(screen_rect),
         lib,
         &mesh,
-        &t.material,
-        top_left + shift,
+        &material,
+        origin,
         screen_rect,
+        &sprite_pages,
     );
+    // Links under the pointer (Unity's TMP_TextUtilities.FindIntersectingLink).
+    if mesh.links.is_empty() {
+        return;
+    }
+    let (pointer, clicked) = ctx.input(|i| (i.pointer.hover_pos(), i.pointer.primary_clicked()));
+    let link = pointer
+        .filter(|p| screen_rect.contains(*p))
+        .and_then(|p| mesh.find_link([p.x - origin.x, origin.y - p.y]))
+        .map(|i| mesh.links[i].id.clone());
+    if world.try_resource::<UiTextLinks>().is_none() {
+        world.resources.insert(UiTextLinks::default());
+    }
+    let links = world.resource_mut::<UiTextLinks>();
+    match &link {
+        Some(l) => {
+            links.hovered.insert(id, l.clone());
+        }
+        None => {
+            links.hovered.remove(&id);
+        }
+    }
+    if let Some(l) = link
+        && clicked
+    {
+        world.send_message(id, "OnLinkClicked", oxide_core::reflect::Value::String(l));
+    }
 }

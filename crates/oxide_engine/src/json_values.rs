@@ -339,7 +339,11 @@ pub fn parse_fields(
         // Structs (and lists of structs) are parsed like their current value.
         let nested = f.kind == ValueKind::Object
             || (f.kind == ValueKind::List && f.element == Some(ValueKind::Object));
-        let parsed = if nested {
+        let parsed = if f.kind == ValueKind::List && nested && (f.new_item)().is_some() {
+            // Lists of structs: each element against a fresh default of the element type
+            // (an empty current list has no element to copy the field types from).
+            json_to_value(f, v, world)
+        } else if nested {
             // An empty Option<struct> is parsed against a fresh default of the struct.
             let template = current
                 .and_then(|c| c.get_field(f.name))
@@ -397,5 +401,36 @@ pub fn set_fields(
         if let Err(e) = obj.set_field(f, v) {
             errors.push(format!("{name}.{f}: {e}"));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lists_of_structs_parse_against_the_element_type() {
+        // An empty list of structs with vector fields (nothing to copy field types from).
+        let world = World::new();
+        let mut asset = oxide_text::SpriteAsset::default();
+        let fields = serde_json::json!({
+            "sprites": [{ "name": "rock", "rect": [0, 0, 64, 64], "bearing": [0, 64], "advance": 64 }]
+        });
+        let info = asset.type_info();
+        let (parsed, errors) =
+            parse_fields(&info, fields.as_object().unwrap(), &world, Some(&asset));
+        assert!(errors.is_empty(), "{errors:?}");
+        let mut errors = Vec::new();
+        set_fields(&mut asset, parsed, &mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(asset.sprites.len(), 1);
+        assert_eq!(
+            asset.sprites[0].rect,
+            oxide_math::Vector4::new(0.0, 0.0, 64.0, 64.0)
+        );
+        assert_eq!(
+            asset.sprites[0].scale, 1.0,
+            "unset fields keep their defaults"
+        );
     }
 }

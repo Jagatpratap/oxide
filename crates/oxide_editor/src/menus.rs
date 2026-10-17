@@ -298,6 +298,10 @@ pub fn menu_items(world: &World, keymap: &Keymap) -> Vec<MenuItem> {
         Action::OpenTab(Tab::LightExplorer),
     ));
     v.push(item(
+        "Window/TextMeshPro/Font Asset Creator",
+        Action::OpenTab(Tab::FontAssetCreator),
+    ));
+    v.push(item(
         "Window/Rendering/Lighting/Generate Lighting",
         Action::GenerateLighting,
     ));

@@ -8,12 +8,15 @@
 //!
 //! Reference: <https://docs.unity3d.com/Packages/com.unity.ugui@2.0/manual/TextMeshPro/index.html>
 
+pub mod assets;
 pub mod components;
+pub mod creator;
 pub mod font;
 pub mod layout;
 pub mod rich;
 pub mod sdf;
 
+pub use assets::{ColorGradient, ColorMode, SpriteAsset, TextMaterialPreset, TmpSprite};
 pub use components::{FontStyles, TextInput, TextMaterial, TextMeshPro, TextMeshes, build};
 pub use font::{
     AtlasPopulationMode, BUILTIN_FONT, CharacterSet, DEFAULT_FONT_ASSET, Font, FontAsset,
@@ -44,6 +47,21 @@ pub fn register_assets(assets: &mut oxide_assets::AssetServer) {
     assets.register_data_asset::<FontAsset>(
         AssetTypeInfo::new("FontAsset", &["fontasset"])
             .menu("TextMeshPro/Font Asset", "New Font Asset", 95)
+            .color(230, 230, 140),
+    );
+    assets.register_data_asset::<SpriteAsset>(
+        AssetTypeInfo::new("SpriteAsset", &["spriteasset"])
+            .menu("TextMeshPro/Sprite Asset", "New Sprite Asset", 96)
+            .color(230, 230, 140),
+    );
+    assets.register_data_asset::<ColorGradient>(
+        AssetTypeInfo::new("ColorGradient", &["colorgradient"])
+            .menu("TextMeshPro/Color Gradient", "New Color Gradient", 97)
+            .color(230, 230, 140),
+    );
+    assets.register_data_asset::<TextMaterialPreset>(
+        AssetTypeInfo::new("TextMaterialPreset", &["textmaterial"])
+            .menu("TextMeshPro/Material Preset", "New Material Preset", 98)
             .color(230, 230, 140),
     );
 }

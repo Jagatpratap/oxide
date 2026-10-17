@@ -49,6 +49,117 @@ pub struct Style {
     pub mark: Option<Color>,
     pub case: Case,
     pub script: Script,
+    /// `<link>`: index into [`RichText::links`].
+    pub link: Option<u16>,
+    /// `<sprite>` (on its placeholder character): index into [`RichText::sprites`].
+    pub sprite: Option<u16>,
+    /// `<gradient>`: index into [`RichText::gradients`].
+    pub gradient: Option<u16>,
+}
+
+/// The character a `<sprite>` takes the place of.
+pub const SPRITE_CHAR: char = '\u{FFFC}';
+
+/// A `<sprite>` tag: which Sprite Asset (`None` = the text's default) and which sprite.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SpriteTag {
+    pub asset: Option<String>,
+    pub index: Option<u32>,
+    pub name: Option<String>,
+    /// `tint=1`: multiplied by the text colour.
+    pub tint: bool,
+    pub color: Option<Color>,
+}
+
+/// Parsed rich text: styled characters plus the tables their styles refer to.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RichText {
+    pub chars: Vec<StyledChar>,
+    /// `<link="id">` ids.
+    pub links: Vec<String>,
+    pub sprites: Vec<SpriteTag>,
+    /// `<gradient="name">` preset names.
+    pub gradients: Vec<String>,
+}
+
+/// Splits a tag body (`sprite="Emoji" index=3 tint=1`) into its name, its own value and
+/// attributes (names lowercased; quotes removed).
+fn tag_attributes(tag: &str) -> (String, Option<String>, Vec<(String, String)>) {
+    let mut parts: Vec<(String, Option<String>)> = Vec::new();
+    let chars: Vec<char> = tag.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        while i < chars.len() && chars[i].is_whitespace() {
+            i += 1;
+        }
+        let start = i;
+        while i < chars.len() && !chars[i].is_whitespace() && chars[i] != '=' {
+            i += 1;
+        }
+        let name: String = chars[start..i]
+            .iter()
+            .collect::<String>()
+            .to_ascii_lowercase();
+        if name.is_empty() {
+            i += 1;
+            continue;
+        }
+        let mut value = None;
+        if i < chars.len() && chars[i] == '=' {
+            i += 1;
+            if i < chars.len() && (chars[i] == '"' || chars[i] == '\'') {
+                let q = chars[i];
+                let vs = i + 1;
+                let end = chars[vs..]
+                    .iter()
+                    .position(|&c| c == q)
+                    .map_or(chars.len(), |p| vs + p);
+                value = Some(chars[vs..end].iter().collect());
+                i = end + 1;
+            } else {
+                let vs = i;
+                while i < chars.len() && !chars[i].is_whitespace() {
+                    i += 1;
+                }
+                value = Some(chars[vs..i].iter().collect());
+            }
+        }
+        parts.push((name, value));
+    }
+    let mut it = parts.into_iter();
+    let (name, value) = it.next().unwrap_or_default();
+    (
+        name,
+        value,
+        it.map(|(k, v)| (k, v.unwrap_or_default())).collect(),
+    )
+}
+
+/// The `<sprite>` tag in `tag`, if it is one.
+fn sprite_tag(tag: &str) -> Option<SpriteTag> {
+    let (name, value, attrs) = tag_attributes(tag);
+    if name != "sprite" {
+        return None;
+    }
+    let mut t = SpriteTag::default();
+    // `<sprite=3>` is an index; `<sprite="Asset" ...>` names the asset.
+    if let Some(v) = value {
+        match v.parse::<u32>() {
+            Ok(i) if !tag.contains('"') => t.index = Some(i),
+            _ => t.asset = Some(v),
+        }
+    }
+    for (k, v) in attrs {
+        match k.as_str() {
+            "index" => t.index = Some(v.parse().ok()?),
+            "name" => t.name = Some(v),
+            "tint" => t.tint = v == "1" || v.eq_ignore_ascii_case("true"),
+            "color" => t.color = Some(parse_color(&v)?),
+            "anim" => {}
+            _ => return None,
+        }
+    }
+    (t.index.is_some() || t.name.is_some()).then_some(t)
 }
 
 /// One character with its style. `'\n'` breaks the line.
@@ -147,8 +258,16 @@ fn parse_em(v: &str, base_size: f32) -> Option<f32> {
 
 /// Splits `text` into styled characters. With `rich` off, tags are plain text.
 pub fn parse(text: &str, rich: bool, base_size: f32) -> Vec<StyledChar> {
+    parse_rich(text, rich, base_size).chars
+}
+
+/// [`parse`] with the link, sprite and gradient tables.
+pub fn parse_rich(text: &str, rich: bool, base_size: f32) -> RichText {
     let chars: Vec<char> = text.chars().collect();
+    let mut rt = RichText::default();
     let mut out = Vec::with_capacity(chars.len());
+    let mut links: Vec<Option<u16>> = Vec::new();
+    let mut gradients: Vec<Option<u16>> = Vec::new();
     let mut st = Style::default();
     // Stacks so nested tags restore the outer value.
     let mut colors: Vec<Option<Color>> = Vec::new();
@@ -170,6 +289,10 @@ pub fn parse(text: &str, rich: bool, base_size: f32) -> Vec<StyledChar> {
                 let (name, value) = match lower.split_once('=') {
                     Some((k, _)) => (k.trim().to_owned(), Some(tag[k.len() + 1..].trim())),
                     None => (lower.trim().to_owned(), None),
+                };
+                let attr_value = || {
+                    let (_, v, attrs) = tag_attributes(&tag);
+                    v.filter(|_| attrs.is_empty())
                 };
                 let handled = if noparse {
                     if name == "/noparse" {
@@ -311,6 +434,45 @@ pub fn parse(text: &str, rich: bool, base_size: f32) -> Vec<StyledChar> {
                             st.case = cases.pop().unwrap_or_default();
                             true
                         }
+                        ("link", Some(_)) => match attr_value() {
+                            Some(id) => {
+                                links.push(st.link);
+                                st.link = Some(rt.links.len() as u16);
+                                rt.links.push(id);
+                                true
+                            }
+                            None => false,
+                        },
+                        ("/link", None) => {
+                            st.link = links.pop().flatten();
+                            true
+                        }
+                        ("gradient", Some(_)) => match attr_value() {
+                            Some(name) => {
+                                gradients.push(st.gradient);
+                                st.gradient = Some(rt.gradients.len() as u16);
+                                rt.gradients.push(name);
+                                true
+                            }
+                            None => false,
+                        },
+                        ("/gradient", None) => {
+                            st.gradient = gradients.pop().flatten();
+                            true
+                        }
+                        _ if name.starts_with("sprite") => match sprite_tag(&tag) {
+                            Some(t) => {
+                                let mut sst = st;
+                                sst.sprite = Some(rt.sprites.len() as u16);
+                                rt.sprites.push(t);
+                                out.push(StyledChar {
+                                    c: SPRITE_CHAR,
+                                    style: sst,
+                                });
+                                true
+                            }
+                            None => false,
+                        },
                         ("sub", None) => {
                             scripts.push(st.script);
                             st.script = Script::Sub;
@@ -337,7 +499,8 @@ pub fn parse(text: &str, rich: bool, base_size: f32) -> Vec<StyledChar> {
         out.push(StyledChar { c, style: st });
         i += 1;
     }
-    out
+    rt.chars = out;
+    rt
 }
 
 #[cfg(test)]
@@ -388,6 +551,36 @@ mod tests {
         assert_eq!(text(&parse("<b>x", false, 10.0)), "<b>x");
         assert_eq!(text(&parse("a < b", true, 10.0)), "a < b");
         assert_eq!(text(&parse("<color=nope>x", true, 10.0)), "<color=nope>x");
+    }
+
+    #[test]
+    fn links_sprites_and_gradients() {
+        let r = parse_rich(
+            "Go <link=\"shop\">to <b>shop</b></link> <sprite=2> <sprite=\"Emoji\" name=\"smile\" tint=1> <gradient=\"Fire\">hot</gradient>",
+            true,
+            10.0,
+        );
+        assert_eq!(r.links, ["shop"]);
+        assert_eq!(r.gradients, ["Fire"]);
+        let t: String = r.chars.iter().map(|c| c.c).collect();
+        assert_eq!(t, "Go to shop \u{FFFC} \u{FFFC} hot");
+        assert_eq!(r.chars[3].style.link, Some(0));
+        assert_eq!(r.chars[9].style.link, Some(0));
+        assert!(r.chars[9].style.bold);
+        assert_eq!(r.chars[10].style.link, None);
+        assert_eq!(r.sprites[0].index, Some(2));
+        assert_eq!(r.chars[11].style.sprite, Some(0));
+        assert_eq!(r.sprites[1].asset.as_deref(), Some("Emoji"));
+        assert_eq!(r.sprites[1].name.as_deref(), Some("smile"));
+        assert!(r.sprites[1].tint);
+        assert_eq!(r.chars[15].style.gradient, Some(0));
+        assert_eq!(r.chars[18 - 1].style.gradient, Some(0));
+        // Malformed tags stay as text.
+        assert_eq!(text(&parse("<sprite>", true, 10.0)), "<sprite>");
+        assert_eq!(
+            text(&parse("<sprite bogus=1>", true, 10.0)),
+            "<sprite bogus=1>"
+        );
     }
 
     #[test]

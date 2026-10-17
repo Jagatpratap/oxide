@@ -44,8 +44,18 @@ pub struct TextInstance {
     pub shape: [f32; 4],
     /// Underlay offset xy, dilate, softness.
     pub under: [f32; 4],
-    /// Atlas size, underlay on, pass (0 = all, 1 = underlay only, 2 = face only).
+    /// Atlas size, underlay on, pass (0 = all, 1 = underlay only, 2 = face only,
+    /// 3 = sprite: plain texture colours).
     pub atlas: [f32; 4],
+    /// Corner colours bl, br, tr, tl as packed sRGB RGBA8 (Color Gradients), multiplying
+    /// the face colour.
+    pub tint: [u32; 4],
+}
+
+/// Packs an sRGB colour as RGBA8 (the `tint` format).
+pub fn pack_rgba8(c: [f32; 4]) -> u32 {
+    let b = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u32;
+    b(c[0]) | (b(c[1]) << 8) | (b(c[2]) << 16) | (b(c[3]) << 24)
 }
 
 impl TextInstance {
@@ -119,7 +129,31 @@ impl TextInstance {
                 if m.underlay_on { 1.0 } else { 0.0 },
                 0.0,
             ],
+            tint: [u32::MAX; 4],
         }
+    }
+
+    /// A `<sprite>` quad: samples the texture's colours times `color` (linear).
+    pub fn sprite(corners: [Vector3; 4], uv: [f32; 4], color: [f32; 4]) -> Self {
+        let c = corners;
+        Self {
+            corners: [
+                [c[0].x, c[0].y, c[0].z, c[1].x],
+                [c[1].y, c[1].z, c[2].x, c[2].y],
+                [c[2].z, c[3].x, c[3].y, c[3].z],
+            ],
+            uv,
+            face: color,
+            atlas: [1.0, 1.0, 0.0, 3.0],
+            tint: [u32::MAX; 4],
+            ..Default::default()
+        }
+    }
+
+    /// Per-corner colour multipliers (sRGB; bl, br, tr, tl).
+    pub fn with_tint(mut self, corners: [[f32; 4]; 4]) -> Self {
+        self.tint = corners.map(pack_rgba8);
+        self
     }
 }
 
@@ -223,7 +257,7 @@ impl TextGpu {
                     attributes: &wgpu::vertex_attr_array![
                         0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4,
                         4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4,
-                        8 => Float32x4, 9 => Float32x4
+                        8 => Float32x4, 9 => Float32x4, 10 => Uint32x4
                     ],
                 })],
             },

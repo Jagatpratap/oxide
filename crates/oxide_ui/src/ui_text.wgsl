@@ -16,6 +16,8 @@ struct GIn {
     @location(7) under: vec4f,
     @location(8) atlas: vec4f,
     @location(9) rect: vec4f,
+    // Corner colours bl, br, tr, tl (RGBA8; Color Gradients).
+    @location(10) tint: vec4<u32>,
 };
 
 struct GOut {
@@ -28,6 +30,7 @@ struct GOut {
     @location(5) @interpolate(flat) shape: vec4f,
     @location(6) @interpolate(flat) under: vec4f,
     @location(7) @interpolate(flat) atlas: vec4f,
+    @location(8) tint: vec4f,
 };
 
 @vertex
@@ -52,16 +55,26 @@ fn vs_main(@builtin(vertex_index) vi: u32, g: GIn) -> GOut {
     o.shape = g.shape;
     o.under = g.under;
     o.atlas = g.atlas;
+    o.tint = unpack4x8unorm(g.tint[k]);
     return o;
 }
 
 @fragment
 fn fs_main(in: GOut) -> @location(0) vec4f {
-    let p = SdfParams(in.face, in.outline, in.underlay, in.shape, in.under, in.atlas);
-    let a = textureSample(atlas_tex, atlas_samp, in.uv).a;
+    // (Every sample and derivative first: they need uniform control flow.)
+    let tex = textureSample(atlas_tex, atlas_samp, in.uv);
     let off = vec2f(in.under.x, -in.under.y) * in.shape.w / in.atlas.xy;
     let ua = textureSample(atlas_tex, atlas_samp, clamp(in.uv - off, in.uv_rect.xy, in.uv_rect.zw)).a;
     let gr = fwidth(in.uv * in.atlas.xy);
     let px = max(0.5 * (gr.x + gr.y), 1e-4);
-    return sdf_shade(p, a, ua, px);
+    let face = in.face * in.tint;
+    if in.atlas.w > 2.5 {
+        // Sprites (`<sprite>`): the texture's colours, premultiplied.
+        let sp = tex * face;
+        return vec4f(sp.rgb * sp.a, sp.a);
+    }
+    let outline = vec4f(in.outline.rgb, in.outline.a * in.tint.a);
+    let underlay = vec4f(in.underlay.rgb, in.underlay.a * in.tint.a);
+    let p = SdfParams(face, outline, underlay, in.shape, in.under, in.atlas);
+    return sdf_shade(p, tex.a, ua, px);
 }

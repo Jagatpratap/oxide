@@ -602,7 +602,7 @@ pub fn run(world: &mut World) {
         });
         let painter = ctx
             .layer_painter(egui::LayerId::new(
-                egui::Order::Middle,
+                egui::Order::Background,
                 egui::Id::new(("oxide-uitk", id.to_bits(), k)),
             ))
             .with_clip_rect(screen);

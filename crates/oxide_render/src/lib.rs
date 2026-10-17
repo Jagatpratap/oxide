@@ -38,5 +38,5 @@ pub use flares::{
 pub use frame::*;
 pub use gpu::{Gpu, GpuError, WindowSurface};
 pub use renderer::{SceneRenderer, skybox_faces, validate_surface_hooks};
-pub use text::{SDF_WGSL, SdfMaterial, TextDraw, TextInstance};
+pub use text::{SDF_WGSL, SdfMaterial, TextDraw, TextInstance, pack_rgba8};
 pub use wgpu;

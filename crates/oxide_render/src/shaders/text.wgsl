@@ -14,6 +14,8 @@ struct TIn {
     @location(7) shape: vec4f,
     @location(8) under: vec4f,
     @location(9) atlas: vec4f,
+    // Corner colours bl, br, tr, tl (sRGB RGBA8; Color Gradients).
+    @location(10) tint: vec4<u32>,
 };
 
 struct TOut {
@@ -27,6 +29,7 @@ struct TOut {
     @location(6) @interpolate(flat) shape: vec4f,
     @location(7) @interpolate(flat) under: vec4f,
     @location(8) @interpolate(flat) atlas: vec4f,
+    @location(9) tint: vec4f,
 };
 
 @vertex
@@ -58,13 +61,15 @@ fn vs_main(@builtin(vertex_index) vi: u32, t: TIn) -> TOut {
     o.shape = t.shape;
     o.under = t.under;
     o.atlas = t.atlas;
+    let tc = unpack4x8unorm(t.tint[k]);
+    o.tint = vec4f(pow(tc.rgb, vec3f(2.2)), tc.a);
     return o;
 }
 
 @fragment
 fn fs_main(in: TOut) -> @location(0) vec4f {
-    let p = SdfParams(in.face, in.outline, in.underlay, in.shape, in.under, in.atlas);
-    let a = textureSample(atlas_tex, atlas_samp, in.uv).a;
+    // (Every sample and derivative first: they need uniform control flow.)
+    let tex = textureSample(atlas_tex, atlas_samp, in.uv);
     // Underlay: offset by up to the spread, kept inside this glyph's rectangle.
     let off = vec2f(in.under.x, -in.under.y) * in.shape.w / in.atlas.xy;
     let uv_u = clamp(in.uv - off, in.uv_rect.xy, in.uv_rect.zw);
@@ -72,7 +77,18 @@ fn fs_main(in: TOut) -> @location(0) vec4f {
     // Atlas pixels per screen pixel.
     let g = fwidth(in.uv * in.atlas.xy);
     let px = max(0.5 * (g.x + g.y), 1e-4);
-    var c = sdf_shade(p, a, ua, px);
+    let face = in.face * in.tint;
+    var c: vec4f;
+    if in.atlas.w > 2.5 {
+        // Sprites (`<sprite>`): the texture's colours.
+        let sp = tex * face;
+        c = vec4f(sp.rgb * sp.a, sp.a);
+    } else {
+        let outline = vec4f(in.outline.rgb, in.outline.a * in.tint.a);
+        let underlay = vec4f(in.underlay.rgb, in.underlay.a * in.tint.a);
+        let p = SdfParams(face, outline, underlay, in.shape, in.under, in.atlas);
+        c = sdf_shade(p, tex.a, ua, px);
+    }
     if c.a <= 0.002 {
         discard;
     }

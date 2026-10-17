@@ -356,6 +356,7 @@ enum Op {
     ExportPackage(String),
     /// A Font Asset from a font file, next to it (TMP's Create > TextMeshPro > Font Asset).
     FontAsset(String),
+    SpriteAsset(String),
 }
 
 /// A Create menu entry: (menu path, asset type name, sort order).
@@ -576,6 +577,16 @@ fn item_menu(ui: &mut egui::Ui, path: &str, dir: bool, ops: &mut Vec<Op>, ps: &m
         && ui.button("Create Font Asset").clicked()
     {
         ops.push(Op::FontAsset(path.to_owned()));
+        ui.close();
+    }
+    if [
+        ".png", ".jpg", ".jpeg", ".tga", ".psd", ".bmp", ".gif", ".webp",
+    ]
+    .iter()
+    .any(|e| lower.ends_with(e))
+        && ui.button("Create Sprite Asset").clicked()
+    {
+        ops.push(Op::SpriteAsset(path.to_owned()));
         ui.close();
     }
 }
@@ -1237,6 +1248,13 @@ fn run(st: &mut EditorState, engine: &mut Engine, root: &Path, op: Op) -> Result
             st.project.start_rename();
             st.project.invalidate();
         }
+        Op::SpriteAsset(texture) => {
+            let path = create_sprite_asset(engine, root, &texture)?;
+            st.project.selected = Some(path);
+            st.project.inspecting = true;
+            st.project.start_rename();
+            st.project.invalidate();
+        }
         Op::FontAsset(font) => {
             let path = create_font_asset(engine, root, &font)?;
             st.project.selected = Some(path);
@@ -1376,6 +1394,35 @@ pub fn new_asset(
         _ if assets.types.is_data(type_name) => assets.create_data_asset(type_name, &path)?,
         _ => return Err(format!("{type_name} can't be created from the Create menu")),
     }
+    Ok(path)
+}
+
+/// TMP's Create → Sprite Asset on a texture: one sprite per Sprite Editor slice (or the
+/// whole texture), saved as `<texture>.spriteasset` beside it.
+pub fn create_sprite_asset(
+    engine: &mut Engine,
+    root: &Path,
+    texture: &str,
+) -> Result<String, String> {
+    use oxide_engine::text::SpriteAsset;
+    let assets = engine.world.resource_mut::<oxide_assets::AssetServer>();
+    assets.ensure_loaded(texture)?;
+    let h: oxide_assets::Handle<oxide_assets::Texture2D> =
+        oxide_assets::Handle::from_path(texture.to_owned());
+    let (w, hgt) = assets
+        .textures
+        .get(&h)
+        .map(|t| (t.width, t.height))
+        .ok_or_else(|| format!("{texture} isn't loaded"))?;
+    let imp: oxide_assets::TextureImporter = assets.importer(texture);
+    let asset = if imp.sprites.is_empty() {
+        SpriteAsset::from_grid(h, w, hgt, 1, 1, "sprite")
+    } else {
+        SpriteAsset::from_slices(h, &imp.sprites)
+    };
+    let stem = texture.rsplit_once('.').map_or(texture, |(s, _)| s);
+    let path = asset_ops::unique_path(root, &format!("{stem}.spriteasset"));
+    assets.save_data(&path, Box::new(asset))?;
     Ok(path)
 }
 

@@ -67,6 +67,40 @@ pub struct LayoutSettings {
     pub color: Color,
     /// Base style (TMP Font Style buttons), under the rich text tags.
     pub style: Style,
+    /// Per-character corner colours (bl, br, tr, tl) from the text's Color Gradient.
+    pub gradient: Option<[Color; 4]>,
+    /// `<gradient>` presets by [`crate::rich::RichText::gradients`] index (None = unknown).
+    pub tag_gradients: Vec<Option<[Color; 4]>>,
+    /// `<sprite>` tags resolved, by [`crate::rich::RichText::sprites`] index.
+    pub sprites: Vec<Option<ResolvedSprite>>,
+    /// `<link>` ids by [`crate::rich::RichText::links`] index.
+    pub links: Vec<String>,
+}
+
+/// A `<sprite>` found in a Sprite Asset.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResolvedSprite {
+    /// Texture asset path.
+    pub texture: String,
+    /// Normalized texture rectangle (min x, min y, max x, max y; y down).
+    pub uv: [f32; 4],
+    /// Sprite size, bearing (x offset, top above the baseline) and advance in sprite pixels.
+    pub size: [f32; 2],
+    pub bearing: [f32; 2],
+    pub advance: f32,
+    pub scale: f32,
+    /// Multiply by the text colour (`tint=1`).
+    pub tint: bool,
+    pub color: Option<Color>,
+}
+
+/// A `<link>` in laid-out text (Unity `TMP_LinkInfo`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TextLink {
+    pub id: String,
+    pub text: String,
+    /// Areas it covers (min x, min y, max x, max y in the text's units, +y up), one per line.
+    pub rects: Vec<[f32; 4]>,
 }
 
 impl Default for LayoutSettings {
@@ -86,6 +120,10 @@ impl Default for LayoutSettings {
             paragraph_spacing: 0.0,
             color: Color::WHITE,
             style: Style::default(),
+            gradient: None,
+            tag_gradients: Vec::new(),
+            sprites: Vec::new(),
+            links: Vec::new(),
         }
     }
 }
@@ -102,6 +140,11 @@ pub struct GlyphQuad {
     /// sRGB vertex colour.
     pub color: Color,
     pub bold: bool,
+    /// Corner colours (bl, br, tr, tl) multiplied with `color` (Color Gradients).
+    pub gradient: Option<[Color; 4]>,
+    /// A sprite: index into [`TextMesh::sprite_textures`]; the quad samples that texture's
+    /// colours instead of a font atlas.
+    pub sprite: Option<u32>,
 }
 
 /// Laid out text.
@@ -119,6 +162,21 @@ pub struct TextMesh {
     pub font_size: f32,
     /// Characters drawn (TMP `characterCount`).
     pub character_count: usize,
+    /// Textures sprite quads sample (asset paths).
+    pub sprite_textures: Vec<String>,
+    pub links: Vec<TextLink>,
+}
+
+impl TextMesh {
+    /// Unity `TMP_TextUtilities.FindIntersectingLink`: the link at `point` (text units, +y
+    /// up), if any.
+    pub fn find_link(&self, point: [f32; 2]) -> Option<usize> {
+        self.links.iter().position(|l| {
+            l.rects.iter().any(|r| {
+                point[0] >= r[0] && point[0] <= r[2] && point[1] >= r[1] && point[1] <= r[3]
+            })
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -137,6 +195,9 @@ struct Item {
     ascender: f32,
     descender: f32,
     line_height: f32,
+    /// A sprite (index into the settings' sprites) and its points per sprite pixel.
+    sprite: Option<u16>,
+    sprite_k: f32,
 }
 
 fn apply_case(c: char, case: Case) -> (char, f32) {
@@ -205,6 +266,34 @@ pub fn layout(
                 ascender: a.ascender * k,
                 descender: a.descender * k,
                 line_height: a.line_height * k,
+                sprite: None,
+                sprite_k: 0.0,
+            });
+            prev = None;
+            continue;
+        }
+        // A sprite sits on the baseline, as tall as the font's ascender.
+        if let Some(si) = st.sprite {
+            let a = lib.get(&chain[0]).expect("main font");
+            let k = size / a.sampling_size();
+            let resolved = s.sprites.get(si as usize).and_then(|r| r.as_ref());
+            let sk = resolved.map_or(0.0, |r| a.ascender * k / r.size[1].max(1.0) * r.scale);
+            items.push(Item {
+                c,
+                style: st,
+                size,
+                font: 0,
+                glyph: None,
+                k,
+                advance: resolved.map_or(0.0, |r| r.advance * sk)
+                    + em(s.character_spacing, size)
+                    + st.cspace * size,
+                rise,
+                ascender: a.ascender * k,
+                descender: a.descender * k,
+                line_height: a.line_height * k,
+                sprite: resolved.map(|_| si),
+                sprite_k: sk,
             });
             prev = None;
             continue;
@@ -263,6 +352,8 @@ pub fn layout(
             ascender: a.ascender * k,
             descender: a.descender * k,
             line_height: a.line_height * k,
+            sprite: None,
+            sprite_k: 0.0,
         });
     }
 
@@ -424,6 +515,27 @@ pub fn layout(
     let mut glyphs = Vec::new();
     let mut decor = Vec::new();
     let mut count = 0;
+    let mut sprite_textures: Vec<String> = Vec::new();
+    let mut links: Vec<(u16, TextLink)> = Vec::new();
+    // The text's gradient times a `<gradient>` tag's.
+    let gradient = |st: &Style| -> Option<[Color; 4]> {
+        let tag = st
+            .gradient
+            .and_then(|g| s.tag_gradients.get(g as usize).copied().flatten());
+        match (s.gradient, tag) {
+            (None, None) => None,
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (Some(a), Some(b)) => Some(std::array::from_fn(|i| {
+                Color::new(
+                    a[i].r * b[i].r,
+                    a[i].g * b[i].g,
+                    a[i].b * b[i].b,
+                    a[i].a * b[i].a,
+                )
+            })),
+        }
+    };
     let solid_uv = |font: usize, lib: &FontLibrary| {
         let a = lib.get(&chain[font]).expect("loaded");
         let (aw, ah) = (
@@ -489,6 +601,8 @@ pub fn layout(
                         page: 0,
                         color: item_color(&it.style, s.color),
                         bold: false,
+                        gradient: None,
+                        sprite: None,
                     });
                 }
             };
@@ -511,6 +625,8 @@ pub fn layout(
                     page: 0,
                     color: m,
                     bold: false,
+                    gradient: None,
+                    sprite: None,
                 });
             }
             for (run, on, is_under) in [
@@ -559,10 +675,79 @@ pub fn layout(
                     page: gl.page,
                     color,
                     bold: it.style.bold,
+                    gradient: gradient(&it.style),
+                    sprite: None,
+                });
+                count += 1;
+            } else if let Some(r) = it
+                .sprite
+                .and_then(|si| s.sprites.get(si as usize))
+                .and_then(|r| r.as_ref())
+            {
+                let sk = it.sprite_k;
+                let x0 = x + r.bearing[0] * sk;
+                let y1 = base_y + it.rise + r.bearing[1] * sk;
+                let (x1, y0) = (x0 + r.size[0] * sk, y1 - r.size[1] * sk);
+                let tex = match sprite_textures.iter().position(|t| *t == r.texture) {
+                    Some(i) => i,
+                    None => {
+                        sprite_textures.push(r.texture.clone());
+                        sprite_textures.len() - 1
+                    }
+                };
+                let mut c = r.color.unwrap_or(Color::WHITE);
+                if r.tint {
+                    let t = color;
+                    c = Color::new(c.r * t.r, c.g * t.g, c.b * t.b, c.a * t.a);
+                } else if let Some(a) = it.style.alpha {
+                    c.a *= a;
+                }
+                glyphs.push(GlyphQuad {
+                    corners: rect(x0, y0, x1, y1),
+                    uv: r.uv,
+                    font: 0,
+                    page: 0,
+                    color: c,
+                    bold: false,
+                    gradient: if r.tint { gradient(&it.style) } else { None },
+                    sprite: Some(tex as u32),
                 });
                 count += 1;
             } else if !it.c.is_whitespace() {
                 count += 1;
+            }
+            if let Some(li) = it.style.link
+                && let Some(id) = s.links.get(li as usize)
+            {
+                let r = [x, base_y + it.descender, x + adv, base_y + it.ascender];
+                // One entry per `<link>` tag (by its index), in order of appearance.
+                let p = match links.iter().position(|(k, _)| *k == li) {
+                    Some(p) => p,
+                    None => {
+                        links.push((
+                            li,
+                            TextLink {
+                                id: id.clone(),
+                                ..Default::default()
+                            },
+                        ));
+                        links.len() - 1
+                    }
+                };
+                let link = &mut links[p].1;
+                link.text.push(it.c);
+                match link.rects.last_mut() {
+                    Some(last) if (last[2] - r[0]).abs() < 1e-3 && last[1] == r[1] => {
+                        last[2] = r[2];
+                        last[3] = last[3].max(r[3]);
+                    }
+                    Some(last) if (last[2] - r[0]).abs() < 1e-3 => {
+                        last[2] = r[2];
+                        last[1] = last[1].min(r[1]);
+                        last[3] = last[3].max(r[3]);
+                    }
+                    _ => link.rects.push(r),
+                }
             }
             x += adv;
         }
@@ -577,6 +762,13 @@ pub fn layout(
         for c in &mut q.corners {
             c[0] *= u;
             c[1] *= u;
+        }
+    }
+    for (_, l) in &mut links {
+        for r in &mut l.rects {
+            for v in r.iter_mut() {
+                *v *= u;
+            }
         }
     }
     let mut bounds = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
@@ -599,6 +791,8 @@ pub fn layout(
         overflowed,
         font_size: base,
         character_count: count,
+        sprite_textures,
+        links: links.into_iter().map(|(_, l)| l).collect(),
     }
 }
 
@@ -837,5 +1031,93 @@ mod tests {
         );
         let w = |m: &TextMesh| m.bounds[2] - m.bounds[0];
         assert!(w(&wide) > w(&lay("ab", &s)) + 10.0);
+    }
+
+    #[test]
+    fn sprites_links_and_gradients() {
+        let (mut lib, chain) = lib();
+        let rich = crate::rich::parse_rich(
+            "a<sprite=0>b <link=\"x\">go</link> <gradient=\"g\">c</gradient>",
+            true,
+            40.0,
+        );
+        let red = Color::rgb(1.0, 0.0, 0.0);
+        let s = LayoutSettings {
+            font_size: 40.0,
+            sprites: vec![Some(ResolvedSprite {
+                texture: "Assets/Emoji.png".into(),
+                uv: [0.0, 0.0, 0.5, 0.5],
+                size: [64.0, 64.0],
+                bearing: [0.0, 64.0],
+                advance: 64.0,
+                scale: 1.0,
+                tint: false,
+                color: None,
+            })],
+            links: rich.links.clone(),
+            tag_gradients: vec![Some([red, red, Color::WHITE, Color::WHITE])],
+            gradient: None,
+            ..Default::default()
+        };
+        let m = layout(&rich.chars, &mut lib, &chain, &s);
+        assert_eq!(m.sprite_textures, ["Assets/Emoji.png"]);
+        let sprite = m
+            .quads
+            .iter()
+            .find(|q| q.sprite.is_some())
+            .expect("sprite quad");
+        let a = m
+            .quads
+            .iter()
+            .find(|q| q.sprite.is_none())
+            .expect("glyph a");
+        // As tall as the font's ascender, square, sitting on the baseline after "a".
+        let (w, h) = (
+            sprite.corners[1][0] - sprite.corners[0][0],
+            sprite.corners[3][1] - sprite.corners[0][1],
+        );
+        assert!((w - h).abs() < 1e-3 && h > 20.0 && h < 45.0, "{w} x {h}");
+        // (Glyph quads include the SDF padding, so compare with the a's middle.)
+        assert!(sprite.corners[0][0] > (a.corners[0][0] + a.corners[1][0]) * 0.5);
+        assert_eq!(
+            sprite.color,
+            Color::WHITE,
+            "untinted sprites keep their colours"
+        );
+        assert_eq!(m.character_count, 6, "a sprite b g o c");
+        // The link covers "go".
+        assert_eq!(m.links.len(), 1);
+        assert_eq!(m.links[0].text, "go");
+        let r = m.links[0].rects[0];
+        assert_eq!(m.links[0].rects.len(), 1);
+        assert_eq!(
+            m.find_link([(r[0] + r[2]) * 0.5, (r[1] + r[3]) * 0.5]),
+            Some(0)
+        );
+        assert_eq!(m.find_link([r[0] - 30.0, (r[1] + r[3]) * 0.5]), None);
+        // The <gradient> colours only its own character: red bottom, white top.
+        let c = m
+            .quads
+            .iter()
+            .rev()
+            .find(|q| q.sprite.is_none() && q.gradient.is_some())
+            .unwrap();
+        assert_eq!(c.gradient.unwrap()[0], red);
+        assert_eq!(m.quads.iter().filter(|q| q.gradient.is_some()).count(), 1);
+        // The text's own gradient multiplies with the tag's.
+        let s2 = LayoutSettings {
+            gradient: Some([Color::new(1.0, 1.0, 1.0, 0.5); 4]),
+            ..s.clone()
+        };
+        let m2 = layout(&rich.chars, &mut lib, &chain, &s2);
+        let c2 = m2.quads.iter().rev().find(|q| q.sprite.is_none()).unwrap();
+        assert_eq!(c2.gradient.unwrap()[0], Color::new(1.0, 0.0, 0.0, 0.5));
+        // Unknown sprites take no space.
+        let s3 = LayoutSettings {
+            sprites: vec![None],
+            ..s.clone()
+        };
+        let m3 = layout(&rich.chars, &mut lib, &chain, &s3);
+        assert!(m3.sprite_textures.is_empty() && m3.bounds[2] < m.bounds[2]);
     }
 }

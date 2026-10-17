@@ -373,8 +373,9 @@ impl System for UiSystem {
                 )
             });
             let area = |n: u64, anchor: Anchor, pos: Vector2| {
+                // Background: over the game image, under the editor's floating windows.
                 let a = egui::Area::new(egui::Id::new(("oxide-ui", id.to_bits(), n)))
-                    .order(egui::Order::Middle);
+                    .order(egui::Order::Background);
                 match placed {
                     Some(r) => a.pivot(egui::Align2::LEFT_TOP).fixed_pos(r.min),
                     None => a

@@ -142,3 +142,128 @@ fn text_renders_with_outline_and_underlay() {
     let blue = count(&shadowed, |p| p[2] > 150 && p[0] < 60);
     assert!(blue > 20, "underlay pixels: {blue}");
 }
+
+/// A world with a 2×1 sprite sheet (green | magenta), a Sprite Asset and presets.
+fn sprite_world(t: TextMeshPro) -> World {
+    let dir = std::env::temp_dir().join(format!("oxide-tmp-sprites-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("Assets")).unwrap();
+    let mut assets = AssetServer::new(&dir);
+    oxide_text::register_assets(&mut assets);
+    let mut px = Vec::new();
+    for _y in 0..16 {
+        for x in 0..32 {
+            px.extend_from_slice(if x < 16 {
+                &[0, 255, 0, 255]
+            } else {
+                &[255, 0, 255, 255]
+            });
+        }
+    }
+    assets.textures.insert(
+        "Assets/Sheet.png",
+        oxide_assets::Texture2D::from_rgba8("Sheet", 32, 16, px, true),
+    );
+    let sheet = oxide_text::SpriteAsset::from_grid(
+        oxide_assets::Handle::from_path("Assets/Sheet.png"),
+        32,
+        16,
+        2,
+        1,
+        "icon",
+    );
+    assets
+        .save_data("Assets/Icons.spriteasset", Box::new(sheet))
+        .unwrap();
+    assets
+        .save_data(
+            "Assets/RedOutline.textmaterial",
+            Box::new(oxide_text::TextMaterialPreset {
+                material: TextMaterial {
+                    outline_width: 0.4,
+                    outline_color: Color::rgb(1.0, 0.0, 0.0),
+                    ..Default::default()
+                },
+            }),
+        )
+        .unwrap();
+    let mut w = World::new();
+    w.resources.insert(assets);
+    let id = w.create("Text");
+    w.add_component(id, t);
+    oxide_text::components::update(&mut w);
+    w
+}
+
+#[test]
+fn sprites_gradients_and_material_presets_render() {
+    let Some(gpu) = Gpu::headless() else {
+        eprintln!("no GPU; skipped");
+        return;
+    };
+    let mut r = SceneRenderer::new(&gpu);
+    let base = TextMeshPro {
+        font_size: 30.0,
+        rect_size: Vector2::new(4.0, 2.0),
+        horizontal_alignment: oxide_text::HorizontalAlignment::Center,
+        vertical_alignment: oxide_text::VerticalAlignment::Middle,
+        ..Default::default()
+    };
+    // `<sprite>` by index from the text's Sprite Asset, and by name from a named asset.
+    let w = sprite_world(TextMeshPro {
+        text: "<sprite=0><sprite=\"Icons\" name=\"icon_1\">".into(),
+        sprite_asset: Some(oxide_assets::Handle::from_path("Assets/Icons.spriteasset")),
+        ..base.clone()
+    });
+    let f = frame(&w);
+    let img = render(&gpu, &mut r, &w, &f);
+    let green = count(&img, |p| p[1] > 200 && p[0] < 60 && p[2] < 60);
+    let magenta = count(&img, |p| p[0] > 200 && p[2] > 200 && p[1] < 60);
+    assert!(
+        green > 50 && magenta > 50,
+        "sprites drawn: {green} green, {magenta} magenta"
+    );
+
+    // A vertical Color Gradient: red tops, blue bottoms on white letters.
+    let w = sprite_world(TextMeshPro {
+        text: "HI".into(),
+        enable_vertex_gradient: true,
+        color_gradient: oxide_text::ColorGradient {
+            color_mode: oxide_text::ColorMode::VerticalGradient,
+            top_left: Color::rgb(1.0, 0.0, 0.0),
+            bottom_left: Color::rgb(0.0, 0.0, 1.0),
+            ..Default::default()
+        },
+        ..base.clone()
+    });
+    let img = render(&gpu, &mut r, &w, &frame(&w));
+    // Red minus blue over the lit pixels of the top and bottom lit rows.
+    let lit_rows: Vec<u32> = (0..H)
+        .filter(|&y| (0..W).any(|x| img.pixel(x, y).iter().take(3).any(|&c| c > 100)))
+        .collect();
+    assert!(lit_rows.len() > 6, "letters drawn");
+    let balance = |y: u32| -> i32 {
+        (0..W)
+            .map(|x| img.pixel(x, y))
+            .filter(|p| p.iter().take(3).any(|&c| c > 100))
+            .map(|p| p[0] as i32 - p[2] as i32)
+            .sum()
+    };
+    let (top, bottom) = (balance(lit_rows[1]), balance(lit_rows[lit_rows.len() - 2]));
+    assert!(
+        top > 0 && bottom < 0,
+        "red at the top ({top}), blue at the bottom ({bottom})"
+    );
+
+    // A Material preset's red outline replaces the text's own material.
+    let w = sprite_world(TextMeshPro {
+        text: "HI".into(),
+        material_preset: Some(oxide_assets::Handle::from_path(
+            "Assets/RedOutline.textmaterial",
+        )),
+        ..base
+    });
+    let img = render(&gpu, &mut r, &w, &frame(&w));
+    let red = count(&img, |p| p[0] > 150 && p[1] < 60);
+    assert!(red > 40, "preset outline pixels: {red}");
+}

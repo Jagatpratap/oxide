@@ -17,6 +17,7 @@ mod asset_ops;
 mod audio_mixer_window;
 mod console;
 mod curve_editor;
+mod font_asset_creator;
 pub(crate) mod game_view;
 mod hierarchy;
 pub mod hub;
@@ -96,6 +97,7 @@ pub enum Tab {
     Lighting,
     LightExplorer,
     TestRunner,
+    FontAssetCreator,
 }
 
 impl Tab {
@@ -132,6 +134,7 @@ impl Tab {
             Tab::Lighting => "Lighting",
             Tab::LightExplorer => "Light Explorer",
             Tab::TestRunner => "Test Runner",
+            Tab::FontAssetCreator => "Font Asset Creator",
             Tab::Timeline => "Timeline",
             Tab::ShaderGraph => "Shader Graph",
             Tab::VfxGraph => "VFX Graph",
@@ -411,6 +414,7 @@ pub struct EditorState {
     pub nav_display: oxide_engine::navigation::NavMeshDisplay,
     nav_window: navigation_window::NavigationWindow,
     lighting_window: lighting_window::LightingWindow,
+    font_asset_creator: font_asset_creator::FontAssetCreator,
     pub(crate) tests: test_runner::TestRunner,
     hierarchy: hierarchy::HierarchyState,
     pub(crate) inspector: inspector::InspectorState,
@@ -489,6 +493,7 @@ impl EditorState {
             nav_display: Default::default(),
             nav_window: Default::default(),
             lighting_window: Default::default(),
+            font_asset_creator: Default::default(),
             tests: Default::default(),
             hierarchy: Default::default(),
             inspector: Default::default(),
@@ -753,6 +758,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::Lighting => lighting_window::window_ui(self.st, self.engine, ui),
             Tab::LightExplorer => lighting_window::explorer_ui(self.st, self.engine, ui),
             Tab::TestRunner => test_runner::window_ui(self.st, self.engine, ui),
+            Tab::FontAssetCreator => font_asset_creator::window_ui(self.st, self.engine, ui),
             Tab::Timeline => timeline_window::window_ui(self.st, self.engine, ui),
             Tab::ShaderGraph => shader_graph_window::window_ui(self.st, self.engine, ui),
             Tab::VfxGraph => vfx_graph_window::window_ui(self.st, self.engine, ui),
@@ -896,6 +902,7 @@ impl Editor {
                 | Tab::InputActions
                 | Tab::SpriteEditor
                 | Tab::LightExplorer
+                | Tab::FontAssetCreator
         ) {
             // Unity opens its settings (and the Input Actions editor, the Light Explorer) in
             // their own window.
@@ -904,6 +911,8 @@ impl Editor {
                 egui::vec2(980.0, 560.0)
             } else if tab == Tab::LightExplorer {
                 egui::vec2(900.0, 360.0)
+            } else if tab == Tab::FontAssetCreator {
+                egui::vec2(560.0, 720.0)
             } else {
                 egui::vec2(760.0, 560.0)
             };
