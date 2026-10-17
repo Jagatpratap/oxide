@@ -16,6 +16,7 @@ pub mod mcp_asset_database;
 pub mod mcp_audio;
 pub mod mcp_constraints;
 pub mod mcp_data_assets;
+pub mod mcp_import_settings;
 mod mcp_localization;
 pub mod mcp_network;
 pub mod mcp_occlusion;

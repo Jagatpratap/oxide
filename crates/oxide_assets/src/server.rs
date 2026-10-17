@@ -267,9 +267,8 @@ impl AssetServer {
                 .unwrap_or("")
                 .to_ascii_lowercase();
             let result = match ext.as_str() {
-                "png" | "jpg" | "jpeg" | "tga" | "bmp" | "hdr" | "ktx2" => {
-                    self.load_texture(&path).map(|_| ())
-                }
+                "png" | "jpg" | "jpeg" | "tga" | "bmp" | "hdr" | "exr" | "ktx2" | "psd" | "psb"
+                | "tif" | "tiff" | "gif" | "webp" => self.load_texture(&path).map(|_| ()),
                 "mat" => self.load_material(&path).map(|_| ()),
                 "wgsl" => self.load_shader(&path).map(|_| ()),
                 "rendertexture" => self.load_render_texture(&path).map(|_| ()),
@@ -347,6 +346,56 @@ impl AssetServer {
             );
         }
         self.write_meta_map(path, &map)
+    }
+
+    /// Import settings of type `T` (Model / Audio importer) from `<path>.meta`, defaults for
+    /// fields it doesn't set.
+    pub fn importer<T: oxide_core::reflect::Reflect + Default>(&self, path: &str) -> T {
+        let mut imp = T::default();
+        for (k, v) in self.meta_map(path) {
+            let Some(k) = k.as_str() else { continue };
+            if META_KEYS.contains(&k) {
+                continue;
+            }
+            if let Ok(v) = serde_yaml_ng::from_value::<Value>(v) {
+                // Fields of other importers (a texture's settings on a model) are ignored.
+                let _ = imp.set_field(k, v);
+            }
+        }
+        imp
+    }
+
+    /// Saves import settings into `<path>.meta` (only fields that differ from the defaults;
+    /// GUID and labels stay) and re-imports the asset.
+    pub fn set_importer<T: oxide_core::reflect::Reflect + Default>(
+        &mut self,
+        path: &str,
+        importer: &T,
+    ) -> Result<(), String> {
+        let defaults: BTreeMap<String, Value> = T::default()
+            .fields()
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), v))
+            .collect();
+        let mut map = self.meta_map(path);
+        for (k, v) in importer.fields() {
+            if defaults.get(k) == Some(&v) {
+                map.remove(k);
+            } else {
+                map.insert(
+                    k.into(),
+                    serde_yaml_ng::to_value(v).map_err(|e| e.to_string())?,
+                );
+            }
+        }
+        self.write_meta_map(path, &map)?;
+        if crate::is_model_path(path) {
+            self.load_model(path).map(drop)
+        } else if self.audio.handle_of(path).is_some() {
+            self.load_audio(path).map(drop)
+        } else {
+            Ok(())
+        }
     }
 
     /// Import settings of a texture: its `.meta` file, or defaults guessed from the name.
@@ -572,9 +621,23 @@ impl AssetServer {
 
     pub fn load_model(&mut self, path: &str) -> Result<Handle<Model>, String> {
         let bytes = self.read(path)?;
-        let full = self.full_path(path);
-        let base = full.parent().map(Path::to_path_buf);
-        crate::gltf_import::import_gltf(self, path, &bytes, base.as_deref())
+        let ext = Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let imp: crate::importers::ModelImporter = self.importer(path);
+        let h = match ext.as_str() {
+            "obj" => crate::obj_import::import_obj(self, path, &bytes),
+            "fbx" => crate::fbx_import::import_fbx_with(self, path, &bytes, imp.convert_units),
+            _ => {
+                let full = self.full_path(path);
+                let base = full.parent().map(Path::to_path_buf);
+                crate::gltf_import::import_gltf(self, path, &bytes, base.as_deref())
+            }
+        }?;
+        crate::importers::apply_model_settings(self, &h, &imp);
+        Ok(h)
     }
 
     /// Loads (or reloads) a `.mat` material file (Unity's material asset).
@@ -723,12 +786,13 @@ impl AssetServer {
             .unwrap_or("")
             .to_ascii_lowercase();
         match ext.as_str() {
-            "png" | "jpg" | "jpeg" | "tga" | "bmp" | "hdr" | "ktx2" => {
+            "png" | "jpg" | "jpeg" | "tga" | "bmp" | "hdr" | "exr" | "ktx2" | "psd" | "psb"
+            | "tif" | "tiff" | "gif" | "webp" => {
                 if self.textures.handle_of(file).is_none() {
                     self.load_texture(file)?;
                 }
             }
-            "glb" | "gltf" => {
+            "glb" | "gltf" | "fbx" | "obj" => {
                 if self.models.handle_of(file).is_none() {
                     self.load_model(file)?;
                 }

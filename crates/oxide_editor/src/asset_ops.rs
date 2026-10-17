@@ -284,6 +284,69 @@ pub fn update_references(
     (files.len(), refs)
 }
 
+/// Preset Manager: new textures, models and audio clips get their type's default presets
+/// (Unity applies them when an asset is first imported).
+fn apply_default_presets(engine: &mut Engine, imported: &[String]) {
+    let Some(manager) = engine
+        .world
+        .try_resource::<oxide_assets::preset::PresetManager>()
+        .cloned()
+    else {
+        return;
+    };
+    if manager.defaults.is_empty() {
+        return;
+    }
+    let assets = engine.world.resource_mut::<AssetServer>();
+    for path in imported {
+        let kind = assets.types.for_path(path).map(|t| t.type_name);
+        let importer = match kind {
+            Some("Texture") => "TextureImporter",
+            Some("Model") => "ModelImporter",
+            Some("AudioClip") => "AudioImporter",
+            _ => continue,
+        };
+        let presets: Vec<oxide_assets::Preset> = manager
+            .presets_for(importer, Some(path))
+            .into_iter()
+            .filter_map(|p| {
+                let h = oxide_assets::Handle::<oxide_assets::Preset>::from_path(p.as_str());
+                assets.data_asset(&h).cloned()
+            })
+            .collect();
+        if presets.is_empty() {
+            continue;
+        }
+        let r = match importer {
+            "TextureImporter" => {
+                let mut imp = assets.texture_importer(path);
+                for p in &presets {
+                    p.apply(&mut imp);
+                }
+                assets.set_texture_importer(path, &imp).map(drop)
+            }
+            "ModelImporter" => {
+                let mut imp: oxide_assets::importers::ModelImporter = assets.importer(path);
+                for p in &presets {
+                    p.apply(&mut imp);
+                }
+                assets.set_importer(path, &imp)
+            }
+            _ => {
+                let mut imp: oxide_assets::importers::AudioImporter = assets.importer(path);
+                for p in &presets {
+                    p.apply(&mut imp);
+                }
+                assets.set_importer(path, &imp)
+            }
+        };
+        match r {
+            Ok(()) => oxide_core::debug_log!("{path}: applied the default {importer} preset"),
+            Err(e) => oxide_core::debug_log_warning!("{path}: {e}"),
+        }
+    }
+}
+
 /// Scans `Assets/` for new, moved and deleted assets (Unity's AssetDatabase.Refresh) and
 /// fixes references to assets moved outside the editor. Returns a summary, or `None` if
 /// nothing changed.
@@ -302,6 +365,9 @@ pub fn apply_refresh(
     engine: &mut Engine,
     report: &oxide_assets::database::RefreshReport,
 ) -> Option<String> {
+    if !report.first_scan {
+        apply_default_presets(engine, &report.imported);
+    }
     let mut fixed = 0;
     for (old, new) in &report.moved {
         let (f, r) = update_references(st, engine, old, new);

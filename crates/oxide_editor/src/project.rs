@@ -179,9 +179,8 @@ pub fn kind(name: &str) -> (&'static str, Color32) {
     match ext.as_str() {
         "scene" => ("Scene", Color32::from_rgb(120, 200, 255)),
         "glb" | "gltf" | "fbx" | "obj" => ("Model", Color32::from_rgb(120, 220, 160)),
-        "png" | "jpg" | "jpeg" | "tga" | "bmp" | "hdr" | "exr" | "ktx2" => {
-            ("Texture", Color32::from_rgb(230, 190, 110))
-        }
+        "png" | "jpg" | "jpeg" | "tga" | "bmp" | "hdr" | "exr" | "ktx2" | "psd" | "psb" | "tif"
+        | "tiff" | "gif" | "webp" => ("Texture", Color32::from_rgb(230, 190, 110)),
         "wav" | "ogg" | "mp3" | "flac" => ("AudioClip", Color32::from_rgb(230, 140, 200)),
         "rs" => ("Script", Color32::from_rgb(240, 120, 90)),
         "prefab" => ("Prefab", Color32::from_rgb(140, 180, 255)),
@@ -1205,7 +1204,7 @@ fn run(st: &mut EditorState, engine: &mut Engine, root: &Path, op: Op) -> Result
                 || lower.ends_with(".ktx2")
             {
                 assets.load_texture(&path).map(drop)
-            } else if lower.ends_with(".glb") || lower.ends_with(".gltf") {
+            } else if oxide_assets::is_model_path(&lower) {
                 assets.load_model(&path).map(drop)
             } else {
                 assets.ensure_loaded(&path)

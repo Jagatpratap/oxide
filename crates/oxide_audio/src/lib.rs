@@ -146,7 +146,8 @@ struct Voice {
 pub struct Audio {
     manager: Option<AudioManager<DefaultBackend>>,
     listener: Option<kira::listener::ListenerHandle>,
-    clips: HashMap<AssetId, StaticSoundData>,
+    /// Decoded clips with the asset version they were decoded from.
+    clips: HashMap<AssetId, (u64, StaticSoundData)>,
     voices: HashMap<ComponentId, Voice>,
     one_shots: Vec<(Output, StaticSoundHandle)>,
     /// Master volume 0..1 (Unity `AudioListener.volume`).
@@ -355,13 +356,19 @@ impl Audio {
         assets: &AssetServer,
         h: &Handle<AudioClip>,
     ) -> Option<StaticSoundData> {
-        if let Some(d) = self.clips.get(&h.id()) {
+        // Re-imported clips (new settings or file) have a new version.
+        let version = assets.audio.version(h.id()).unwrap_or(0);
+        if let Some((v, d)) = self.clips.get(&h.id())
+            && *v == version
+        {
             return Some(d.clone());
         }
         let clip = assets.audio.get(h)?;
         match StaticSoundData::from_cursor(Cursor::new(clip.bytes.clone())) {
             Ok(d) => {
-                self.clips.insert(h.id(), d.clone());
+                let imp: oxide_assets::importers::AudioImporter = assets.importer(h.path());
+                let d = apply_import_settings(d, &imp);
+                self.clips.insert(h.id(), (version, d.clone()));
                 Some(d)
             }
             Err(e) => {
@@ -504,6 +511,26 @@ pub struct AudioSystem;
 impl System for AudioSystem {
     fn name(&self) -> &'static str {
         "Audio"
+    }
+
+    /// Unity's "Preload Audio Data": decode the scene's clips when it loads, not on first play.
+    fn start(&mut self, world: &mut World) {
+        let Some(mut audio) = world.resources.remove::<Audio>() else {
+            return;
+        };
+        let clips: Vec<Handle<AudioClip>> = world
+            .query::<AudioSource>()
+            .filter_map(|(_, s)| s.clip.clone())
+            .collect();
+        if let Some(assets) = world.try_resource::<AssetServer>() {
+            for h in clips {
+                let imp: oxide_assets::importers::AudioImporter = assets.importer(h.path());
+                if imp.preload_audio_data && assets.audio.get(&h).is_some() {
+                    let _ = audio.clip_data(assets, &h);
+                }
+            }
+        }
+        world.resources.insert(audio);
     }
 
     fn late_update(&mut self, world: &mut World) {
@@ -840,4 +867,49 @@ pub fn install(world: &mut World) -> Box<dyn System> {
         .registry
         .register::<AudioListener>("Audio/Audio Listener");
     Box::new(AudioSystem)
+}
+
+/// Unity's Audio Clip import settings, applied to decoded samples: Force To Mono (with
+/// Normalize) and the sample rate setting (linear resampling).
+fn apply_import_settings(
+    mut d: StaticSoundData,
+    imp: &oxide_assets::importers::AudioImporter,
+) -> StaticSoundData {
+    use kira::Frame;
+    let mut frames: Vec<Frame> = d.frames.to_vec();
+    if imp.force_to_mono {
+        for f in &mut frames {
+            let m = (f.left + f.right) * 0.5;
+            *f = Frame { left: m, right: m };
+        }
+        if imp.normalize {
+            let peak = frames.iter().map(|f| f.left.abs()).fold(0.0f32, f32::max);
+            if peak > 1e-6 {
+                for f in &mut frames {
+                    f.left /= peak;
+                    f.right /= peak;
+                }
+            }
+        }
+    }
+    if let Some(rate) = imp.target_rate(d.sample_rate, imp.force_to_mono) {
+        let n = ((frames.len() as u64 * rate as u64) / d.sample_rate.max(1) as u64).max(1) as usize;
+        let step = d.sample_rate as f64 / rate as f64;
+        let out: Vec<Frame> = (0..n)
+            .map(|i| {
+                let x = i as f64 * step;
+                let a = (x as usize).min(frames.len() - 1);
+                let b = (a + 1).min(frames.len() - 1);
+                let t = (x - a as f64) as f32;
+                Frame {
+                    left: frames[a].left + (frames[b].left - frames[a].left) * t,
+                    right: frames[a].right + (frames[b].right - frames[a].right) * t,
+                }
+            })
+            .collect();
+        frames = out;
+        d.sample_rate = rate;
+    }
+    d.frames = frames.into();
+    d
 }

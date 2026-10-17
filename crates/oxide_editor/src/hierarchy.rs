@@ -455,7 +455,7 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
                 let p = payload.0.to_ascii_lowercase();
                 if p.ends_with(".prefab") {
                     actions.push(Action::InstantiatePrefab(payload.0.clone()));
-                } else if p.ends_with(".glb") || p.ends_with(".gltf") {
+                } else if oxide_assets::is_model_path(&p) {
                     actions.push(Action::InstantiateModel(payload.0.clone()));
                 } else if p.ends_with(".scene") {
                     // Unity: dragging a scene into the Hierarchy opens it additively.

@@ -328,7 +328,10 @@ pub fn builtin_types() -> Vec<AssetTypeInfo> {
             .color(230, 190, 110),
         AssetTypeInfo::new(
             "Texture",
-            &["png", "jpg", "jpeg", "tga", "bmp", "hdr", "exr", "ktx2"],
+            &[
+                "png", "jpg", "jpeg", "tga", "bmp", "hdr", "exr", "ktx2", "psd", "psb", "tif",
+                "tiff", "gif", "webp",
+            ],
         )
         .color(230, 190, 110),
         AssetTypeInfo::new("Model", &["glb", "gltf", "fbx", "obj"]).color(120, 220, 160),

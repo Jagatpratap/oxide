@@ -220,12 +220,8 @@ impl Importer<'_> {
             out.append(&p);
             materials.push(self.material(prim.material()));
         }
+        // Lightmap UVs come from the Model Importer's Generate Lightmap UVs.
         out.finish();
-        // Lightmap UVs for static meshes that don't bring their own (skinned meshes are never
-        // lightmapped).
-        if out.bindposes.is_empty() && !out.has_lightmap_uvs() {
-            out.generate_lightmap_uvs();
-        }
         let h = self
             .server
             .meshes

@@ -553,7 +553,7 @@ pub fn pick_where(
 fn drop_model(st: &mut EditorState, engine: &mut Engine, path: &str, ray: &Ray) {
     let lower = path.to_ascii_lowercase();
     let prefab = lower.ends_with(".prefab");
-    if !(prefab || lower.ends_with(".glb") || lower.ends_with(".gltf")) {
+    if !(prefab || oxide_assets::is_model_path(&lower)) {
         st.status = format!("{path}: only prefabs and models can be dropped into the scene");
         return;
     }

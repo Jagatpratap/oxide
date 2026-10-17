@@ -15,6 +15,7 @@ intel_tex_2.workspace = true
 ktx2.workspace = true
 ruzstd.workspace = true
 gltf.workspace = true
+flate2 = "1.1"
 
 [lints]
 workspace = true

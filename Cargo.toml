@@ -56,7 +56,7 @@ intel_tex_2 = "0.5"
 # KTX2 container parsing and its Zstandard supercompression.
 ktx2 = "0.5"
 ruzstd = "0.9"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "hdr", "tga", "bmp"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "hdr", "tga", "bmp", "exr", "tiff", "gif", "webp"] }
 gltf = { version = "1.4", features = ["KHR_materials_emissive_strength", "KHR_texture_transform", "KHR_lights_punctual", "extras", "names", "utils"] }
 rapier3d = "0.36"
 kira = "0.12"
@@ -69,6 +69,11 @@ egui_dock = { version = "0.21", features = ["serde"] }
 libloading = "0.9"
 
 # SDF glyph generation runs in the editor; keep it fast in debug builds.
+# Our crates: line tables and function names (backtraces and Console click-to-source work)
+# without full variable info, which kept filling the disk.
+[profile.dev]
+debug = "limited"
+
 [profile.dev.package.oxide_text]
 opt-level = 2
 

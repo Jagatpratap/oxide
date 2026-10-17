@@ -186,6 +186,10 @@ impl Texture2D {
 
     /// Decodes PNG/JPEG/TGA/BMP/HDR bytes.
     pub fn decode(name: &str, bytes: &[u8], srgb: bool) -> Result<Self, String> {
+        if bytes.starts_with(b"8BPS") {
+            let (w, h, px) = crate::psd::decode(bytes).map_err(|e| format!("{name}: {e}"))?;
+            return Ok(Self::from_rgba8(name, w, h, px, srgb));
+        }
         let img = image::load_from_memory(bytes).map_err(|e| format!("{name}: {e}"))?;
         let rgba = img.to_rgba8();
         let (w, h) = rgba.dimensions();

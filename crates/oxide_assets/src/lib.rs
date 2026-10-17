@@ -15,15 +15,19 @@ pub mod animation;
 pub mod animator_controller;
 pub mod asset_types;
 pub mod database;
+pub mod fbx_import;
 pub mod gltf_import;
 pub mod handle;
+pub mod importers;
 pub mod ktx2_import;
 pub mod lightmap_uv;
 pub mod material;
 pub mod mesh;
 pub mod model;
+pub mod obj_import;
 pub mod preset;
 pub mod primitives;
+pub mod psd;
 pub mod render_texture;
 pub mod server;
 pub mod shader;
@@ -65,3 +69,11 @@ pub use texture::{
     CompressedFormat, CompressedMips, FilterMode, Texture2D, TextureCompression, TextureImporter,
     TextureImporterType, TextureWrapMode,
 };
+
+/// Whether `path` is a model file the importer reads (glTF, FBX, OBJ).
+pub fn is_model_path(path: &str) -> bool {
+    let p = path.to_ascii_lowercase();
+    [".glb", ".gltf", ".fbx", ".obj"]
+        .iter()
+        .any(|e| p.ends_with(e))
+}

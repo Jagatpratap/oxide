@@ -50,6 +50,9 @@ pub struct RefreshReport {
     pub deleted: Vec<String>,
     /// Assets whose `.meta` was a copy of another's: they got a new GUID.
     pub new_guids: Vec<String>,
+    /// No earlier scan was known (first open): everything counts as imported, but nothing
+    /// is new to the project.
+    pub first_scan: bool,
 }
 
 #[derive(Default)]
@@ -173,6 +176,7 @@ impl AssetDatabase {
                 .map(|m| m.into_iter().collect())
                 .unwrap_or_default()
         };
+        report.first_scan = previous.is_empty();
         let mut guid_to_path: HashMap<String, String> = HashMap::new();
         let mut path_to_guid: HashMap<String, String> = HashMap::new();
         for p in &paths {

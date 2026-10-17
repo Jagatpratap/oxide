@@ -108,6 +108,83 @@ impl Mesh {
         self.normals = n.into_iter().map(|v| v.normalize_or(Vector3::Y)).collect();
     }
 
+    /// Unity's "Calculate" normals: corners at the same position are smoothed together when
+    /// their faces meet at less than `angle` degrees; sharper edges split the vertex so each
+    /// side keeps its own normal. Other attributes are kept per vertex.
+    pub fn recalculate_normals_with_angle(&mut self, angle: f32) {
+        let cos = angle.clamp(0.0, 180.0).to_radians().cos();
+        let tris: Vec<[u32; 3]> = self.triangles().collect();
+        let key = |v: Vector3| {
+            let q = |x: f32| (x * 1e4).round() as i64;
+            (q(v.x), q(v.y), q(v.z))
+        };
+        // Face normals (area-weighted) and the corners at each position.
+        let faces: Vec<Vector3> = tris
+            .iter()
+            .map(|&[a, b, c]| {
+                let (pa, pb, pc) = (
+                    self.vertices[a as usize],
+                    self.vertices[b as usize],
+                    self.vertices[c as usize],
+                );
+                (pb - pa).cross(pc - pa)
+            })
+            .collect();
+        let mut at: std::collections::HashMap<(i64, i64, i64), Vec<usize>> = Default::default();
+        for (t, tri) in tris.iter().enumerate() {
+            for &v in tri {
+                at.entry(key(self.vertices[v as usize]))
+                    .or_default()
+                    .push(t);
+            }
+        }
+        // New vertices: one per (original vertex, smoothed normal).
+        let mut out: Vec<(u32, Vector3)> = Vec::new();
+        let mut lookup: std::collections::HashMap<(u32, [i32; 3]), u32> = Default::default();
+        let mut indices = Vec::with_capacity(self.indices.len());
+        for (t, tri) in tris.iter().enumerate() {
+            let fn_t = faces[t].normalize_or_zero();
+            for &v in tri {
+                let mut n = Vector3::ZERO;
+                for &o in &at[&key(self.vertices[v as usize])] {
+                    if faces[o].normalize_or_zero().dot(fn_t) >= cos - 1e-6 {
+                        n += faces[o];
+                    }
+                }
+                let n = n.normalize_or(fn_t);
+                let q = [
+                    (n.x * 1000.0) as i32,
+                    (n.y * 1000.0) as i32,
+                    (n.z * 1000.0) as i32,
+                ];
+                let i = *lookup.entry((v, q)).or_insert_with(|| {
+                    out.push((v, n));
+                    out.len() as u32 - 1
+                });
+                indices.push(i);
+            }
+        }
+        // Rebuild the vertex arrays (sub-mesh ranges are index ranges and stay valid).
+        fn pick<T: Copy>(src: &[T], out: &[(u32, Vector3)]) -> Vec<T> {
+            if src.is_empty() {
+                return Vec::new();
+            }
+            out.iter().map(|&(v, _)| src[v as usize]).collect()
+        }
+        self.vertices = pick(&self.vertices, &out);
+        self.uv = pick(&self.uv, &out);
+        self.uv2 = pick(&self.uv2, &out);
+        self.colors = pick(&self.colors, &out);
+        self.bone_indices = pick(&self.bone_indices, &out);
+        self.bone_weights = pick(&self.bone_weights, &out);
+        self.normals = out.iter().map(|&(_, n)| n).collect();
+        self.indices = indices;
+        self.tangents.clear();
+        if !self.uv.is_empty() {
+            self.recalculate_tangents();
+        }
+    }
+
     /// Per-vertex tangents from UVs (Lengyel's method), orthogonalized against the normal.
     pub fn recalculate_tangents(&mut self) {
         let count = self.vertices.len();
@@ -199,5 +276,34 @@ impl Mesh {
             self.submeshes.push(r.start + start..r.end + start);
         }
         self.recalculate_bounds();
+    }
+}
+
+#[cfg(test)]
+mod angle_tests {
+    use super::*;
+
+    #[test]
+    fn smoothing_angle_splits_hard_edges() {
+        // Two quads meeting at 90 degrees along the X axis (an L), sharing two vertices.
+        let v = vec![
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(1.0, 0.0, 0.0),
+            Vector3::new(1.0, 0.0, 1.0),
+            Vector3::new(0.0, 0.0, 1.0),
+            Vector3::new(1.0, 1.0, 0.0),
+            Vector3::new(0.0, 1.0, 0.0),
+        ];
+        let idx = vec![0, 2, 1, 0, 3, 2, 0, 1, 4, 0, 4, 5];
+        let mut hard = Mesh::new("L", v.clone(), Vec::new(), idx.clone());
+        hard.recalculate_normals_with_angle(60.0);
+        // The shared edge vertices are split: 4 + 4.
+        assert_eq!(hard.vertices.len(), 8);
+        let mut soft = Mesh::new("L", v, Vec::new(), idx);
+        soft.recalculate_normals_with_angle(120.0);
+        assert_eq!(soft.vertices.len(), 6);
+        // A shared vertex's smoothed normal points between the two faces.
+        let n = soft.normals[0];
+        assert!(n.y.abs() > 0.5 && n.z.abs() > 0.5, "{n:?}");
     }
 }

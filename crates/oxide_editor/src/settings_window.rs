@@ -23,13 +23,15 @@ pub enum Page {
     Input,
     Player,
     Localization,
+    PresetManager,
 }
 
-pub const PAGES: [(Page, &str); 7] = [
+pub const PAGES: [(Page, &str); 8] = [
     (Page::Input, "Input Manager"),
     (Page::Localization, "Localization"),
     (Page::Physics, "Physics"),
     (Page::Player, "Player"),
+    (Page::PresetManager, "Preset Manager"),
     (Page::Quality, "Quality"),
     (Page::TagsAndLayers, "Tags and Layers"),
     (Page::Time, "Time"),
@@ -116,6 +118,7 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
         Page::Input => input(ui, &mut s),
         Page::Player => player(ui, &mut s, build),
         Page::Localization => crate::localization_window::settings_page(ui, &mut s.localization),
+        Page::PresetManager => preset_manager(ui, w, &mut s.preset_manager),
     });
     ss.page = page;
     if *build != build_before
@@ -734,4 +737,94 @@ fn player(ui: &mut egui::Ui, s: &mut ProjectSettings, build: &mut BuildSettings)
         ui.add(egui::DragValue::new(&mut build.height).range(240..=4320));
         ui.end_row();
     });
+}
+
+/// Unity's Preset Manager: default presets for importers (with an asset path filter) and
+/// components, applied when an asset is first imported or a component is added.
+fn preset_manager(
+    ui: &mut egui::Ui,
+    w: &oxide_scene::World,
+    m: &mut oxide_assets::preset::PresetManager,
+) {
+    ui.weak(
+        "New assets and newly added components get these presets. Importers can filter by \
+         asset path: a glob such as Assets/UI/** or *_n.png, or text the path contains.",
+    );
+    ui.add_space(6.0);
+    let assets = w.resource::<oxide_assets::AssetServer>();
+    let mut types: Vec<String> = ["TextureImporter", "ModelImporter", "AudioImporter"]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+    let mut comps: Vec<String> = w.registry.iter().map(|r| r.info.name.to_owned()).collect();
+    comps.sort();
+    types.extend(comps);
+    let mut remove = None;
+    egui::Grid::new("preset-manager")
+        .num_columns(5)
+        .striped(true)
+        .show(ui, |ui| {
+            ui.strong("");
+            ui.strong("Type");
+            ui.strong("Filter");
+            ui.strong("Preset");
+            ui.strong("");
+            ui.end_row();
+            for (i, d) in m.defaults.iter_mut().enumerate() {
+                ui.checkbox(&mut d.enabled, "");
+                egui::ComboBox::from_id_salt(("pm-type", i))
+                    .selected_text(&d.type_name)
+                    .width(150.0)
+                    .height(320.0)
+                    .show_ui(ui, |ui| {
+                        for t in &types {
+                            ui.selectable_value(&mut d.type_name, t.clone(), t);
+                        }
+                    });
+                let importer = d.type_name.ends_with("Importer");
+                ui.add_enabled_ui(importer, |ui| {
+                    ui.add_sized(
+                        [130.0, 20.0],
+                        egui::TextEdit::singleline(&mut d.filter).hint_text(if importer {
+                            "all assets"
+                        } else {
+                            "—"
+                        }),
+                    );
+                });
+                let presets = assets.presets_for(&d.type_name);
+                let shown = if d.preset.is_empty() {
+                    "None".to_owned()
+                } else {
+                    d.preset.rsplit('/').next().unwrap_or(&d.preset).to_owned()
+                };
+                egui::ComboBox::from_id_salt(("pm-preset", i))
+                    .selected_text(shown)
+                    .width(170.0)
+                    .show_ui(ui, |ui| {
+                        if presets.is_empty() {
+                            ui.weak(format!("No {} presets in the project", d.type_name));
+                        }
+                        for p in presets {
+                            let label = p.rsplit('/').next().unwrap_or(&p).to_owned();
+                            ui.selectable_value(&mut d.preset, p, label);
+                        }
+                    });
+                if ui.small_button("−").on_hover_text("Remove").clicked() {
+                    remove = Some(i);
+                }
+                ui.end_row();
+            }
+        });
+    if let Some(i) = remove {
+        m.defaults.remove(i);
+    }
+    ui.add_space(4.0);
+    if ui.button("Add Default Preset").clicked() {
+        m.defaults.push(oxide_assets::preset::DefaultPreset {
+            type_name: "TextureImporter".into(),
+            enabled: true,
+            ..Default::default()
+        });
+    }
 }

@@ -1326,9 +1326,27 @@ impl Editor {
                 st.record(w, &format!("Add {name}"), None, now);
                 let mut added = 0;
                 let mut last_err = String::new();
+                // Preset Manager: default presets for this component type.
+                let defaults: Vec<oxide_assets::Preset> = w
+                    .try_resource::<oxide_assets::preset::PresetManager>()
+                    .map(|m| m.presets_for(name, None))
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|p| {
+                        let h = oxide_assets::Handle::<oxide_assets::Preset>::from_path(p.as_str());
+                        w.resource_mut::<AssetServer>().data_asset(&h).cloned()
+                    })
+                    .collect();
                 for id in targets {
                     match w.add_component_by_name(id, name) {
-                        Ok(_) => added += 1,
+                        Ok(cid) => {
+                            added += 1;
+                            if let Some(c) = w.component_dyn_mut(id, cid) {
+                                for p in &defaults {
+                                    p.apply(c);
+                                }
+                            }
+                        }
                         Err(e) => last_err = e,
                     }
                 }

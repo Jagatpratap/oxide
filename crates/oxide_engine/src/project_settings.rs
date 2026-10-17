@@ -166,10 +166,12 @@ pub struct ProjectSettings {
     pub navigation: oxide_navigation::NavigationSettings,
     /// Locales and startup locale (Unity's Localization Settings).
     pub localization: oxide_localization::LocalizationSettings,
+    /// Default presets (Unity's Preset Manager).
+    pub preset_manager: oxide_assets::preset::PresetManager,
 }
 
 /// The pages and their files, for MCP and error messages.
-pub const SECTIONS: [(&str, &str); 8] = [
+pub const SECTIONS: [(&str, &str); 9] = [
     ("tags_and_layers", "TagManager.yaml"),
     ("time", "TimeManager.yaml"),
     ("physics", "DynamicsManager.yaml"),
@@ -178,6 +180,7 @@ pub const SECTIONS: [(&str, &str); 8] = [
     ("player", "PlayerSettings.yaml"),
     ("navigation", "NavMeshAreas.yaml"),
     ("localization", "LocalizationSettings.yaml"),
+    ("preset_manager", "PresetManager.yaml"),
 ];
 
 fn read<T: DeserializeOwned + Default>(dir: &Path, file: &str, warnings: &mut Vec<String>) -> T {
@@ -206,6 +209,7 @@ impl ProjectSettings {
             player: read(&dir, SECTIONS[5].1, &mut w),
             navigation: read(&dir, SECTIONS[6].1, &mut w),
             localization: read(&dir, SECTIONS[7].1, &mut w),
+            preset_manager: read(&dir, SECTIONS[8].1, &mut w),
         };
         (s, w)
     }
@@ -223,6 +227,7 @@ impl ProjectSettings {
             serde_yaml_ng::to_string(&self.player),
             serde_yaml_ng::to_string(&self.navigation),
             serde_yaml_ng::to_string(&self.localization),
+            serde_yaml_ng::to_string(&self.preset_manager),
         ];
         for ((_, file), text) in SECTIONS.iter().zip(texts) {
             let text = text.map_err(|e| e.to_string())?;
@@ -280,6 +285,10 @@ impl ProjectSettings {
                 .unwrap_or_default(),
             localization: world
                 .try_resource::<oxide_localization::LocalizationSettings>()
+                .cloned()
+                .unwrap_or_default(),
+            preset_manager: world
+                .try_resource::<oxide_assets::preset::PresetManager>()
                 .cloned()
                 .unwrap_or_default(),
         }
@@ -349,6 +358,7 @@ impl ProjectSettings {
             l.generation += 1;
         }
         world.resources.insert(loc);
+        world.resources.insert(self.preset_manager.clone());
     }
 
     /// One page as JSON (MCP).
@@ -363,6 +373,7 @@ impl ProjectSettings {
                 "player" => serde_json::to_value(&self.player),
                 "navigation" => serde_json::to_value(&self.navigation),
                 "localization" => serde_json::to_value(&self.localization),
+                "preset_manager" => serde_json::to_value(&self.preset_manager),
                 _ => return None,
             }
             .unwrap_or_default(),
@@ -394,6 +405,7 @@ impl ProjectSettings {
             "input" => self.input = parse(current)?,
             "navigation" => self.navigation = parse(current)?,
             "localization" => self.localization = parse(current)?,
+            "preset_manager" => self.preset_manager = parse(current)?,
             _ => self.player = parse(current)?,
         }
         Ok(())

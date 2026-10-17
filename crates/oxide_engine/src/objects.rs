@@ -158,8 +158,23 @@ pub fn instantiate_model(world: &mut World, model: &Handle<Model>) -> Option<Gam
             stack.push((c, id));
         }
     }
-    // Animated models get an Animator with one state per clip (like Unity's import).
-    if !m.animations.is_empty() {
+    // The Rig tab: None imports no animation, Legacy uses the Animation component, Generic
+    // and Humanoid an Animator with one state per clip (like Unity's import).
+    let imp: oxide_assets::importers::ModelImporter =
+        world.resource::<AssetServer>().importer(model.path());
+    use oxide_assets::importers::ModelImporterAnimationType as Rig;
+    if imp.animation_type == Rig::Legacy
+        && let Some(first) = m.animations.first()
+    {
+        world.add_component(
+            root,
+            oxide_animation::Animation {
+                clip: Some(first.clone()),
+                looping: imp.loop_time,
+                ..Default::default()
+            },
+        );
+    } else if !m.animations.is_empty() {
         let assets = world.resource_mut::<AssetServer>();
         let clips: Vec<(String, Handle<oxide_assets::AnimationClip>)> = m
             .animations
@@ -212,6 +227,16 @@ pub fn instantiate_model(world: &mut World, model: &Handle<Model>) -> Option<Gam
                         ..Default::default()
                     },
                 );
+                // Model Importer "Generate Colliders".
+                if imp.generate_colliders {
+                    world.add_component(
+                        id,
+                        oxide_physics::MeshCollider {
+                            mesh: Some(mesh.clone()),
+                            ..Default::default()
+                        },
+                    );
+                }
             }
         }
     }

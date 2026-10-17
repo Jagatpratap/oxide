@@ -6,6 +6,74 @@ use crate::handle::Asset;
 use oxide_core::reflect::{FieldInfo, Reflect, ReflectError, TypeInfo, Value, ValueKind};
 use std::collections::BTreeMap;
 
+/// One row of Unity's Preset Manager: a Preset applied by default to new objects of a type
+/// (components when added, importers when an asset is first imported).
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct DefaultPreset {
+    /// `TextureImporter`, `ModelImporter`, `AudioImporter` or a component type.
+    pub type_name: String,
+    /// Asset path filter for importers: empty (all), a glob (`Assets/UI/**`, `*_n.png`) or
+    /// text the path must contain.
+    pub filter: String,
+    /// The `.preset` file.
+    pub preset: String,
+    pub enabled: bool,
+}
+
+/// Unity's Preset Manager (Project Settings): the default presets, applied in order.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct PresetManager {
+    pub defaults: Vec<DefaultPreset>,
+}
+
+/// Unity-style glob: `**` any path, `*` any part of one name, `?` one character.
+pub fn glob_match(pattern: &str, path: &str) -> bool {
+    fn go(p: &[char], s: &[char]) -> bool {
+        match (p.first(), s.first()) {
+            (None, None) => true,
+            (Some('*'), _) if p.get(1) == Some(&'*') => {
+                let rest = &p[2..];
+                let rest = rest.strip_prefix(&['/']).unwrap_or(rest);
+                (0..=s.len()).any(|i| go(rest, &s[i..]))
+            }
+            (Some('*'), _) => (0..=s.len())
+                .take_while(|&i| i == 0 || s[i - 1] != '/')
+                .any(|i| go(&p[1..], &s[i..])),
+            (Some('?'), Some(c)) if *c != '/' => go(&p[1..], &s[1..]),
+            (Some(a), Some(b)) if a.eq_ignore_ascii_case(b) => go(&p[1..], &s[1..]),
+            _ => false,
+        }
+    }
+    let p: Vec<char> = pattern.chars().collect();
+    let s: Vec<char> = path.chars().collect();
+    go(&p, &s)
+}
+
+impl PresetManager {
+    /// Preset files to apply to a new `type_name` (in order); `asset` is the asset path for
+    /// importers.
+    pub fn presets_for(&self, type_name: &str, asset: Option<&str>) -> Vec<String> {
+        self.defaults
+            .iter()
+            .filter(|d| d.enabled && d.type_name == type_name && !d.preset.is_empty())
+            .filter(|d| {
+                let f = d.filter.trim();
+                match asset {
+                    _ if f.is_empty() => true,
+                    Some(a) if f.contains(['*', '?']) => {
+                        glob_match(f, a) || glob_match(f, a.rsplit('/').next().unwrap_or(a))
+                    }
+                    Some(a) => a.to_lowercase().contains(&f.to_lowercase()),
+                    None => true,
+                }
+            })
+            .map(|d| d.preset.clone())
+            .collect()
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Preset {
     /// Component type the values belong to (`Light`, `Rigidbody`, ...).
@@ -150,5 +218,53 @@ mod tests {
         let h: crate::Handle<Preset> = crate::Handle::from_path("Assets/Red.preset");
         assert_eq!(a.data.get(&h), Some(&p));
         let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[cfg(test)]
+mod manager_tests {
+    use super::*;
+
+    #[test]
+    fn defaults_by_type_and_filter() {
+        let m = PresetManager {
+            defaults: vec![
+                DefaultPreset {
+                    type_name: "TextureImporter".into(),
+                    filter: "Assets/UI/**".into(),
+                    preset: "Assets/UI.preset".into(),
+                    enabled: true,
+                },
+                DefaultPreset {
+                    type_name: "TextureImporter".into(),
+                    filter: "*_n.png".into(),
+                    preset: "Assets/Normal.preset".into(),
+                    enabled: true,
+                },
+                DefaultPreset {
+                    type_name: "Light".into(),
+                    filter: String::new(),
+                    preset: "Assets/Warm.preset".into(),
+                    enabled: true,
+                },
+            ],
+        };
+        assert_eq!(
+            m.presets_for("TextureImporter", Some("Assets/UI/Icons/a.png")),
+            vec!["Assets/UI.preset"]
+        );
+        assert_eq!(
+            m.presets_for("TextureImporter", Some("Assets/Rock_n.png")),
+            vec!["Assets/Normal.preset"]
+        );
+        assert!(
+            m.presets_for("TextureImporter", Some("Assets/Rock.png"))
+                .is_empty()
+        );
+        assert_eq!(m.presets_for("Light", None), vec!["Assets/Warm.preset"]);
+        assert!(
+            glob_match("Assets/*.png", "Assets/a.png")
+                && !glob_match("Assets/*.png", "Assets/x/a.png")
+        );
     }
 }

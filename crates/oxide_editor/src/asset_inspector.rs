@@ -20,6 +20,9 @@ pub struct AssetInspectorState {
     new_label: String,
     /// Packed atlas preview: (atlas path, texture version, image).
     atlas_preview: Option<(String, u64, egui::TextureHandle)>,
+    /// Model / Audio import settings being edited (applied with Apply), by asset path.
+    model_importer: Option<(String, oxide_assets::importers::ModelImporter)>,
+    audio_importer: Option<(String, oxide_assets::importers::AudioImporter)>,
     /// The `.asmdef` being edited (applied with Apply): (path, edited, as loaded).
     asmdef: Option<(String, crate::assemblies::AsmDef, crate::assemblies::AsmDef)>,
 }
@@ -80,7 +83,18 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: &s
                 "Texture" => texture(st, engine, ui, path),
                 "Material" => material(st, engine, ui, path),
                 "RenderTexture" => render_texture(st, engine, ui, path),
-                "Model" => model(st, engine, ui, path),
+                "Model" => {
+                    let mut slot = st.asset_inspector.model_importer.take();
+                    importer_settings(st, engine, ui, path, &mut slot, "model-importer");
+                    st.asset_inspector.model_importer = slot;
+                    ui.separator();
+                    model(st, engine, ui, path)
+                }
+                "AudioClip" => {
+                    let mut slot = st.asset_inspector.audio_importer.take();
+                    importer_settings(st, engine, ui, path, &mut slot, "audio-importer");
+                    st.asset_inspector.audio_importer = slot;
+                }
                 "Prefab" => prefab(st, engine, ui, path),
                 "Scene" => {
                     if ui.button("Open Scene").clicked() {
@@ -146,11 +160,11 @@ fn texture(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: &
         .world
         .resource::<AssetServer>()
         .texture_importer(path);
-    let ia = &mut st.asset_inspector;
-    if ia.importer.as_ref().is_none_or(|(p, _)| p != path) {
-        ia.importer = Some((path.to_owned(), saved.clone()));
+    let mut slot = st.asset_inspector.importer.take();
+    if slot.as_ref().is_none_or(|(p, _)| p != path) {
+        slot = Some((path.to_owned(), saved.clone()));
     }
-    let Some((_, imp)) = ia.importer.as_mut() else {
+    let Some((_, imp)) = slot.as_mut() else {
         return;
     };
     crate::inspector::reflect_grid(ui, &engine.world, imp, "texture-importer");
@@ -160,6 +174,7 @@ fn texture(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: &
     let mut revert = false;
     let mut sprite_editor = false;
     ui.horizontal(|ui| {
+        importer_presets(st, engine, ui, path, imp);
         if imp.texture_type == oxide_assets::TextureImporterType::Sprite {
             sprite_editor = ui.button("Sprite Editor").clicked();
         }
@@ -176,10 +191,11 @@ fn texture(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: &
         st.sprite_editor.open(path);
         st.actions.push(Action::OpenTab(crate::Tab::SpriteEditor));
     }
+    let imp = imp.clone();
+    st.asset_inspector.importer = slot;
     if revert {
         st.asset_inspector.importer = Some((path.to_owned(), saved));
     } else if apply {
-        let imp = imp.clone();
         match engine
             .world
             .resource_mut::<AssetServer>()
@@ -206,6 +222,124 @@ fn texture(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: &
             "{}×{}  {format}  {mips} mip levels",
             t.width, t.height
         ));
+    }
+}
+
+/// Unity's import settings section for Model and Audio importers: the reflected fields,
+/// Apply / Revert (Apply re-imports), and Presets (save these settings, or apply a saved
+/// importer Preset).
+fn importer_settings<T>(
+    st: &mut EditorState,
+    engine: &mut Engine,
+    ui: &mut egui::Ui,
+    path: &str,
+    slot: &mut Option<(String, T)>,
+    salt: &str,
+) where
+    T: Reflect + Default + Clone + PartialEq + 'static,
+{
+    let saved: T = engine.world.resource::<AssetServer>().importer(path);
+    if slot.as_ref().is_none_or(|(p, _)| p != path) {
+        *slot = Some((path.to_owned(), saved.clone()));
+    }
+    let Some((_, imp)) = slot.as_mut() else {
+        return;
+    };
+    crate::inspector::reflect_grid(ui, &engine.world, imp, salt);
+    let changed = *imp != saved;
+    let (mut apply, mut revert) = (false, false);
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        importer_presets(st, engine, ui, path, imp);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            apply = ui
+                .add_enabled(changed, egui::Button::new("Apply"))
+                .clicked();
+            revert = ui
+                .add_enabled(changed, egui::Button::new("Revert"))
+                .clicked();
+        });
+    });
+    if revert {
+        *slot = Some((path.to_owned(), saved));
+    } else if apply {
+        let imp = imp.clone();
+        st.status = match engine
+            .world
+            .resource_mut::<AssetServer>()
+            .set_importer(path, &imp)
+        {
+            Ok(()) => format!("Reimported {path}"),
+            Err(e) => e,
+        };
+    }
+}
+
+/// The Presets menu of an importer: save the settings as a Preset, or apply a saved one to
+/// the edited settings (Apply then re-imports).
+fn importer_presets(
+    st: &mut EditorState,
+    engine: &mut Engine,
+    ui: &mut egui::Ui,
+    path: &str,
+    imp: &mut dyn Reflect,
+) {
+    let type_name = imp.type_info().name;
+    let presets = engine
+        .world
+        .resource::<AssetServer>()
+        .presets_for(type_name);
+    let (mut save_preset, mut use_preset) = (false, None);
+    ui.menu_button("Presets", |ui| {
+        if ui.button("Save current to…").clicked() {
+            save_preset = true;
+            ui.close();
+        }
+        if !presets.is_empty() {
+            ui.separator();
+        }
+        for p in &presets {
+            if ui.button(p.rsplit('/').next().unwrap_or(p)).clicked() {
+                use_preset = Some(p.clone());
+                ui.close();
+            }
+        }
+    })
+    .response
+    .on_hover_text("Save these settings as a Preset, or apply one");
+    if let Some(p) = use_preset {
+        let assets = engine.world.resource_mut::<AssetServer>();
+        let h = oxide_assets::Handle::<oxide_assets::Preset>::from_path(p.as_str());
+        match assets.data_asset(&h).cloned() {
+            Some(preset) => {
+                let skipped = preset.apply(imp);
+                st.status = if skipped.is_empty() {
+                    format!("Applied {p} (press Apply to re-import)")
+                } else {
+                    format!("Applied {p}; skipped {}", skipped.join(", "))
+                };
+            }
+            None => st.status = format!("cannot load {p}"),
+        }
+    }
+    if save_preset {
+        let folder = path.rsplit_once('/').map_or("Assets", |(d, _)| d);
+        let stem = path.rsplit('/').next().unwrap_or(path);
+        let root = engine.world.resource::<AssetServer>().full_path("");
+        let new =
+            crate::asset_ops::unique_path(&root, &format!("{folder}/{stem} {type_name}.preset"));
+        let preset = oxide_assets::Preset::of(&*imp);
+        match engine
+            .world
+            .resource_mut::<AssetServer>()
+            .save_data(&new, Box::new(preset))
+        {
+            Ok(()) => {
+                st.status = format!("Saved {new}");
+                st.project.invalidate();
+            }
+            Err(e) => st.status = e,
+        }
     }
 }
 

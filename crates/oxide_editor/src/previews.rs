@@ -35,9 +35,10 @@ pub enum PreviewKind {
 pub fn preview_kind(path: &str) -> Option<PreviewKind> {
     let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
     match ext.as_str() {
-        "png" | "jpg" | "jpeg" | "tga" | "bmp" | "hdr" => Some(PreviewKind::Texture),
+        "png" | "jpg" | "jpeg" | "tga" | "bmp" | "hdr" | "exr" | "psd" | "psb" | "tif" | "tiff"
+        | "gif" | "webp" => Some(PreviewKind::Texture),
         "mat" => Some(PreviewKind::Material),
-        "glb" | "gltf" => Some(PreviewKind::Model),
+        "glb" | "gltf" | "fbx" | "obj" => Some(PreviewKind::Model),
         "prefab" => Some(PreviewKind::Prefab),
         "lensflare" => Some(PreviewKind::LensFlare),
         "fontasset" => Some(PreviewKind::FontAsset),
@@ -88,7 +89,15 @@ fn stamp(full: &Path) -> Option<SystemTime> {
 
 fn decode_texture(full: &Path) -> Result<egui::ColorImage, String> {
     let bytes = std::fs::read(full).map_err(|e| e.to_string())?;
-    let img = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
+    let img = if bytes.starts_with(b"8BPS") {
+        // Photoshop files: the composite image, as the importer reads it.
+        let (w, h, px) = oxide_assets::psd::decode(&bytes)?;
+        image::DynamicImage::ImageRgba8(
+            image::RgbaImage::from_raw(w, h, px).ok_or("bad PSD image size")?,
+        )
+    } else {
+        image::load_from_memory(&bytes).map_err(|e| e.to_string())?
+    };
     let img = img.thumbnail(SIZE, SIZE).to_rgba8();
     let (w, h) = img.dimensions();
     Ok(egui::ColorImage::from_rgba_unmultiplied(

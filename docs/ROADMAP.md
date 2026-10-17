@@ -257,12 +257,21 @@ from the fixed edge and each object along its matching local axis).
   dependents; refreshed at editor start and every 3 s; MCP `asset_database`
   ([Asset Database](https://docs.unity3d.com/Manual/AssetDatabase.html),
   [Caching](https://docs.unity3d.com/Manual/importing-caching-assets.html))
-- ◐ Importers: textures (PNG/JPG/TGA/EXR/HDR/PSD-flat), models (glTF, FBX, OBJ), audio (WAV/OGG/MP3/FLAC), fonts, shaders
+- ☑ Importers: textures (PNG/JPG/TGA/BMP/EXR/HDR/TIFF/GIF/WebP/KTX2, PSD/PSB composite with matte removal),
+  models (glTF; FBX binary 6.1-7.7 and ASCII with axis/unit conversion, hierarchy, pre/post rotation,
+  geometric transforms, normals/UV sets/vertex colours, multi-material sub-meshes, materials with external or
+  embedded textures, skinning and animation stacks baked to clips; OBJ with MTL), audio (WAV/OGG/MP3/FLAC),
+  fonts, shaders
   ([Asset types](https://docs.unity3d.com/Manual/AssetTypes.html),
   [Importing](https://docs.unity3d.com/Manual/import-assets.html))
-- ◐ Import settings: Texture Importer settings in `<texture>.meta` (type, sRGB, max size, mipmaps,
+- ☑ Import settings: Texture Importer settings in `<texture>.meta` (type, sRGB, max size, mipmaps,
   wrap/filter/aniso, compression), editable over MCP (`texture_import_settings`) and in the Inspector
-  with Apply/Revert ☑; Presets ☐
+  with Apply/Revert; Model Importer (scale factor, convert units, generate colliders, normals
+  Import/Calculate with smoothing angle, swap UVs, lightmap UVs, rig None/Legacy/Generic/Humanoid,
+  import animation, loop time, import materials) and Audio Importer (force to mono, normalize, sample rate
+  preserve/optimize/override, preload) in `.meta` with only changed fields, MCP `import_settings`; importer
+  Presets (save / apply from the Inspector) and the Preset Manager (Project Settings: default presets per
+  importer with path filters and per component, applied on first import / Add Component)
   ([Texture Importer](https://docs.unity3d.com/Manual/class-TextureImporter.html),
   [Presets](https://docs.unity3d.com/Manual/Presets.html))
 - ◐ File watching: textures (and their .meta), materials, shaders and render textures re-import
