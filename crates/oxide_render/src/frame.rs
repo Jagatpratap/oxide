@@ -879,6 +879,8 @@ pub struct RenderFrame {
     pub debug_view: DebugView,
     /// From the Render Pipeline Asset (Graphics / Quality settings).
     pub rendering_path: RenderingPath,
+    /// Global shader keywords (Unity `Shader.EnableKeyword`).
+    pub global_keywords: Vec<String>,
     /// A custom render pipeline's commands; `None` = the Universal Render Pipeline.
     pub custom_steps: Option<Vec<RenderStep>>,
     /// Universal Renderer filtering: layers drawn in the opaque and transparent queues

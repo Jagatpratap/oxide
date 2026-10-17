@@ -133,6 +133,16 @@ pub fn ports(node: &GraphNode, cx: &PortCx) -> Result<(Vec<Slot>, Vec<Slot>), St
             };
             (parse_ports(&get("Inputs")), parse_ports(&get("Outputs")))
         }
+        "Keyword" => {
+            let r = node.option("Keyword").unwrap_or("");
+            match cx.keywords.iter().find(|k| k.reference == r) {
+                Some(k) if k.keyword_type == crate::graph::KeywordType::Enum => (
+                    k.entries.iter().map(|e| Slot::new(e, Ty::Dyn)).collect(),
+                    def.outputs.clone(),
+                ),
+                _ => (def.inputs.clone(), def.outputs.clone()),
+            }
+        }
         "Swizzle" => {
             let mask = node.option("Mask").unwrap_or("xyzw");
             let n = mask.len().clamp(1, 4) as u32;
@@ -170,6 +180,8 @@ pub struct Compiled {
     pub alpha_clip: bool,
     pub double_sided: bool,
     pub cast_shadows: bool,
+    /// Keywords compiled as variants.
+    pub keywords: Vec<oxide_assets::shader::ShaderKeyword>,
 }
 
 #[derive(Default)]
@@ -554,18 +566,41 @@ impl Emit<'_> {
                 }])
             }
             "Keyword" => {
+                use crate::graph::{KeywordDefinition, KeywordType};
                 let r = node.option("Keyword").unwrap_or("");
-                let flag = match self.alloc.props.iter().find(|e| e.name == r) {
-                    Some(e) if sc.prefix.is_empty() => format!("(graph_props[{}].x > 0.5)", e.slot),
-                    _ => match sc.keywords.iter().find(|k| k.reference == r) {
-                        Some(k) => k.default.to_string(),
-                        None => {
-                            self.error(sc, node.id, format!("keyword `{r}` not found"));
-                            "false".into()
-                        }
-                    },
+                let Some(k) = sc.keywords.iter().find(|k| k.reference == r) else {
+                    self.error(sc, node.id, format!("keyword `{r}` not found"));
+                    return Some(vec![args.first().cloned().unwrap_or_else(|| "0.0".into())]);
                 };
-                Some(vec![format!("select({}, {}, {flag})", args[1], args[0])])
+                // The keyword's state as a u32: a variant constant, a material value (Dynamic
+                // Branch) or, inside a Sub Graph, its default.
+                let state = if !sc.prefix.is_empty() {
+                    format!("{}u", k.default_value())
+                } else if k.definition == KeywordDefinition::DynamicBranch {
+                    match self.alloc.props.iter().find(|e| e.name == r) {
+                        Some(e) => format!("u32(graph_props[{}].x + 0.5)", e.slot),
+                        None => format!("{}u", k.default_value()),
+                    }
+                } else {
+                    k.constant_name()
+                };
+                match k.keyword_type {
+                    KeywordType::Boolean => Some(vec![format!(
+                        "select({}, {}, {state} != 0u)",
+                        args[1], args[0]
+                    )]),
+                    KeywordType::Enum => {
+                        if args.is_empty() {
+                            self.error(sc, node.id, format!("keyword `{r}` has no entries"));
+                            return Some(vec!["0.0".into()]);
+                        }
+                        let mut acc = args[args.len() - 1].clone();
+                        for (i, a) in args.iter().enumerate().rev().skip(1) {
+                            acc = format!("select({acc}, {a}, {state} == {i}u)");
+                        }
+                        Some(vec![acc])
+                    }
+                }
             }
             "Texture 2D Asset" => {
                 let path = node.option("Texture").unwrap_or("").to_owned();
@@ -779,13 +814,21 @@ pub fn compile(graph: &ShaderGraph, subgraphs: SubGraphs, target: Target) -> Com
             errors.push((0, format!("{}: more than {VALUE_SLOTS} properties", p.name)));
         }
     }
+    // Dynamic Branch keywords are material values; the others are variants.
     for k in &graph.keywords {
+        if k.definition != crate::graph::KeywordDefinition::DynamicBranch {
+            continue;
+        }
         alloc.value(ShaderProperty {
             name: k.reference.clone(),
             display_name: k.name.clone(),
-            kind: "Boolean".into(),
+            // Filled from the material's enabled keywords.
+            kind: match k.keyword_type {
+                crate::graph::KeywordType::Boolean => "Keyword".into(),
+                crate::graph::KeywordType::Enum => format!("Keyword:{}", k.entries.join("|")),
+            },
             slot: 0,
-            default: [k.default as u32 as f32, 0.0, 0.0, 0.0],
+            default: [k.default_value() as f32, 0.0, 0.0, 0.0],
             default_texture: None,
             range: None,
         });
@@ -925,6 +968,18 @@ pub fn compile(graph: &ShaderGraph, subgraphs: SubGraphs, target: Target) -> Com
             .collect::<String>()
     };
     let mut hooks = String::from(HELPERS);
+    // Variant keywords: override constants chosen per pipeline (dead branches compile away).
+    for k in graph
+        .keywords
+        .iter()
+        .filter(|k| k.definition != crate::graph::KeywordDefinition::DynamicBranch)
+    {
+        hooks.push_str(&format!(
+            "override {}: u32 = {}u;\n",
+            k.constant_name(),
+            k.default_value()
+        ));
+    }
     for (_, f) in &functions {
         hooks.push_str(f);
     }
@@ -946,6 +1001,20 @@ pub fn compile(graph: &ShaderGraph, subgraphs: SubGraphs, target: Target) -> Com
     out.hooks = hooks;
     out.shadow = target == Target::Material && (vertex_changed || settings.alpha_clipping);
     out.properties = alloc.props;
+    out.keywords = graph
+        .keywords
+        .iter()
+        .filter(|k| k.definition != crate::graph::KeywordDefinition::DynamicBranch)
+        .map(|k| oxide_assets::shader::ShaderKeyword {
+            reference: k.reference.clone(),
+            entries: match k.keyword_type {
+                crate::graph::KeywordType::Boolean => Vec::new(),
+                crate::graph::KeywordType::Enum => k.entries.clone(),
+            },
+            default: k.default_value(),
+            global: k.scope == crate::graph::KeywordScope::Global,
+        })
+        .collect();
     out.errors = errors;
     out.dependencies = deps;
     out

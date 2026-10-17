@@ -113,6 +113,8 @@ struct MainKey {
     wire: bool,
     /// A Shader Graph's module instead of the built-in Lit shader.
     shader: Option<AssetId>,
+    /// Shader variant: which keyword constants the pipeline is made with (0: defaults).
+    variant: u64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -253,6 +255,8 @@ pub struct SceneRenderer {
     /// Compiled Shader Graphs by their asset id.
     graph_modules: HashMap<AssetId, GraphModule>,
     main_pipelines: HashMap<MainKey, wgpu::RenderPipeline>,
+    /// Keyword constants of each shader variant in use.
+    variants: HashMap<u64, Vec<(String, f64)>>,
     /// Deferred: G-buffer variants of the Lit pipelines, the G-buffer textures' layout and
     /// the lighting pass.
     gbuffer_pipelines: HashMap<MainKey, wgpu::RenderPipeline>,
@@ -819,6 +823,7 @@ impl SceneRenderer {
             shadow_module,
             graph_modules: HashMap::new(),
             main_pipelines: HashMap::new(),
+            variants: HashMap::new(),
             gbuffer_pipelines: HashMap::new(),
             gbuffer_layout,
             deferred_lighting,
@@ -1145,15 +1150,20 @@ impl SceneRenderer {
             .and_then(|id| self.graph_modules.get(&id))
             .map_or(&self.lit_module, |g| &g.lit);
         let (layout, ms) = (&self.main_layout, key.samples);
+        let constants = variant_constants(&self.variants, key.variant);
         self.main_pipelines.entry(key).or_insert_with(|| {
             let buffers = vertex_layouts(key.skinned);
+            let options = wgpu::PipelineCompilationOptions {
+                constants: &constants,
+                ..Default::default()
+            };
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(&format!("lit {key:?}")),
                 layout: Some(layout),
                 vertex: wgpu::VertexState {
                     module,
                     entry_point: Some(if key.skinned { "vs_skinned" } else { "vs_main" }),
-                    compilation_options: Default::default(),
+                    compilation_options: options.clone(),
                     buffers: &buffers,
                 },
                 primitive: wgpu::PrimitiveState {
@@ -1189,7 +1199,7 @@ impl SceneRenderer {
                 fragment: Some(wgpu::FragmentState {
                     module,
                     entry_point: Some(if key.wire { "fs_wire" } else { "fs_main" }),
-                    compilation_options: Default::default(),
+                    compilation_options: options.clone(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: HDR_FORMAT,
                         blend: Some(if key.transparent {
@@ -1213,8 +1223,13 @@ impl SceneRenderer {
             .and_then(|id| self.graph_modules.get(&id))
             .map_or(&self.lit_module, |g| &g.lit);
         let layout = &self.main_layout;
+        let constants = variant_constants(&self.variants, key.variant);
         self.gbuffer_pipelines.entry(key).or_insert_with(|| {
             let buffers = vertex_layouts(key.skinned);
+            let options = wgpu::PipelineCompilationOptions {
+                constants: &constants,
+                ..Default::default()
+            };
             let targets: Vec<Option<wgpu::ColorTargetState>> = GBUFFER_FORMATS
                 .iter()
                 .map(|&format| {
@@ -1231,7 +1246,7 @@ impl SceneRenderer {
                 vertex: wgpu::VertexState {
                     module,
                     entry_point: Some(if key.skinned { "vs_skinned" } else { "vs_main" }),
-                    compilation_options: Default::default(),
+                    compilation_options: options.clone(),
                     buffers: &buffers,
                 },
                 primitive: wgpu::PrimitiveState {
@@ -1254,7 +1269,7 @@ impl SceneRenderer {
                 fragment: Some(wgpu::FragmentState {
                     module,
                     entry_point: Some("fs_gbuffer"),
-                    compilation_options: Default::default(),
+                    compilation_options: options.clone(),
                     targets: &targets,
                 }),
                 multiview_mask: None,
@@ -2194,6 +2209,8 @@ impl SceneRenderer {
             /// Shader Graph module for the main and shadow passes.
             shader: Option<AssetId>,
             shadow_shader: Option<AssetId>,
+            /// Shader variant (keyword constants).
+            variant: u64,
         }
         let mut graphs: Vec<(AssetId, u64)> = Vec::new();
         let mut gis: Vec<InstanceGi> = Vec::new();
@@ -2257,7 +2274,30 @@ impl SceneRenderer {
                 }
                 _ => -1.0,
             };
+            // The shader variant: the material's keyword constants plus the frame's Global
+            // keywords that its shader declares.
+            let mut constants = gm.constants.clone();
+            for k in &gm.global_keywords {
+                constants.push((
+                    oxide_assets::shader::keyword_constant(&k.reference),
+                    k.value(&|n| frame.global_keywords.iter().any(|g| g == n)) as f64,
+                ));
+            }
+            let variant = if constants.is_empty() {
+                0
+            } else {
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                gm.shader.map(|g| g.0).hash(&mut hasher);
+                for (k, v) in &constants {
+                    k.hash(&mut hasher);
+                    v.to_bits().hash(&mut hasher);
+                }
+                hasher.finish() | 1
+            };
+            self.variants.entry(variant).or_insert(constants);
             resolved.push(Resolved {
+                variant,
                 gi,
                 probes: self.reflections.select(probe_pos, exclude),
                 item: d,
@@ -2823,6 +2863,7 @@ impl SceneRenderer {
                     depth_write: true,
                     wire: false,
                     shader: r.shader,
+                    variant: r.variant,
                 };
                 let idx = instances.len() as u32;
                 instances.push(make_instance(r));
@@ -2860,6 +2901,7 @@ impl SceneRenderer {
                             depth_write: false,
                             wire: false,
                             shader: r.shader,
+                            variant: r.variant,
                         },
                         material: r.material,
                         mesh: r.item.mesh,
@@ -2917,6 +2959,7 @@ impl SceneRenderer {
                             } else {
                                 r.shader
                             },
+                            variant: if override_mat.is_some() { 0 } else { r.variant },
                         },
                         material,
                         mesh: r.item.mesh,
@@ -2949,6 +2992,7 @@ impl SceneRenderer {
                             depth_write: false,
                             wire: true,
                             shader: None,
+                            variant: 0,
                         },
                         material: r.material,
                         mesh: r.item.mesh,
@@ -3014,6 +3058,7 @@ impl SceneRenderer {
                             } else {
                                 r.shader
                             },
+                            variant: if override_mat.is_some() { 0 } else { r.variant },
                         },
                         material,
                         mesh: r.item.mesh,
@@ -4378,6 +4423,17 @@ fn frustum_planes(m: &Matrix4x4) -> [Vector4; 6] {
 
 fn sphere_visible(planes: &[Vector4; 6], c: Vector3, r: f32) -> bool {
     planes.iter().all(|p| p.truncate().dot(c) + p.w >= -r)
+}
+
+/// A shader variant's keyword constants, as pipeline override values.
+fn variant_constants(
+    variants: &HashMap<u64, Vec<(String, f64)>>,
+    variant: u64,
+) -> Vec<(&str, f64)> {
+    variants
+        .get(&variant)
+        .map(|c| c.iter().map(|(k, v)| (k.as_str(), *v)).collect())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

@@ -905,12 +905,17 @@ fn shader_picker(
             }
         }
     });
-    if changed && let Some(g) = &m.shader_graph {
+    if changed && let Some(g) = m.shader_graph.clone() {
         let assets = engine.world.resource_mut::<AssetServer>();
         if let Err(e) = assets.ensure_loaded(g.path()) {
             st.status = e;
         }
         oxide_shadergraph::compile_asset(assets, g.path());
+        if let Some(graph) = assets.data.get(
+            &oxide_assets::Handle::<oxide_shadergraph::ShaderGraph>::from_path(g.path().to_owned()),
+        ) {
+            graph.apply_default_keywords(m);
+        }
     }
     changed
 }
@@ -1049,14 +1054,34 @@ fn graph_properties(
             }
         });
     }
-    for k in graph.keywords.iter().filter(|k| k.exposed) {
-        let mut b = m
-            .property(&k.reference)
-            .map_or(k.default, |p| p.value.x > 0.5);
+    // Local keywords (Global ones are set from scripts with `Shader.EnableKeyword`).
+    for k in graph
+        .keywords
+        .iter()
+        .filter(|k| k.exposed && k.scope == oxide_shadergraph::KeywordScope::Local)
+    {
+        let mut state = k.state_on(m);
         ui.horizontal(|ui| {
             crate::inspector::prop_label(ui, &k.name).on_hover_text(&k.reference);
-            if ui.checkbox(&mut b, "").changed() {
-                m.set_float(&k.reference, b as u32 as f32);
+            let before = state;
+            match k.keyword_type {
+                oxide_shadergraph::KeywordType::Boolean => {
+                    let mut b = state != 0;
+                    ui.checkbox(&mut b, "");
+                    state = b as u32;
+                }
+                oxide_shadergraph::KeywordType::Enum => {
+                    egui::ComboBox::from_id_salt(("mat-kw", &k.reference))
+                        .selected_text(k.entries.get(state as usize).map_or("", |e| e.as_str()))
+                        .show_ui(ui, |ui| {
+                            for (i, e) in k.entries.iter().enumerate() {
+                                ui.selectable_value(&mut state, i as u32, e);
+                            }
+                        });
+                }
+            }
+            if state != before {
+                m.set_keyword_state(&k.reference, &k.entries, state);
                 changed = true;
             }
         });

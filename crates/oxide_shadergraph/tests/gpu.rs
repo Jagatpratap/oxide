@@ -210,3 +210,98 @@ fn preview_target_renders_each_node() {
             .join("\n")
     );
 }
+
+/// Shader keywords: an Enum keyword picks the color per material (each its own variant), and
+/// a Global keyword (`Shader.EnableKeyword`) turns every material black.
+#[test]
+fn keyword_variants_pick_per_material_and_global() {
+    let Some(gpu) = Gpu::headless() else {
+        eprintln!("no GPU; skipped");
+        return;
+    };
+    const KW_GRAPH: &str = "test:keywords.shadergraph";
+    let mut assets = AssetServer::new(".");
+    register_assets(&mut assets);
+    let mut g = ShaderGraph::default();
+    g.settings.material = GraphMaterial::Unlit;
+    g.keywords.push(GraphKeyword {
+        name: "Mode".into(),
+        reference: "_MODE".into(),
+        exposed: true,
+        keyword_type: KeywordType::Enum,
+        entries: vec!["Red".into(), "Green".into(), "Blue".into()],
+        default_entry: 1,
+        ..Default::default()
+    });
+    g.keywords.push(GraphKeyword {
+        name: "Dark".into(),
+        reference: "_DARK".into(),
+        scope: KeywordScope::Global,
+        ..Default::default()
+    });
+    let mode = g
+        .graph
+        .add(GraphNode::new(0, "Keyword", Vector2::ZERO).with_option("Keyword", "_MODE"));
+    let dark = g
+        .graph
+        .add(GraphNode::new(0, "Keyword", Vector2::ZERO).with_option("Keyword", "_DARK"));
+    for (port, node, c) in [
+        ("Red", mode, Vector4::new(1.0, 0.0, 0.0, 1.0)),
+        ("Green", mode, Vector4::new(0.0, 1.0, 0.0, 1.0)),
+        ("Blue", mode, Vector4::new(0.0, 0.0, 1.0, 1.0)),
+        ("On", dark, Vector4::new(0.0, 0.0, 0.0, 1.0)),
+    ] {
+        let col = g
+            .graph
+            .add(GraphNode::new(0, "Color", Vector2::ZERO).with_value("Color", c));
+        g.graph.connect(col, "Out", node, port);
+    }
+    g.graph.connect(mode, "Out", dark, "Off");
+    let frag = g.graph.find("Fragment").unwrap().id;
+    g.graph.connect(dark, "Out", frag, "Base Color");
+    assets
+        .data
+        .insert(KW_GRAPH, "ShaderGraph", Box::new(g.clone()));
+    assert!(compile_asset(&mut assets, KW_GRAPH));
+
+    let mut m = Material::lit("kw", Color::WHITE);
+    m.shader_graph = Some(Handle::from_path(KW_GRAPH.to_owned()));
+    g.apply_default_keywords(&mut m);
+    let mut blue = m.clone();
+    blue.set_keyword_state("_MODE", &g.keywords[0].entries, 2);
+    let green_id = assets.materials.insert("test:kw_green.mat", m).id();
+    let blue_id = assets.materials.insert("test:kw_blue.mat", blue).id();
+    let mut r = SceneRenderer::new(&gpu);
+    let render = |r: &mut SceneRenderer, mat: AssetId, global: &[&str]| {
+        let mut f = frame(mat);
+        f.global_keywords = global.iter().map(|s| s.to_string()).collect();
+        let scope = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let fmt = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let img = capture_frame(&gpu, fmt, SIZE, SIZE, |view, _| {
+            r.render(&gpu, &assets, &f, view, fmt, SIZE, SIZE);
+        })
+        .unwrap();
+        if let Some(e) = pollster::block_on(scope.pop()) {
+            panic!("GPU validation error: {e}");
+        }
+        img.pixel(SIZE / 2, SIZE / 2)
+    };
+    let c = render(&mut r, green_id, &[]);
+    assert!(
+        c[1] > 240 && c[0] < 15 && c[2] < 15,
+        "default entry (green): {c:?}"
+    );
+    let c = render(&mut r, blue_id, &[]);
+    assert!(
+        c[2] > 240 && c[0] < 15 && c[1] < 15,
+        "the material's entry (blue): {c:?}"
+    );
+    // Global keyword on: every material's variant changes.
+    for id in [green_id, blue_id] {
+        let c = render(&mut r, id, &["_DARK"]);
+        assert!(
+            c[0] < 10 && c[1] < 10 && c[2] < 10,
+            "global keyword (black): {c:?}"
+        );
+    }
+}

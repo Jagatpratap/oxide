@@ -381,6 +381,8 @@ fn custom_function_and_keywords() {
         reference: "_USE_RED".into(),
         default: true,
         exposed: true,
+        definition: KeywordDefinition::DynamicBranch,
+        ..Default::default()
     });
     let cf = g.graph.add(
         GraphNode::new(0, "Custom Function", Vector2::ZERO)
@@ -402,7 +404,7 @@ fn custom_function_and_keywords() {
         .iter()
         .find(|p| p.name == "_USE_RED")
         .expect("keyword slot");
-    assert_eq!((k.kind.as_str(), k.default[0]), ("Boolean", 1.0));
+    assert_eq!((k.kind.as_str(), k.default[0]), ("Keyword", 1.0));
     assert!(c.hooks.contains("fn sg_cf_n"), "{}", c.hooks);
 }
 
@@ -443,4 +445,46 @@ fn graphs_round_trip_through_reflection() {
         back.set_field(k, v).expect("field");
     }
     assert_eq!(back, g);
+}
+
+#[test]
+fn variant_keywords_become_override_constants() {
+    let mut g = ShaderGraph::default();
+    g.keywords.push(GraphKeyword {
+        name: "Mode".into(),
+        reference: "_MODE".into(),
+        exposed: true,
+        keyword_type: KeywordType::Enum,
+        entries: vec!["Red".into(), "Green".into(), "Blue".into()],
+        default_entry: 1,
+        ..Default::default()
+    });
+    let kw = g
+        .graph
+        .add(GraphNode::new(0, "Keyword", Vector2::ZERO).with_option("Keyword", "_MODE"));
+    let frag = stack(&g, "Fragment");
+    g.graph.connect(kw, "Out", frag, "Base Color");
+    let c = check(&g, &none);
+    assert!(c.errors.is_empty(), "{:?}", c.errors);
+    // A variant constant, not a material value.
+    assert!(
+        c.hooks.contains("override kw__MODE: u32 = 1u;"),
+        "{}",
+        c.hooks
+    );
+    assert!(!c.properties.iter().any(|p| p.name == "_MODE"));
+    let k = &c.keywords[0];
+    assert_eq!(
+        (k.reference.as_str(), k.default, k.global),
+        ("_MODE", 1, false)
+    );
+    // Unity names: REF_ENTRY.
+    assert_eq!(k.value(&|n| n == "_MODE_BLUE"), 2);
+    assert_eq!(k.value(&|_| false), 1);
+    // Materials start with the default entry enabled.
+    let mut m = oxide_assets::Material::default();
+    g.apply_default_keywords(&mut m);
+    assert_eq!(m.keywords, vec!["_MODE_GREEN".to_owned()]);
+    m.set_keyword_state("_MODE", &g.keywords[0].entries, 0);
+    assert_eq!(m.keywords, vec!["_MODE_RED".to_owned()]);
 }

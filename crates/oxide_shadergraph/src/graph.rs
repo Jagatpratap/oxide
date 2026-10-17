@@ -84,14 +84,94 @@ impl Default for GraphProperty {
     }
 }
 
-/// A Boolean keyword (Unity's `Keyword` with Boolean type). Oxide branches on a material
-/// value instead of compiling variants, so toggling it costs no recompile.
+/// Unity keyword "Type".
+#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum KeywordType {
+    #[default]
+    Boolean,
+    /// One of several named entries.
+    Enum,
+}
+
+/// Unity keyword "Definition": how the keyword's states are built.
+#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum KeywordDefinition {
+    /// A shader variant per state, made when a material uses it.
+    #[default]
+    ShaderFeature,
+    /// A shader variant per state (Oxide makes them on first use too).
+    MultiCompile,
+    /// One shader that branches on a material value (no variants).
+    DynamicBranch,
+}
+
+/// Unity keyword "Scope": set per material (Local) or for every shader (Global,
+/// `Shader.EnableKeyword`).
+#[derive(Reflect, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum KeywordScope {
+    #[default]
+    Local,
+    Global,
+}
+
+/// A Shader Graph keyword (Unity's Blackboard Keyword).
 #[derive(Reflect, Clone, Debug, Default, PartialEq)]
+#[reflect(default)]
 pub struct GraphKeyword {
     pub name: String,
     pub reference: String,
+    /// Boolean keywords: on by default.
     pub default: bool,
     pub exposed: bool,
+    pub keyword_type: KeywordType,
+    /// Enum keywords: the entries' names (Keyword nodes get one input each).
+    pub entries: Vec<String>,
+    /// Enum keywords: the default entry.
+    pub default_entry: u32,
+    pub definition: KeywordDefinition,
+    pub scope: KeywordScope,
+}
+
+impl GraphKeyword {
+    /// The default state: 0/1 for Boolean, the entry index for Enum.
+    pub fn default_value(&self) -> u32 {
+        match self.keyword_type {
+            KeywordType::Boolean => self.default as u32,
+            KeywordType::Enum => self
+                .default_entry
+                .min(self.entries.len().saturating_sub(1) as u32),
+        }
+    }
+
+    /// Whether a material has this keyword's state set at all.
+    pub fn is_set_on(&self, m: &oxide_assets::Material) -> bool {
+        match self.keyword_type {
+            KeywordType::Boolean => m.is_keyword_enabled(&self.reference),
+            KeywordType::Enum => self
+                .entries
+                .iter()
+                .any(|e| m.is_keyword_enabled(&format!("{}_{}", self.reference, e.to_uppercase()))),
+        }
+    }
+
+    /// The keyword's state on a material: 0/1 for Boolean, the entry index for Enum.
+    pub fn state_on(&self, m: &oxide_assets::Material) -> u32 {
+        match self.keyword_type {
+            KeywordType::Boolean => m.is_keyword_enabled(&self.reference) as u32,
+            KeywordType::Enum => self
+                .entries
+                .iter()
+                .position(|e| {
+                    m.is_keyword_enabled(&format!("{}_{}", self.reference, e.to_uppercase()))
+                })
+                .map_or(self.default_value(), |i| i as u32),
+        }
+    }
+
+    /// The WGSL override constant of a variant keyword.
+    pub fn constant_name(&self) -> String {
+        oxide_assets::shader::keyword_constant(&self.reference)
+    }
 }
 
 /// One inline value of an unconnected input port.
@@ -384,6 +464,18 @@ pub struct ShaderGraph {
     pub properties: Vec<GraphProperty>,
     pub keywords: Vec<GraphKeyword>,
     pub graph: GraphData,
+}
+
+impl ShaderGraph {
+    /// Gives a material the graph's default keyword states (Unity does this when a material
+    /// is made with or switched to a shader).
+    pub fn apply_default_keywords(&self, m: &mut oxide_assets::Material) {
+        for k in &self.keywords {
+            if k.scope == KeywordScope::Local && !k.is_set_on(m) {
+                m.set_keyword_state(&k.reference, &k.entries, k.default_value());
+            }
+        }
+    }
 }
 
 impl Default for ShaderGraph {

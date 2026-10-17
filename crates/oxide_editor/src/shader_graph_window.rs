@@ -616,11 +616,17 @@ fn blackboard(ui: &mut egui::Ui, w: &mut ShaderGraphWindow, canvas: Rect, path: 
                     }
                     if let Doc::Graph(g) = doc {
                         ui.separator();
-                        if ui.button("Keyword/Boolean").clicked() {
-                            let mut name = "Boolean Keyword".to_owned();
+                        for (label, kind) in [
+                            ("Boolean", oxide_shadergraph::KeywordType::Boolean),
+                            ("Enum", oxide_shadergraph::KeywordType::Enum),
+                        ] {
+                            if !ui.button(format!("Keyword/{label}")).clicked() {
+                                continue;
+                            }
+                            let mut name = format!("{label} Keyword");
                             let mut k = 1;
                             while g.keywords.iter().any(|x| x.name == name) {
-                                name = format!("Boolean Keyword ({k})");
+                                name = format!("{label} Keyword ({k})");
                                 k += 1;
                             }
                             let reference = oxide_shadergraph::unique_reference(
@@ -633,6 +639,13 @@ fn blackboard(ui: &mut egui::Ui, w: &mut ShaderGraphWindow, canvas: Rect, path: 
                                 reference,
                                 default: false,
                                 exposed: true,
+                                keyword_type: kind,
+                                entries: if kind == oxide_shadergraph::KeywordType::Enum {
+                                    vec!["A".into(), "B".into(), "C".into()]
+                                } else {
+                                    Vec::new()
+                                },
+                                ..Default::default()
                             });
                             w.selected_keyword = Some(g.keywords.len() - 1);
                             w.selected_property = None;
@@ -1307,7 +1320,7 @@ fn summary(w: &ShaderGraphWindow) -> Json {
         "nodes": doc.data().nodes.iter().map(|n| node_json(doc, n, &w.subs)).collect::<Vec<_>>(),
         "edges": doc.data().edges.iter().map(|e| json!({"from": e.from, "output": e.output, "to": e.to, "input": e.input})).collect::<Vec<_>>(),
         "properties": doc.properties().iter().map(|p| json!({"name": p.name, "reference": p.reference, "type": p.kind.kind_name(), "default": p.default.to_array(), "exposed": p.exposed})).collect::<Vec<_>>(),
-        "keywords": doc.keywords().iter().map(|k| json!({"name": k.name, "reference": k.reference, "default": k.default})).collect::<Vec<_>>(),
+        "keywords": doc.keywords().iter().map(|k| json!({"name": k.name, "reference": k.reference, "default": k.default, "type": format!("{:?}", k.keyword_type), "entries": k.entries, "definition": format!("{:?}", k.definition), "scope": format!("{:?}", k.scope)})).collect::<Vec<_>>(),
         "errors": w.errors.iter().map(|(n, e)| json!({"node": n, "error": e})).collect::<Vec<_>>(),
         "selected": w.canvas.selected,
     })
@@ -1424,11 +1437,32 @@ pub fn mcp(
                 &g.keywords,
                 &k.to_uppercase().replace(' ', "_"),
             );
+            let entries: Vec<String> = args
+                .get("entries")
+                .and_then(Json::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|e| e.as_str().map(str::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default();
             g.keywords.push(GraphKeyword {
                 name: k.to_owned(),
                 reference,
                 default: false,
                 exposed: true,
+                keyword_type: if entries.is_empty() {
+                    oxide_shadergraph::KeywordType::Boolean
+                } else {
+                    oxide_shadergraph::KeywordType::Enum
+                },
+                entries,
+                scope: if args.get("global").and_then(Json::as_bool) == Some(true) {
+                    oxide_shadergraph::KeywordScope::Global
+                } else {
+                    oxide_shadergraph::KeywordScope::Local
+                },
+                ..Default::default()
             });
             edited = true;
         }

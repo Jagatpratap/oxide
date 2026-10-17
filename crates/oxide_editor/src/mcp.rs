@@ -586,7 +586,8 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
              Returns nodes (id, kind, ports, values, options), edges, Blackboard properties, keywords and compile \
              errors. Edits (one undo step per call): `add_property` {type: Float|Vector2|Vector3|Vector4|Color|\
              Boolean|Texture2D, name, reference?, default?, texture?}; `set_property` {reference, name?, default?, \
-             exposed?, texture?, range?: [min,max]}; `add_keyword` (name); `settings` {material: Lit|Unlit, surface: \
+             exposed?, texture?, range?: [min,max]}; `add_keyword` (name; with `entries` [names] an Enum keyword, `global: true` Global scope — \
+             Shader Feature keywords compile as shader variants, materials enable `REF` / `REF_ENTRY`); `settings` {material: Lit|Unlit, surface: \
              Opaque|Transparent, render_face: Front|Both, alpha_clipping, cast_shadows, fragment_normal_space}; \
              `add_nodes` [{kind, position?, options?, values?}] (Property nodes: options {Property: reference}; Sub \
              Graph: {\"Sub Graph\": path}); `set_nodes` [{node, options?, values?, position?}]; `connect` [{from, \
@@ -599,7 +600,8 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
                 json!({
                     "open": { "type": "string" }, "library": { "type": "boolean" },
                     "add_property": { "type": "object" }, "set_property": { "type": "object" },
-                    "add_keyword": { "type": "string" }, "settings": { "type": "object" },
+                    "add_keyword": { "type": "string" }, "entries": { "type": "array" },
+                    "global": { "type": "boolean" }, "settings": { "type": "object" },
                     "add_nodes": { "type": "array" }, "set_nodes": { "type": "array" },
                     "connect": { "type": "array" }, "disconnect": { "type": "array" },
                     "delete": { "type": "array" }, "select": { "type": "array" },

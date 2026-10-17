@@ -91,3 +91,37 @@ impl GraphicsSettings {
             })
     }
 }
+
+/// Unity's global shader keywords (`Shader.EnableKeyword`): a Shader Graph's Global-scope
+/// keywords take their state from here for every material.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Shader {
+    pub enabled_global_keywords: Vec<String>,
+}
+
+impl Shader {
+    /// Unity `Shader.EnableKeyword`.
+    pub fn enable_keyword(world: &mut crate::World, keyword: &str) {
+        if world.try_resource::<Shader>().is_none() {
+            world.resources.insert(Shader::default());
+        }
+        let s = world.resource_mut::<Shader>();
+        if !s.enabled_global_keywords.iter().any(|k| k == keyword) {
+            s.enabled_global_keywords.push(keyword.to_owned());
+        }
+    }
+
+    /// Unity `Shader.DisableKeyword`.
+    pub fn disable_keyword(world: &mut crate::World, keyword: &str) {
+        if let Some(s) = world.try_resource_mut::<Shader>() {
+            s.enabled_global_keywords.retain(|k| k != keyword);
+        }
+    }
+
+    /// Unity `Shader.IsKeywordEnabled`.
+    pub fn is_keyword_enabled(world: &crate::World, keyword: &str) -> bool {
+        world
+            .try_resource::<Shader>()
+            .is_some_and(|s| s.enabled_global_keywords.iter().any(|k| k == keyword))
+    }
+}

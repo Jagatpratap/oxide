@@ -87,6 +87,10 @@ pub struct GpuMaterial {
     pub double_sided: bool,
     pub cast_shadows: bool,
     pub priority: i32,
+    /// Keyword constants this material sets (its shader variant), and the Global keywords
+    /// whose state comes from the frame.
+    pub constants: Vec<(String, f64)>,
+    pub global_keywords: Vec<oxide_assets::shader::ShaderKeyword>,
 }
 
 pub struct GpuAssets {
@@ -513,6 +517,12 @@ impl GpuAssets {
                     }
                     continue;
                 }
+                if let Some(k) = p.as_keyword() {
+                    if let Some(slot) = props.get_mut(p.slot as usize) {
+                        slot[0] = k.value(&|n| m.is_keyword_enabled(n)) as f32;
+                    }
+                    continue;
+                }
                 let mut v = set.map_or(p.default, |v| v.value.to_array());
                 if p.kind == "Color" {
                     let c = oxide_math::Color::new(v[0], v[1], v[2], v[3]).linear();
@@ -626,6 +636,29 @@ impl GpuAssets {
             double_sided,
             cast_shadows,
             priority: m.sorting_priority,
+            constants: match graph {
+                // A Shader Graph's Local variant keywords, from the material's keywords.
+                Some((_, s)) => s
+                    .keywords
+                    .iter()
+                    .filter(|k| !k.global)
+                    .map(|k| {
+                        (
+                            oxide_assets::shader::keyword_constant(&k.reference),
+                            k.value(&|n| m.is_keyword_enabled(n)) as f64,
+                        )
+                    })
+                    .collect(),
+                // The built-in Lit shader's keywords, from the material's maps and options.
+                None => m
+                    .builtin_keywords()
+                    .into_iter()
+                    .map(|(k, on)| (oxide_assets::shader::keyword_constant(k), on as u32 as f64))
+                    .collect(),
+            },
+            global_keywords: graph.map_or_else(Vec::new, |(_, s)| {
+                s.keywords.iter().filter(|k| k.global).cloned().collect()
+            }),
         }
     }
 }

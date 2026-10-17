@@ -118,6 +118,7 @@ pub fn compile_asset(assets: &mut AssetServer, path: &str) -> bool {
         stamp: st,
         dependencies: c.dependencies,
         errors: c.errors,
+        keywords: c.keywords,
     };
     assets.shaders.insert(
         path.to_owned(),

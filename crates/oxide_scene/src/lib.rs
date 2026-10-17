@@ -48,7 +48,7 @@ pub use prefab::{ObjectProperty, PrefabOverride, is_prefab_path};
 pub use presets::{CurvePreset, CurvePresetLibrary, GradientPreset, GradientPresetLibrary};
 pub use quality::{QualityLevel, QualitySettings, ShadowQuality};
 pub use render_pipeline::{
-    GraphicsSettings, PipelineMsaa, RenderingPath, UniversalRenderPipelineAsset,
+    GraphicsSettings, PipelineMsaa, RenderingPath, Shader, UniversalRenderPipelineAsset,
 };
 pub use resources::Resources;
 pub use scene_manager::{AsyncOperation, PumpResult, SceneOpStatus, SceneOperations};

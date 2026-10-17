@@ -329,7 +329,15 @@ from the fixed edge and each object along its matching local axis).
   [Physical cameras](https://docs.unity3d.com/Manual/PhysicalCameras.html))
 - ◐ Render queues & sorting (opaque front-to-back, transparent back-to-front)
   ([Render queues](https://docs.unity3d.com/Manual/built-in-rendering-order.html))
-- ◐ Materials & shader property system, keywords/variants, shader import + reflection
+- ◐ Materials & shader property system, shader import + reflection
+- ☑ Shader keywords and variants: material keywords (`Material.EnableKeyword`/`DisableKeyword`/
+  `IsKeywordEnabled`, `shaderKeywords`), global keywords (`Shader.EnableKeyword`), the built-in Lit shader's
+  `_NORMALMAP` / `_METALLICSPECGLOSSMAP` / `_OCCLUSIONMAP` / `_EMISSION` / `_ALPHATEST_ON` variants, Shader Graph
+  Boolean and Enum keywords with Shader Feature / Multi Compile (a pipeline variant per state, WGSL `override`
+  constants, dead branches compiled away) or Dynamic Branch (a material value), Local/Global scope; variants
+  are made on first use and cached
+  ([Shader keywords](https://docs.unity3d.com/Manual/shader-keywords.html),
+  [Keywords in Shader Graph](https://docs.unity3d.com/Packages/com.unity.shadergraph@17.0/manual/Keywords.html))
   ([Materials](https://docs.unity3d.com/Manual/Materials.html),
   [Custom shaders](https://docs.unity3d.com/Manual/Shaders.html))
 - ☑ Built-in shaders: Lit (Metallic and Specular workflows), Simple Lit (Blinn-Phong), Baked Lit (lightmaps and
@@ -519,13 +527,12 @@ runner, native plugins.
   copy/paste/duplicate, framing, the window's own undo); Shader Graph ☑; VFX Graph ☑; visual scripting ☐
 - ☑ Shader Graph (URP Lit/Unlit targets): `.shadergraph` / `.shadersubgraph` assets, ~120 of Unity's nodes with
   Unity's formulas (inputs, geometry, textures, math, UV, noise/Voronoi/shapes, artistic blend/normal/colour,
-  logic, Custom Function, Sub Graph, Boolean keywords), master stack (Vertex: Position/Normal/Tangent; Fragment:
+  logic, Custom Function, Sub Graph, Boolean/Enum keywords), master stack (Vertex: Position/Normal/Tangent; Fragment:
   Base Color … Alpha Clip Threshold), Graph Settings (material, surface, render face, alpha clipping, cast
   shadows, normal space), Blackboard properties (Float/Vector/Color/Boolean/Texture2D, sliders, HDR, exposed),
   compiled to WGSL hooks of the Lit shader (shadow and depth passes included), magenta error shader, live node
   previews (2D quads / 3D spheres like Unity) and Main Preview, materials with Unity's Shader dropdown and
-  Surface Inputs, Create Material from a graph, `editor_shader_graph` MCP tool. Not yet: Enum keywords and real
-  variants, Gradient/Matrix types, sampler states, Shader Graph-driven decals/sprites/terrain, Convert to Sub
+  Surface Inputs, Create Material from a graph, `editor_shader_graph` MCP tool. Not yet: Gradient/Matrix types, sampler states, Shader Graph-driven decals/sprites/terrain, Convert to Sub
   Graph
   ([Shader Graph](https://docs.unity3d.com/Packages/com.unity.shadergraph@17.0/manual/index.html))
 - ◐ ProBuilder: `ProBuilder Mesh` component (n-gon faces over shared positions, material slots, smoothing groups,

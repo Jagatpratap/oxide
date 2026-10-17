@@ -307,6 +307,7 @@ pub mod prelude {
         ReflectionProbeRefreshMode, RenderSettings, ShadowCastingMode, SkinnedMeshRenderer, Space,
         StaticEditorFlags, World,
     };
+    pub use oxide_scene::{GraphicsSettings, Shader};
     pub use oxide_standard::*;
 }
 

@@ -35,6 +35,69 @@ pub struct ShaderProperty {
     pub range: Option<(f32, f32)>,
 }
 
+/// A shader keyword compiled as variants (Unity `LocalKeyword` of a Shader Graph): a WGSL
+/// `override` constant chosen when the material's pipeline is made.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ShaderKeyword {
+    pub reference: String,
+    /// Empty for Boolean keywords; the entry names for Enum keywords.
+    pub entries: Vec<String>,
+    pub default: u32,
+    /// Set with `Shader.EnableKeyword` (all materials) instead of per material.
+    pub global: bool,
+}
+
+impl ShaderKeyword {
+    /// The keyword's state given the enabled keyword names: Boolean `REF`, Enum `REF_ENTRY`
+    /// (Unity's naming). Materials start with the default states enabled.
+    pub fn value(&self, enabled: &dyn Fn(&str) -> bool) -> u32 {
+        if self.entries.is_empty() {
+            return enabled(&self.reference) as u32;
+        }
+        self.entries
+            .iter()
+            .position(|e| enabled(&format!("{}_{}", self.reference, e.to_uppercase())))
+            .map_or(self.default, |i| i as u32)
+    }
+}
+
+impl ShaderProperty {
+    /// A Dynamic Branch keyword stored as a value: its keyword (`kind` `Keyword[:entries]`).
+    pub fn as_keyword(&self) -> Option<ShaderKeyword> {
+        let rest = self.kind.strip_prefix("Keyword")?;
+        Some(ShaderKeyword {
+            reference: self.name.clone(),
+            entries: rest
+                .strip_prefix(':')
+                .map(|e| e.split('|').map(str::to_owned).collect())
+                .unwrap_or_default(),
+            default: self.default[0] as u32,
+            global: false,
+        })
+    }
+}
+
+/// The keyword names a keyword's state enables: Boolean `REF` (on) or nothing (off), Enum
+/// `REF_ENTRY` (Unity's naming).
+pub fn keyword_names(reference: &str, entries: &[String], state: u32) -> Option<String> {
+    if entries.is_empty() {
+        (state != 0).then(|| reference.to_owned())
+    } else {
+        entries
+            .get(state as usize)
+            .map(|e| format!("{reference}_{}", e.to_uppercase()))
+    }
+}
+
+/// The WGSL identifier of a keyword's override constant.
+pub fn keyword_constant(reference: &str) -> String {
+    let id: String = reference
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    format!("kw_{id}")
+}
+
 /// Render state and layout of a compiled Shader Graph.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SurfaceShader {
@@ -55,6 +118,8 @@ pub struct SurfaceShader {
     pub dependencies: Vec<String>,
     /// Compile errors by node id (0: the graph).
     pub errors: Vec<(u32, String)>,
+    /// Keywords compiled as variants (Shader Feature / Multi Compile).
+    pub keywords: Vec<ShaderKeyword>,
 }
 
 /// Marker for Shader Graph asset handles on materials (`.shadergraph` files; the graph

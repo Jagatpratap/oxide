@@ -98,6 +98,59 @@ pub struct Material {
     pub sorting_priority: i32,
     /// Whether objects with this material cast shadows (in addition to the renderer setting).
     pub cast_shadows: bool,
+    /// Enabled shader keywords (Unity `Material.shaderKeywords`): a Shader Graph's Boolean
+    /// keyword `REF` or Enum entry `REF_ENTRY`. Each combination is its own shader variant.
+    pub keywords: Vec<String>,
+}
+
+impl Material {
+    /// Unity `Material.EnableKeyword`.
+    pub fn enable_keyword(&mut self, k: &str) {
+        if !self.keywords.iter().any(|x| x == k) {
+            self.keywords.push(k.to_owned());
+        }
+    }
+    /// Unity `Material.DisableKeyword`.
+    pub fn disable_keyword(&mut self, k: &str) {
+        self.keywords.retain(|x| x != k);
+    }
+    /// Unity `Material.IsKeywordEnabled`.
+    pub fn is_keyword_enabled(&self, k: &str) -> bool {
+        self.keywords.iter().any(|x| x == k)
+    }
+
+    /// Sets a keyword's state: Boolean 0/1 or the Enum entry index (turning off the other
+    /// entries).
+    pub fn set_keyword_state(&mut self, reference: &str, entries: &[String], state: u32) {
+        if entries.is_empty() {
+            self.disable_keyword(reference);
+        }
+        for e in entries {
+            self.disable_keyword(&format!("{reference}_{}", e.to_uppercase()));
+        }
+        if let Some(n) = crate::shader::keyword_names(reference, entries, state) {
+            self.enable_keyword(&n);
+        }
+    }
+
+    /// The built-in Lit shader's keywords this material turns on (Unity sets them from the
+    /// material's maps and options): `_NORMALMAP`, `_METALLICSPECGLOSSMAP`, `_OCCLUSIONMAP`,
+    /// `_EMISSION`, `_ALPHATEST_ON`.
+    pub fn builtin_keywords(&self) -> [(&'static str, bool); 5] {
+        [
+            ("_NORMALMAP", self.normal_map.is_some()),
+            ("_METALLICSPECGLOSSMAP", self.metallic_gloss_map.is_some()),
+            ("_OCCLUSIONMAP", self.occlusion_map.is_some()),
+            (
+                "_EMISSION",
+                self.emission_map.is_some()
+                    || (self.emission_intensity > 0.0
+                        && (self.emission_color.r + self.emission_color.g + self.emission_color.b)
+                            > 0.0),
+            ),
+            ("_ALPHATEST_ON", self.surface_type == SurfaceType::Cutout),
+        ]
+    }
 }
 
 impl Asset for Material {
@@ -132,6 +185,7 @@ impl Default for Material {
             double_sided: false,
             sorting_priority: 0,
             cast_shadows: true,
+            keywords: Vec::new(),
         }
     }
 }

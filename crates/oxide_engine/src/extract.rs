@@ -206,6 +206,10 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
         texture_cameras: texture_cameras(world),
         lightmaps: settings.lightmaps.iter().map(|h| h.id()).collect(),
         renderer_features: renderer_features(world),
+        global_keywords: world
+            .try_resource::<oxide_scene::Shader>()
+            .map(|s| s.enabled_global_keywords.clone())
+            .unwrap_or_default(),
         ..Default::default()
     };
 

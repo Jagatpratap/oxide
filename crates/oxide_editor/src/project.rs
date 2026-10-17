@@ -1257,6 +1257,11 @@ fn run(st: &mut EditorState, engine: &mut Engine, root: &Path, op: Op) -> Result
             m.shader_graph = Some(oxide_assets::Handle::from_path(graph.clone()));
             let assets = engine.world.resource_mut::<AssetServer>();
             assets.ensure_loaded(&graph)?;
+            if let Some(g) = assets.data.get(
+                &oxide_assets::Handle::<oxide_shadergraph::ShaderGraph>::from_path(graph.clone()),
+            ) {
+                g.apply_default_keywords(&mut m);
+            }
             assets.save_material(&path, &m)?;
             st.project.selected = Some(path);
             st.project.inspecting = true;
