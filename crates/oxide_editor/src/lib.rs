@@ -23,6 +23,7 @@ pub mod hub;
 mod input_actions_window;
 mod inspector;
 pub mod launch;
+mod lighting_window;
 mod localization_window;
 pub mod mcp;
 mod menus;
@@ -91,6 +92,8 @@ pub enum Tab {
     UiBuilder,
     LocalizationTables,
     ProBuilder,
+    Lighting,
+    LightExplorer,
 }
 
 impl Tab {
@@ -124,6 +127,8 @@ impl Tab {
             Tab::SpriteEditor => "Sprite Editor",
             Tab::TilePalette => "Tile Palette",
             Tab::Navigation => "Navigation",
+            Tab::Lighting => "Lighting",
+            Tab::LightExplorer => "Light Explorer",
             Tab::Timeline => "Timeline",
             Tab::ShaderGraph => "Shader Graph",
             Tab::VfxGraph => "VFX Graph",
@@ -402,6 +407,7 @@ pub struct EditorState {
     /// Scene view NavMesh display options (Navigation window).
     pub nav_display: oxide_engine::navigation::NavMeshDisplay,
     nav_window: navigation_window::NavigationWindow,
+    lighting_window: lighting_window::LightingWindow,
     hierarchy: hierarchy::HierarchyState,
     pub(crate) inspector: inspector::InspectorState,
     console: console::ConsoleState,
@@ -478,6 +484,7 @@ impl EditorState {
             actions: Vec::new(),
             nav_display: Default::default(),
             nav_window: Default::default(),
+            lighting_window: Default::default(),
             hierarchy: Default::default(),
             inspector: Default::default(),
             console: Default::default(),
@@ -738,6 +745,8 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::SpriteEditor => sprite_editor::window_ui(self.st, self.engine, ui),
             Tab::TilePalette => tile_palette::window_ui(self.st, self.engine, ui),
             Tab::Navigation => navigation_window::window_ui(self.st, self.engine, ui),
+            Tab::Lighting => lighting_window::window_ui(self.st, self.engine, ui),
+            Tab::LightExplorer => lighting_window::explorer_ui(self.st, self.engine, ui),
             Tab::Timeline => timeline_window::window_ui(self.st, self.engine, ui),
             Tab::ShaderGraph => shader_graph_window::window_ui(self.st, self.engine, ui),
             Tab::VfxGraph => vfx_graph_window::window_ui(self.st, self.engine, ui),
@@ -880,11 +889,15 @@ impl Editor {
                 | Tab::Shortcuts
                 | Tab::InputActions
                 | Tab::SpriteEditor
+                | Tab::LightExplorer
         ) {
-            // Unity opens its settings (and the Input Actions editor) in their own window.
+            // Unity opens its settings (and the Input Actions editor, the Light Explorer) in
+            // their own window.
             let surface = self.dock.add_window(vec![tab]);
             let size = if matches!(tab, Tab::InputActions | Tab::SpriteEditor) {
                 egui::vec2(980.0, 560.0)
+            } else if tab == Tab::LightExplorer {
+                egui::vec2(900.0, 360.0)
             } else {
                 egui::vec2(760.0, 560.0)
             };

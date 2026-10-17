@@ -309,6 +309,8 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
             crate::Tab::UiBuilder,
             crate::Tab::LocalizationTables,
             crate::Tab::ProBuilder,
+            crate::Tab::Lighting,
+            crate::Tab::LightExplorer,
         ])
         .map(|t| t.title())
         .collect();
@@ -347,6 +349,8 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
                     crate::Tab::UiBuilder,
                     crate::Tab::LocalizationTables,
                     crate::Tab::ProBuilder,
+                    crate::Tab::Lighting,
+                    crate::Tab::LightExplorer,
                 ]);
                 let Some(tab) = all
                     .into_iter()

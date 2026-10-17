@@ -407,8 +407,12 @@ from the fixed edge and each object along its matching local axis).
   Unity's decode). ☐: GPU baking, probe tetrahedralization, Adaptive Probe Volumes, Shadowmask light-probe
   occlusion for dynamic objects
   ([Direct and indirect lighting](https://docs.unity3d.com/Manual/direct-and-indirect-lighting.html))
-- ◐ Lighting window: Generate Lighting / Clear Baked Data menu items, settings in
-  RenderSettings (Inspector), progress in the status bar; a dedicated window and Light Explorer ☐
+- ☑ Lighting window (Window → Rendering → Lighting): Scene tab (Lighting Settings asset field + New Lighting
+  Settings, Lighting Mode, Directional Mode, Realtime Shadow Color, lightmapping settings), Environment tab
+  (Skybox Material, Sun Source, sky/ambient/reflection intensity, fog), Baked Lightmaps tab (lightmap,
+  direction and shadowmask previews), Generate Lighting / Clear Baked Data with progress; Light Explorer
+  (floating window: Lights, Reflection Probes, Light Probes and Static Emissives tables with editable
+  type/mode/colour/intensity/range/shadows, enable toggles, click to select)
   ([Light Explorer](https://docs.unity3d.com/Manual/LightingExplorer-landing.html))
 - ☑ Volume framework: global and local (collider) Volumes, weight, priority, blend distance,
   per-parameter override checkboxes; the overrides on the Volume's object are its profile

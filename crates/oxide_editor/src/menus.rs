@@ -286,6 +286,14 @@ pub fn menu_items(world: &World, keymap: &Keymap) -> Vec<MenuItem> {
         Action::OpenTab(Tab::ProBuilder),
     ));
     v.push(item(
+        "Window/Rendering/Lighting/Lighting",
+        Action::OpenTab(Tab::Lighting),
+    ));
+    v.push(item(
+        "Window/Rendering/Light Explorer",
+        Action::OpenTab(Tab::LightExplorer),
+    ));
+    v.push(item(
         "Window/Rendering/Lighting/Generate Lighting",
         Action::GenerateLighting,
     ));
