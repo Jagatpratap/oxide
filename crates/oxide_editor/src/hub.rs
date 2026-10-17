@@ -142,7 +142,7 @@ pub fn show_folder(dir: &Path) -> Result<(), String> {
 }
 
 /// The system's folder chooser (blocks until the user picks a folder or cancels).
-fn pick_folder(prompt: &str, start: Option<&Path>) -> Option<PathBuf> {
+pub(crate) fn pick_folder(prompt: &str, start: Option<&Path>) -> Option<PathBuf> {
     let out = if cfg!(target_os = "macos") {
         let mut script = format!("POSIX path of (choose folder with prompt \"{prompt}\"");
         if let Some(s) = start.filter(|s| s.is_dir()) {

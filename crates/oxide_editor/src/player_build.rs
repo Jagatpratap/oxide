@@ -421,6 +421,15 @@ fn main() -> std::process::ExitCode {
     std::fs::copy(&built, &exe).map_err(|e| format!("cannot copy {}: {e}", built.display()))?;
     copy_dir(&project.join("Assets"), &data.join("Assets"))?;
     strip_native_plugins(project, &data.join("Assets"))?;
+    // Packages' files ship as `Packages/<name>` (the player reads them like embedded ones).
+    let (packages, errors) =
+        oxide_assets::packages::resolve(project, &mut oxide_assets::packages::NetFetcher);
+    if let Some(e) = errors.first() {
+        return Err(format!("Package Manager: {e}"));
+    }
+    for p in &packages {
+        oxide_assets::packages::copy_package(p, &data.join("Packages").join(&p.name))?;
+    }
     if project.join("ProjectSettings").is_dir() {
         copy_dir(
             &project.join("ProjectSettings"),

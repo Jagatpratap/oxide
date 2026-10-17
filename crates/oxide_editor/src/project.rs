@@ -200,8 +200,27 @@ pub fn entry_kind(e: &Entry) -> (&'static str, Color32) {
     }
 }
 
+/// The resolved packages' folders (Package Manager), shown under the Packages root.
+static PACKAGE_ROOTS: std::sync::RwLock<std::collections::BTreeMap<String, PathBuf>> =
+    std::sync::RwLock::new(std::collections::BTreeMap::new());
+
+/// Where a project-relative path is on disk (`Packages/<name>/...` maps to the package).
+pub fn disk_path(root: &Path, rel: &str) -> PathBuf {
+    if let Some(rest) = rel.strip_prefix("Packages/") {
+        let (name, inner) = rest.split_once('/').unwrap_or((rest, ""));
+        if let Some(dir) = PACKAGE_ROOTS.read().ok().and_then(|r| r.get(name).cloned()) {
+            return if inner.is_empty() {
+                dir
+            } else {
+                dir.join(inner)
+            };
+        }
+    }
+    root.join(rel)
+}
+
 fn read_labels(root: &Path, path: &str) -> Vec<String> {
-    let meta = root.join(format!("{path}.meta"));
+    let meta = disk_path(root, &format!("{path}.meta"));
     if !meta.is_file() {
         return Vec::new();
     }
@@ -211,13 +230,30 @@ fn read_labels(root: &Path, path: &str) -> Vec<String> {
 }
 
 pub fn list_dir(root: &Path, rel: &str) -> Vec<Entry> {
-    let mut v: Vec<Entry> = std::fs::read_dir(root.join(rel))
+    if rel == "Packages" {
+        let roots = PACKAGE_ROOTS.read().map(|r| r.clone()).unwrap_or_default();
+        return roots
+            .into_keys()
+            .map(|name| Entry {
+                labels: Vec::new(),
+                dir: true,
+                path: format!("Packages/{name}"),
+                name,
+            })
+            .collect();
+    }
+    let in_package = rel.starts_with("Packages/");
+    let mut v: Vec<Entry> = std::fs::read_dir(disk_path(root, rel))
         .into_iter()
         .flatten()
         .flatten()
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
             if name.starts_with('.') || name.ends_with(".meta") {
+                return None;
+            }
+            // Unity hides `~` folders (`Samples~`, `Documentation~`) in packages.
+            if in_package && (name.ends_with('~') || name == "target") {
                 return None;
             }
             let path = format!("{rel}/{name}");
@@ -382,7 +418,7 @@ fn folder_tree(
             ps.search.clear();
         }
         drop_target(&r, rel, ops);
-        if rel != "Assets" {
+        if rel != "Assets" && rel != "Packages" {
             r.context_menu(|ui| item_menu(ui, rel, true, ops, ps));
         }
     };
@@ -657,6 +693,14 @@ fn fit(painter: &egui::Painter, text: &str, width: f32, font: &egui::FontId) -> 
 
 pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
     let root: PathBuf = engine.world.resource::<AssetServer>().full_path("");
+    {
+        let roots = &engine.world.resource::<AssetServer>().package_roots;
+        if let Ok(mut r) = PACKAGE_ROOTS.write()
+            && *r != *roots
+        {
+            *r = roots.clone();
+        }
+    }
     let assets_dir = root.join("Assets");
     if !assets_dir.is_dir() {
         ui.label(format!("No Assets folder in {}", root.display()));
@@ -835,6 +879,9 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
                             }
                         });
                     folder_tree(ui, &root, "Assets", ps, &mut ops, 0);
+                    if PACKAGE_ROOTS.read().is_ok_and(|r| !r.is_empty()) {
+                        folder_tree(ui, &root, "Packages", ps, &mut ops, 0);
+                    }
                 });
         });
 

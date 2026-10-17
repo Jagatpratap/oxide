@@ -28,6 +28,7 @@ pub mod mesh;
 pub mod model;
 pub mod obj_import;
 pub mod package;
+pub mod packages;
 pub mod preset;
 pub mod primitives;
 pub mod psd;

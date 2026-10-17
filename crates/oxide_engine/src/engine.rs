@@ -66,6 +66,11 @@ pub fn init_world(world: &mut World, project_root: std::path::PathBuf) {
     crate::native_plugins::NativePlugins::set_search_root(project_root.join("Assets"));
     let mut assets = AssetServer::new(project_root);
     crate::builtin_assets::register(&mut assets);
+    // Package Manager: `Packages/<name>/...` assets come from the resolved packages.
+    for e in oxide_assets::packages::load_into(&mut assets, &mut oxide_assets::packages::NetFetcher)
+    {
+        log::warn!("Package Manager: {e}");
+    }
     // Sprite Atlases are packed up front, like Unity's included atlases.
     assets.load_sprite_atlases();
     world.resources.insert(assets);

@@ -31,6 +31,7 @@ mod menus;
 mod navigation_window;
 mod node_canvas;
 pub mod overlays;
+mod package_manager;
 pub mod packages_window;
 pub mod player_build;
 pub mod prefs;
@@ -101,6 +102,7 @@ pub enum Tab {
     TestRunner,
     FontAssetCreator,
     TerrainToolbox,
+    PackageManager,
     Profiler,
     FrameDebugger,
 }
@@ -141,6 +143,7 @@ impl Tab {
             Tab::TestRunner => "Test Runner",
             Tab::FontAssetCreator => "Font Asset Creator",
             Tab::TerrainToolbox => "Terrain Toolbox",
+            Tab::PackageManager => "Package Manager",
             Tab::Profiler => "Profiler",
             Tab::FrameDebugger => "Frame Debugger",
             Tab::Timeline => "Timeline",
@@ -424,6 +427,7 @@ pub struct EditorState {
     lighting_window: lighting_window::LightingWindow,
     font_asset_creator: font_asset_creator::FontAssetCreator,
     terrain_toolbox: terrain_toolbox::TerrainToolbox,
+    package_manager: package_manager::PackageManager,
     profiler: profiler_window::ProfilerWindow,
     pub(crate) tests: test_runner::TestRunner,
     hierarchy: hierarchy::HierarchyState,
@@ -505,6 +509,7 @@ impl EditorState {
             lighting_window: Default::default(),
             font_asset_creator: Default::default(),
             terrain_toolbox: Default::default(),
+            package_manager: Default::default(),
             profiler: Default::default(),
             tests: Default::default(),
             hierarchy: Default::default(),
@@ -772,6 +777,7 @@ impl egui_dock::TabViewer for Viewer<'_> {
             Tab::TestRunner => test_runner::window_ui(self.st, self.engine, ui),
             Tab::FontAssetCreator => font_asset_creator::window_ui(self.st, self.engine, ui),
             Tab::TerrainToolbox => terrain_toolbox::window_ui(self.st, self.engine, ui),
+            Tab::PackageManager => package_manager::window_ui(self.st, self.engine, ui),
             Tab::Profiler => profiler_window::window_ui(self.st, self.engine, ui),
             Tab::FrameDebugger => profiler_window::frame_debugger_ui(self.st, self.engine, ui),
             Tab::Timeline => timeline_window::window_ui(self.st, self.engine, ui),
@@ -920,6 +926,7 @@ impl Editor {
                 | Tab::LightExplorer
                 | Tab::FontAssetCreator
                 | Tab::TerrainToolbox
+                | Tab::PackageManager
         ) {
             // Unity opens its settings (and the Input Actions editor, the Light Explorer) in
             // their own window.
@@ -932,6 +939,8 @@ impl Editor {
                 egui::vec2(560.0, 720.0)
             } else if tab == Tab::TerrainToolbox {
                 egui::vec2(620.0, 520.0)
+            } else if tab == Tab::PackageManager {
+                egui::vec2(820.0, 520.0)
             } else {
                 egui::vec2(760.0, 560.0)
             };

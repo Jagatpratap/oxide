@@ -315,6 +315,7 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
             crate::Tab::TestRunner,
             crate::Tab::FontAssetCreator,
             crate::Tab::TerrainToolbox,
+            crate::Tab::PackageManager,
             crate::Tab::Profiler,
             crate::Tab::FrameDebugger,
         ])
@@ -360,6 +361,7 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
                     crate::Tab::TestRunner,
                     crate::Tab::FontAssetCreator,
                     crate::Tab::TerrainToolbox,
+                    crate::Tab::PackageManager,
                     crate::Tab::Profiler,
                     crate::Tab::FrameDebugger,
                 ]);

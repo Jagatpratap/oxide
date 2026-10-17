@@ -16,6 +16,9 @@ ktx2.workspace = true
 ruzstd.workspace = true
 gltf.workspace = true
 flate2 = "1.1"
+serde_json.workspace = true
+tar = "0.4"
+ureq.workspace = true
 
 [lints]
 workspace = true

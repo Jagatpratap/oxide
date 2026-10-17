@@ -44,6 +44,9 @@ const META_KEYS: &[&str] = &["labels", "guid"];
 pub struct AssetServer {
     /// Project folder; asset paths like `Assets/x.png` are relative to it.
     pub root: PathBuf,
+    /// Resolved packages' folders by name: `Packages/<name>/...` paths read from there
+    /// (Package Manager; local, git and registry packages live outside `Packages/`).
+    pub package_roots: std::collections::BTreeMap<String, PathBuf>,
     pub meshes: Assets<Mesh>,
     pub materials: Assets<Material>,
     pub textures: Assets<Texture2D>,
@@ -115,6 +118,7 @@ impl AssetServer {
             world_reloads: Vec::new(),
             background: Default::default(),
             root,
+            package_roots: Default::default(),
             meshes: Assets::default(),
             materials: Assets::default(),
             textures: Assets::default(),
@@ -225,6 +229,11 @@ impl AssetServer {
         let p = Path::new(path);
         if p.is_absolute() {
             p.to_path_buf()
+        } else if let Some(rest) = path.strip_prefix("Packages/")
+            && let Some((name, inner)) = rest.split_once('/')
+            && let Some(dir) = self.package_roots.get(name)
+        {
+            dir.join(inner)
         } else {
             self.root.join(p)
         }
@@ -979,26 +988,42 @@ impl AssetServer {
         Ok(())
     }
 
-    /// Asset paths under `Assets/` with a known extension (the Project window's contents).
+    /// Asset paths under `Assets/` with a known extension (the Project window's contents),
+    /// then the packages' files as `Packages/<name>/...`.
     pub fn list_files(&self) -> Vec<String> {
         let mut out = Vec::new();
-        let root = self.root.join("Assets");
-        let mut stack = vec![root];
-        while let Some(dir) = stack.pop() {
-            let Ok(rd) = std::fs::read_dir(&dir) else {
-                continue;
-            };
-            for e in rd.flatten() {
-                let p = e.path();
-                if p.is_dir() {
-                    stack.push(p);
-                } else if let Ok(rel) = p.strip_prefix(&self.root) {
-                    out.push(rel.to_string_lossy().replace('\\', "/"));
-                }
-            }
+        list_dir(&self.root.join("Assets"), &self.root, "", &mut out);
+        for (name, dir) in &self.package_roots {
+            list_dir(dir, dir, &format!("Packages/{name}/"), &mut out);
         }
         out.sort();
+        out.dedup();
         out
+    }
+}
+
+/// Files under `dir` as `prefix` + path relative to `base` (skipping `~` folders, `.git`
+/// and `Cargo` build output, as Unity hides `Samples~`).
+fn list_dir(dir: &Path, base: &Path, prefix: &str, out: &mut Vec<String>) {
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            let p = e.path();
+            let name = e.file_name().to_string_lossy().into_owned();
+            if p.is_dir() {
+                if !(name.ends_with('~') || name.starts_with('.') || name == "target") {
+                    stack.push(p);
+                }
+            } else if let Ok(rel) = p.strip_prefix(base) {
+                out.push(format!(
+                    "{prefix}{}",
+                    rel.to_string_lossy().replace('\\', "/")
+                ));
+            }
+        }
     }
 }
 

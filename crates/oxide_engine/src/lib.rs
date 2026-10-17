@@ -21,6 +21,7 @@ pub mod mcp_import_settings;
 mod mcp_localization;
 pub mod mcp_network;
 pub mod mcp_occlusion;
+mod mcp_packages;
 pub mod mcp_physics;
 pub mod mcp_prefabs;
 mod mcp_profiler;

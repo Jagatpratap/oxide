@@ -583,7 +583,7 @@ project's editor and its Scripts both link.
 **Exit:** animated humanoid with blend tree locomotion, mixed audio, HUD menu, particle FX, on a terrain level.
 
 ### P9 — Tooling: Packages, Shader Graph, Profiler, Editor extensibility
-- ☐ Package manager: manifest, registry, git deps, local packages, embedded packages
+- ☑ Package manager: `Packages/manifest.json` (registry versions over the npm protocol, scoped registries, `file:` local packages, git URLs with `#revision`), embedded packages in `Packages/`, transitive dependencies, `Library/PackageCache`, `packages-lock.json`; package assets at `Packages/<name>/...` (Project window root, player builds); package Rust crates join the Scripts crate; Package Manager window (In Project list, details, samples import, + from disk / git URL / name, remove); `packages` MCP tool
   ([Packages](https://docs.unity3d.com/Manual/PackagesList.html))
 - ◐ Node graph framework → Shader Graph, VFX Graph, Animator, visual scripting all built on it
   ([Graph Toolkit](https://docs.unity3d.com/Manual/gtk/gtk-index.html)): the node canvas ☑ (`node_canvas.rs`:
