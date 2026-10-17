@@ -64,12 +64,16 @@ pub struct ScriptHost {
     pub last_build_seconds: f32,
 }
 
-/// Changes when any script source (or the Scripts manifest) changes.
+/// Changes when any script source (or the Scripts manifest, or an assembly definition or
+/// its scripts under `Assets/`) changes.
 fn source_signature(scripts: &Path) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     let mut stack = vec![scripts.join("src")];
     let mut files = vec![scripts.join("Cargo.toml")];
+    if let Some(project) = scripts.parent() {
+        files.extend(crate::assemblies::watched_files(project));
+    }
     while let Some(dir) = stack.pop() {
         for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
             let p = e.path();
@@ -192,6 +196,14 @@ impl ScriptHost {
     pub fn recompile(&mut self) {
         if self.job.is_some() || self.state == ScriptState::None {
             return;
+        }
+        // Assembly Definitions become crates before the build.
+        if let Ok(engine_root) =
+            std::fs::read_to_string(self.root.join("Library/Build/EngineRoot.txt"))
+        {
+            for e in crate::assemblies::sync(&self.root, Path::new(engine_root.trim())) {
+                debug_log_error!("{e}");
+            }
         }
         self.signature = source_signature(&self.scripts_dir());
         let (tx, rx) = channel();

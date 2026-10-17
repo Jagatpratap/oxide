@@ -347,6 +347,14 @@ toggle, Rect tool for multiple objects at once (it resizes the active object).
 - ◐ Serialized fields → Inspector (`#[serialize]`, `#[range]`, `#[header]`, `#[tooltip]` attributes)
 - ☑ Hot reload of script dylib with state preservation (domain-reload equivalent)
   ([Code reload and serialization](https://docs.unity3d.com/Manual/code-reload-serialization.html))
+- ☑ Assembly Definitions: `.asmdef` (Unity's JSON) under `Assets/` make crates from their folder's scripts
+  (`Library/ScriptAssemblies/<crate>`), `.asmref` adds folders, `references` → Cargo dependencies,
+  auto-referenced assemblies → Scripts dependencies, platform include/exclude → target `cfg`, Editor-only
+  assemblies left out of player builds, `allowUnsafeCode: false` → `forbid(unsafe_code)`, own `lib.rs` as the
+  crate root if present; Unity's Inspector (Apply/Revert), Create → Scripting entries, Rust Script created in
+  an assembly folder joins it, `assembly_definitions` MCP tool; only the changed assembly and its dependents
+  rebuild. Not yet: define constraints / version defines, GUID references, precompiled references
+  ([Assembly definitions](https://docs.unity3d.com/Manual/ScriptCompilationAssemblyDefinitionFiles.html))
 - ☐ Coroutines (`yield WaitForSeconds`, `WaitForEndOfFrame`) via async
   ([Coroutines](https://docs.unity3d.com/Manual/coroutines-section.html))
 - ☐ Execution order control

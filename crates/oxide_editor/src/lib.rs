@@ -11,6 +11,7 @@
 mod anim_inspectors;
 mod animation_window;
 mod animator_window;
+mod assemblies;
 mod asset_inspector;
 mod asset_ops;
 mod audio_mixer_window;
@@ -1248,7 +1249,18 @@ impl Editor {
                 let host = self.scripts.as_ref().ok_or("this project has no Scripts")?;
                 let ty = project_files::type_name(&name)
                     .ok_or_else(|| format!("`{name}` is not a valid script name"))?;
-                let file = host.create_script(&ty)?;
+                let project = w.resource::<AssetServer>().full_path("");
+                let folder = project.join(&st.project.folder);
+                let file = match assemblies::owner_of(&project, &folder) {
+                    // Unity puts the script in the folder (and so in its assembly).
+                    Some(a) => project_files::add_assembly_script(
+                        &host.scripts_dir(),
+                        &folder,
+                        &a.crate_name,
+                        &ty,
+                    )?,
+                    None => host.create_script(&ty)?,
+                };
                 format!("Created script {ty} ({}); compiling...", file.display())
             }
             Action::RecompileScripts => {

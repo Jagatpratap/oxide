@@ -1307,6 +1307,22 @@ pub fn new_asset(
             std::fs::write(root.join(&path), oxide_uitk::USS_TEMPLATE)
                 .map_err(|e| e.to_string())?;
         }
+        "AssemblyDefinitionAsset" => {
+            // Unity names the assembly after the file.
+            let name = path
+                .rsplit('/')
+                .next()
+                .unwrap_or(&path)
+                .trim_end_matches(".asmdef")
+                .to_owned();
+            let def = crate::assemblies::AsmDef::new(&name);
+            let text = serde_json::to_string_pretty(&def).map_err(|e| e.to_string())?;
+            std::fs::write(root.join(&path), text).map_err(|e| e.to_string())?;
+        }
+        "AssemblyDefinitionReferenceAsset" => {
+            std::fs::write(root.join(&path), "{\n    \"reference\": \"\"\n}\n")
+                .map_err(|e| e.to_string())?;
+        }
         "TextAsset" => {
             std::fs::write(root.join(&path), "").map_err(|e| e.to_string())?;
         }

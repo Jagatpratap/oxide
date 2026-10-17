@@ -303,6 +303,16 @@ pub fn builtin_types() -> Vec<AssetTypeInfo> {
         AssetTypeInfo::new("Script", &["rs"])
             .menu("Rust Script", "NewScript", 10)
             .color(240, 120, 90),
+        AssetTypeInfo::new("AssemblyDefinitionAsset", &["asmdef"])
+            .menu("Scripting/Assembly Definition", "NewAssembly", 11)
+            .color(120, 180, 240),
+        AssetTypeInfo::new("AssemblyDefinitionReferenceAsset", &["asmref"])
+            .menu(
+                "Scripting/Assembly Definition Reference",
+                "NewAssemblyReference",
+                12,
+            )
+            .color(120, 160, 220),
         AssetTypeInfo::new("Scene", &["scene"])
             .menu("Scene", "New Scene", 20)
             .color(120, 200, 255),

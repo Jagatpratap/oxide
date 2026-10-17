@@ -20,6 +20,8 @@ pub struct AssetInspectorState {
     new_label: String,
     /// Packed atlas preview: (atlas path, texture version, image).
     atlas_preview: Option<(String, u64, egui::TextureHandle)>,
+    /// The `.asmdef` being edited (applied with Apply): (path, edited, as loaded).
+    asmdef: Option<(String, crate::assemblies::AsmDef, crate::assemblies::AsmDef)>,
 }
 
 const TEXT_EXTENSIONS: [&str; 9] = [
@@ -95,6 +97,8 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: &s
                 "AvatarMask" => crate::anim_inspectors::avatar_mask(st, engine, ui, path),
                 "Preset" => preset(st, engine, ui, path),
                 "ShaderGraph" | "ShaderSubGraph" => shader_graph_asset(st, engine, ui, path),
+                "AssemblyDefinitionAsset" => asmdef(st, engine, ui, path),
+                "AssemblyDefinitionReferenceAsset" => asmref(st, engine, ui, path),
                 t if engine.world.resource::<AssetServer>().types.is_data(t) => {
                     data_asset(st, engine, ui, path)
                 }
@@ -422,6 +426,190 @@ fn material(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: 
             st.status = e;
         }
     }
+}
+
+/// Unity's Assembly Definition Inspector: General options, references, platforms and
+/// define constraints, applied to the `.asmdef` with Apply.
+fn asmdef(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: &str) {
+    use crate::assemblies::{AsmDef, PLATFORMS};
+    let project = engine.world.resource::<AssetServer>().full_path("");
+    if st
+        .asset_inspector
+        .asmdef
+        .as_ref()
+        .is_none_or(|(p, _, _)| p != path)
+    {
+        let text = std::fs::read_to_string(project.join(path)).unwrap_or_default();
+        match serde_json::from_str::<AsmDef>(&text) {
+            Ok(d) => st.asset_inspector.asmdef = Some((path.to_owned(), d.clone(), d)),
+            Err(e) => {
+                ui.colored_label(Color32::from_rgb(230, 120, 100), format!("{path}: {e}"));
+                return;
+            }
+        }
+    }
+    let (assemblies, errors) = crate::assemblies::discover(&project);
+    let Some((_, d, original)) = st.asset_inspector.asmdef.as_mut() else {
+        return;
+    };
+    ui.label(RichText::new("General").strong());
+    ui.horizontal(|ui| {
+        crate::inspector::prop_label(ui, "Name");
+        ui.text_edit_singleline(&mut d.name);
+    });
+    ui.weak(format!("Crate: {}", crate::assemblies::crate_name(&d.name)));
+    ui.checkbox(&mut d.allow_unsafe_code, "Allow 'unsafe' Code");
+    ui.checkbox(&mut d.auto_referenced, "Auto Referenced");
+    ui.checkbox(&mut d.no_engine_references, "No Engine References");
+    ui.horizontal(|ui| {
+        crate::inspector::prop_label(ui, "Root Namespace");
+        ui.text_edit_singleline(&mut d.root_namespace);
+    });
+    ui.separator();
+    ui.label(RichText::new("Define Constraints").strong());
+    let mut remove = None;
+    for (k, c) in d.define_constraints.iter_mut().enumerate() {
+        ui.horizontal(|ui| {
+            ui.text_edit_singleline(c);
+            if ui.small_button("-").clicked() {
+                remove = Some(k);
+            }
+        });
+    }
+    if let Some(k) = remove {
+        d.define_constraints.remove(k);
+    }
+    if ui.small_button("+").clicked() {
+        d.define_constraints.push(String::new());
+    }
+    ui.separator();
+    ui.label(RichText::new("Assembly Definition References").strong());
+    let mut remove = None;
+    for (k, r) in d.references.iter().enumerate() {
+        ui.horizontal(|ui| {
+            ui.label(r);
+            if !assemblies.iter().any(|a| a.def.name == *r) {
+                ui.colored_label(Color32::from_rgb(230, 120, 100), "missing");
+            }
+            if ui.small_button("-").clicked() {
+                remove = Some(k);
+            }
+        });
+    }
+    if let Some(k) = remove {
+        d.references.remove(k);
+    }
+    let candidates: Vec<String> = assemblies
+        .iter()
+        .map(|a| a.def.name.clone())
+        .filter(|n| *n != d.name && !d.references.contains(n))
+        .collect();
+    ui.menu_button("+ Add Reference", |ui| {
+        for n in candidates {
+            if ui.button(&n).clicked() {
+                d.references.push(n);
+                ui.close();
+            }
+        }
+    });
+    ui.separator();
+    ui.label(RichText::new("Platforms").strong());
+    let mut any = d.include_platforms.is_empty();
+    if ui.checkbox(&mut any, "Any Platform").changed() {
+        if any {
+            d.include_platforms.clear();
+        } else {
+            d.include_platforms = PLATFORMS.iter().map(|(p, _)| (*p).to_owned()).collect();
+            d.exclude_platforms.clear();
+        }
+    }
+    ui.weak(if any {
+        "Exclude Platforms"
+    } else {
+        "Include Platforms"
+    });
+    for (p, _) in PLATFORMS {
+        let list = if any {
+            &mut d.exclude_platforms
+        } else {
+            &mut d.include_platforms
+        };
+        let mut on = list.iter().any(|x| x == p);
+        if ui.checkbox(&mut on, *p).changed() {
+            if on {
+                list.push((*p).to_owned());
+            } else {
+                list.retain(|x| x != p);
+            }
+        }
+    }
+    ui.separator();
+    if let Some(a) = assemblies.iter().find(|a| a.file == path) {
+        ui.label(RichText::new(format!("{} script(s)", a.sources.len())).strong());
+        for s in &a.sources {
+            ui.weak(s.strip_prefix(&project).unwrap_or(s).to_string_lossy());
+        }
+    }
+    for e in errors.iter().filter(|e| e.starts_with(path)) {
+        ui.colored_label(Color32::from_rgb(230, 120, 100), e);
+    }
+    let changed = d != original;
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(changed, egui::Button::new("Revert"))
+            .clicked()
+        {
+            *d = original.clone();
+        }
+        if ui
+            .add_enabled(changed, egui::Button::new("Apply"))
+            .clicked()
+        {
+            match serde_json::to_string_pretty(&*d) {
+                Ok(text) => match std::fs::write(project.join(path), text) {
+                    Ok(()) => {
+                        *original = d.clone();
+                        st.status = format!("Applied {path}; scripts recompile");
+                    }
+                    Err(e) => st.status = e.to_string(),
+                },
+                Err(e) => st.status = e.to_string(),
+            }
+        }
+    });
+}
+
+/// An Assembly Definition Reference: which assembly its folder's scripts join.
+fn asmref(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui, path: &str) {
+    let project = engine.world.resource::<AssetServer>().full_path("");
+    let text = std::fs::read_to_string(project.join(path)).unwrap_or_default();
+    let mut r: crate::assemblies::AsmRef = serde_json::from_str(&text).unwrap_or_default();
+    let (assemblies, _) = crate::assemblies::discover(&project);
+    ui.horizontal(|ui| {
+        crate::inspector::prop_label(ui, "Assembly Definition");
+        egui::ComboBox::from_id_salt("asmref")
+            .selected_text(if r.reference.is_empty() {
+                "None"
+            } else {
+                &r.reference
+            })
+            .show_ui(ui, |ui| {
+                for a in &assemblies {
+                    if ui
+                        .selectable_label(r.reference == a.def.name, &a.def.name)
+                        .clicked()
+                    {
+                        r.reference = a.def.name.clone();
+                        if let Ok(t) = serde_json::to_string_pretty(&r)
+                            && let Err(e) = std::fs::write(project.join(path), t)
+                        {
+                            st.status = e.to_string();
+                        }
+                    }
+                }
+            });
+    });
+    ui.weak("Scripts in this folder compile into that assembly.");
 }
 
 /// A Shader Graph or Sub Graph: Open Shader Editor, its properties and compile errors.

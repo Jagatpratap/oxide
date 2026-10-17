@@ -269,6 +269,37 @@ pub fn add_script(scripts: &Path, type_name: &str) -> Result<PathBuf, String> {
     Ok(file)
 }
 
+/// A script inside an Assembly Definition's folder: the file goes in `folder`, and its
+/// registration (`crate::Type => "Scripts/Type"`) into the Scripts `scripts!` block.
+pub fn add_assembly_script(
+    scripts: &Path,
+    folder: &Path,
+    crate_name: &str,
+    type_name: &str,
+) -> Result<PathBuf, String> {
+    let file = folder.join(format!("{}.rs", snake_case(type_name)));
+    if file.exists() {
+        return Err(format!("{} already exists", file.display()));
+    }
+    let lib_path = scripts.join("src/lib.rs");
+    let lib = std::fs::read_to_string(&lib_path).map_err(|e| e.to_string())?;
+    let Some(block) = lib.find("oxide::scripts!") else {
+        return Err("Scripts/src/lib.rs has no `oxide::scripts! { ... }` block".into());
+    };
+    let Some(open) = lib[block..].find('{').map(|i| block + i) else {
+        return Err("malformed `oxide::scripts!` block".into());
+    };
+    let mut new = String::new();
+    new.push_str(&lib[..=open]);
+    new.push_str(&format!(
+        "\n    {crate_name}::{type_name} => \"Scripts/{type_name}\","
+    ));
+    new.push_str(&lib[open + 1..]);
+    write(&file, &script_template(type_name))?;
+    write(&lib_path, &new)?;
+    Ok(file)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

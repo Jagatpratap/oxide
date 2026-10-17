@@ -657,6 +657,35 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
         s,
         bus,
         ToolDef::new(
+            "assembly_definitions",
+            "Assembly Definitions",
+            "Unity Assembly Definitions: script folders under Assets/ that compile as their own crates. Lists every \
+             assembly (name, .asmdef file, crate, references, platforms, its scripts) and problems. `create` {folder, \
+             name, references?, includePlatforms?, excludePlatforms?, allowUnsafeCode?, autoReferenced?, \
+             noEngineReferences?} writes `<folder>/<name>.asmdef`; `set` {name, rename?, <field>: value} edits one; \
+             `asmref` {folder, reference} adds a folder to an assembly. Field names are Unity's (camelCase). Scripts \
+             recompile when files change; a Rust Script created in an assembly's folder joins it.",
+            schema(
+                json!({ "create": { "type": "object" }, "set": { "type": "object" }, "asmref": { "type": "object" } }),
+                &[],
+            ),
+        ),
+        |args, e| {
+            let project = e
+                .world
+                .resource::<oxide_assets::AssetServer>()
+                .full_path("");
+            match crate::assemblies::mcp(&project, args) {
+                Ok(j) => ToolResult::json(j),
+                Err(err) => ToolResult::error(err),
+            }
+        },
+    );
+
+    tool(
+        s,
+        bus,
+        ToolDef::new(
             "editor_timeline",
             "Timeline window",
             "The Timeline window (Unity Timeline): returns the edited Director, Timeline asset, playhead, preview \
