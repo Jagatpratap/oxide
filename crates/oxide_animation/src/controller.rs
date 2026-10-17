@@ -745,7 +745,13 @@ impl Sampler<'_> {
         for (i, l) in ls.iter().enumerate() {
             match l.clip {
                 Some(h) => {
-                    if let Some(c) = self.assets.animations.get(h) {
+                    // A humanoid clip made for another rig plays retargeted (Mecanim).
+                    let c = self
+                        .retargeted
+                        .and_then(|r| r.get(&h.id()))
+                        .map(|c| &**c)
+                        .or_else(|| self.assets.animations.get(h));
+                    if let Some(c) = c {
                         let len = c.length;
                         let t = |n: f32| (n * l.time_scale + l.cycle_offset) * len;
                         self.clip_mirrored(
@@ -902,6 +908,52 @@ pub(crate) fn excluded_bones_for_test(
     excluded_bones(world, human, mask)
 }
 
+/// Humanoid clips of `ctrl` made for another rig (most of their curves don't bind below
+/// `root`), retargeted to this rig through both Avatars. `rest` holds rest values of
+/// transforms already animated.
+fn build_retargets(
+    world: &World,
+    assets: &AssetServer,
+    root: GameObjectId,
+    ctrl: &oxide_assets::AnimatorController,
+    rest: &HashMap<GameObjectId, (Vector3, Quaternion, Vector3)>,
+) -> HashMap<oxide_assets::AssetId, std::sync::Arc<oxide_assets::AnimationClip>> {
+    use crate::retarget::{Avatar, clip_source_model, retarget_clip};
+    let mut out = HashMap::new();
+    let mut target: Option<Avatar> = None;
+    let mut sources: HashMap<String, Option<Avatar>> = HashMap::new();
+    for h in ctrl.clips() {
+        let Some(clip) = assets.animations.get(&h) else {
+            continue;
+        };
+        let bound = clip
+            .curves
+            .iter()
+            .filter(|c| crate::find_path(world, root, &c.path).is_some())
+            .count();
+        if clip.curves.is_empty() || bound * 2 >= clip.curves.len() {
+            continue;
+        }
+        let Some(model_path) = clip_source_model(h.path()) else {
+            continue;
+        };
+        let src = sources.entry(model_path.to_owned()).or_insert_with(|| {
+            assets
+                .models
+                .get(&oxide_assets::Handle::<oxide_assets::Model>::from_path(
+                    model_path.to_owned(),
+                ))
+                .map(Avatar::from_model)
+        });
+        let Some(src) = src.as_ref() else { continue };
+        let dst = target.get_or_insert_with(|| Avatar::from_world_rest(world, root, rest));
+        if let Some(r) = retarget_clip(clip, src, dst) {
+            out.insert(h.id(), std::sync::Arc::new(r));
+        }
+    }
+    out
+}
+
 /// Advances one Animator and computes its pose.
 pub(crate) fn evaluate(
     world: &World,
@@ -927,6 +979,10 @@ pub(crate) fn evaluate(
     if !rt.human_mapped {
         rt.human = auto_map(world, root);
         rt.human_mapped = true;
+    }
+    if rt.retargeted_for != cid {
+        rt.retargeted_for = cid;
+        rt.retargeted = build_retargets(world, assets, root, ctrl, &rt.defaults);
     }
     let needs_mirror = ctrl.layers.iter().any(|l| {
         l.state_machine
@@ -1056,6 +1112,7 @@ pub(crate) fn evaluate(
         s.mask = mask;
         s.excluded = excluded.as_ref();
         s.mirror_map = mirror.as_deref();
+        s.retargeted = Some(&rt.retargeted);
         s.rest = Some(&rt.defaults);
         s.root_motion = li == 0 && a.apply_root_motion && root_part;
         sample_layer(&mut s, &cx, li, &lrt, &rt.params);
@@ -1125,6 +1182,7 @@ pub(crate) fn evaluate(
                 rs.mask = mask;
                 rs.excluded = excluded.as_ref();
                 rs.mirror_map = mirror.as_deref();
+                rs.retargeted = Some(&rt.retargeted);
                 rs.time_override = Some(0.0);
                 rs.collect_events = false;
                 sample_layer(&mut rs, &cx, li, &lrt, &rt.params);

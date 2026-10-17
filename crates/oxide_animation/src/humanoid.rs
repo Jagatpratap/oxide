@@ -232,6 +232,47 @@ fn bone_for(side: Option<Side>, part: Part) -> Option<HumanBodyBones> {
     }
 }
 
+/// [`auto_map`] over any tree: `names[i]` with `parents[i]`, listed parents first. Returns
+/// node indices.
+pub fn auto_map_names(names: &[&str], parents: &[Option<usize>]) -> HashMap<HumanBodyBones, usize> {
+    let mut map = HashMap::new();
+    let mut spines = Vec::new();
+    for (i, name) in names.iter().enumerate() {
+        let Some((side, part)) = classify(name) else {
+            continue;
+        };
+        if let Part::Spine(_) = part {
+            spines.push(i);
+            continue;
+        }
+        if let Some(b) = bone_for(side, part) {
+            map.entry(b).or_insert(i);
+        }
+    }
+    let below = |mut i: usize, ancestor: usize| {
+        while let Some(p) = parents[i] {
+            if p == ancestor {
+                return true;
+            }
+            i = p;
+        }
+        false
+    };
+    let hips = map.get(&HumanBodyBones::Hips).copied();
+    spines.retain(|&s| hips.is_none_or(|h| below(s, h)));
+    if let Some(&s) = spines.first() {
+        map.entry(HumanBodyBones::Spine).or_insert(s);
+    }
+    if let Some(&s) = spines.get(1) {
+        map.entry(HumanBodyBones::Chest).or_insert(s);
+    }
+    if spines.len() >= 3 {
+        map.entry(HumanBodyBones::UpperChest)
+            .or_insert(*spines.last().expect("len >= 3"));
+    }
+    map
+}
+
 /// Maps the humanoid bones below `root` by name. Spine segments (in hierarchy order) become
 /// Spine, Chest and UpperChest when there is no explicit chest bone.
 pub fn auto_map(world: &World, root: GameObjectId) -> HashMap<HumanBodyBones, GameObjectId> {

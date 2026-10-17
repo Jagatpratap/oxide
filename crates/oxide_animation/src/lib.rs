@@ -13,6 +13,7 @@ mod controller;
 mod humanoid;
 pub mod ik;
 pub mod mirror;
+pub mod retarget;
 
 pub use behaviours::{StateMachineBehaviour, StateMachineBehaviours};
 pub use controller::{ActiveTransition, motion_length, tree_weights};
@@ -174,6 +175,10 @@ pub struct AnimatorRuntime {
     /// Values animated transforms had before animating (Write Defaults).
     pub defaults: HashMap<GameObjectId, (Vector3, Quaternion, Vector3)>,
     pub prop_defaults: HashMap<(GameObjectId, String, String), f32>,
+    /// Humanoid clips made for another rig, retargeted to this one (by clip).
+    pub retargeted: HashMap<oxide_assets::AssetId, std::sync::Arc<oxide_assets::AnimationClip>>,
+    /// The controller the retargeted clips were made for.
+    pub retargeted_for: Option<oxide_assets::AssetId>,
 }
 
 /// Unity `Animator`.
@@ -602,6 +607,9 @@ struct Sampler<'a> {
     /// Transforms of humanoid body parts the mask leaves out.
     excluded: Option<&'a std::collections::HashSet<GameObjectId>>,
     mirror_map: Option<&'a mirror::MirrorMap>,
+    /// Clips retargeted to this rig, used instead of the originals.
+    retargeted:
+        Option<&'a HashMap<oxide_assets::AssetId, std::sync::Arc<oxide_assets::AnimationClip>>>,
     /// The rest pose (Direct blend trees whose weights sum below 1 blend toward it).
     rest: Option<&'a HashMap<GameObjectId, (Vector3, Quaternion, Vector3)>>,
     /// Extract root motion (Base Layer with `apply_root_motion`).
@@ -806,6 +814,7 @@ impl<'a> Sampler<'a> {
             mask: None,
             excluded: None,
             mirror_map: None,
+            retargeted: None,
             rest: None,
             root_motion: false,
             time_override: None,
