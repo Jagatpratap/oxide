@@ -32,6 +32,7 @@ oxide_localization = { path = "crates/oxide_localization" }
 oxide_probuilder = { path = "crates/oxide_probuilder" }
 oxide_lightmapper = { path = "crates/oxide_lightmapper" }
 oxide_particles = { path = "crates/oxide_particles" }
+oxide_video = { path = "crates/oxide_video" }
 oxide_navigation = { path = "crates/oxide_navigation" }
 oxide_network = { path = "crates/oxide_network" }
 oxide_standard = { path = "crates/oxide_standard" }
@@ -60,7 +61,9 @@ ruzstd = "0.9"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "hdr", "tga", "bmp", "exr", "tiff", "gif", "webp"] }
 gltf = { version = "1.4", features = ["KHR_materials_emissive_strength", "KHR_texture_transform", "KHR_lights_punctual", "extras", "names", "utils"] }
 rapier3d = "0.36"
-kira = "0.12"
+kira = { version = "0.12", features = ["aac", "isomp4"] }
+openh264 = "0.9"
+mp4 = "0.14"
 gilrs = "0.11"
 serde_yaml_ng = "0.10"
 egui = "0.36"

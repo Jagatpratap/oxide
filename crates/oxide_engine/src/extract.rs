@@ -461,6 +461,7 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
     oxide_particles::effects::extract_draws(world, &mut frame.draws);
     oxide_particles::effects::extract_decals(world, cam_pos, &mut frame.decals);
     oxide_particles::effects::extract_billboards(world, cam_pos, &mut frame.particles);
+    oxide_video::extract(world, &mut frame.texture_writes, &mut frame.particles);
     oxide_vfx::extract(world, &mut frame.vfx);
     crate::sprites2d::extract(world, &mut frame.sprites);
     crate::lens_flares::extract(world, &mut frame.lens_flares);

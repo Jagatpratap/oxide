@@ -283,6 +283,8 @@ pub struct SceneRenderer {
     terrain: crate::terrain::TerrainGpu,
     particles: crate::particles::ParticleGpu,
     decals: crate::decals::DecalGpu,
+    /// Last `TextureWrite::serial` written to each Render Texture.
+    texture_write_serials: HashMap<AssetId, u64>,
     /// Decal prepass depth and DBuffer by target size.
     decal_targets: HashMap<(u32, u32), crate::decals::DecalTargets>,
     grass: crate::grass::GrassGpu,
@@ -907,6 +909,7 @@ impl SceneRenderer {
             terrain,
             particles,
             decals,
+            texture_write_serials: HashMap::new(),
             decal_targets: HashMap::new(),
             grass,
             sprites,
@@ -1806,6 +1809,21 @@ impl SceneRenderer {
         width: u32,
         height: u32,
     ) -> RenderStats {
+        for w in &frame.texture_writes {
+            if self.texture_write_serials.get(&w.target) != Some(&w.serial)
+                && self.gpu_assets.write_render_texture(
+                    &gpu.device,
+                    &gpu.queue,
+                    assets,
+                    w.target,
+                    w.width,
+                    w.height,
+                    &w.rgba,
+                )
+            {
+                self.texture_write_serials.insert(w.target, w.serial);
+            }
+        }
         let captures = self.update_reflections(gpu, assets, frame);
         self.render_texture_cameras(gpu, assets, frame);
         let mut stats = self.render_view(gpu, assets, frame, target, format, width, height);

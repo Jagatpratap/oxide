@@ -30,6 +30,7 @@ mod mcp_timeline;
 pub mod mcp_tools;
 mod mcp_uitk;
 mod mcp_vfx;
+mod mcp_video;
 pub mod native_plugins;
 pub mod navigation;
 pub mod objects;
@@ -60,6 +61,7 @@ pub use oxide_terrain as terrain;
 pub use oxide_text as text;
 pub use oxide_timeline as timeline;
 pub use oxide_ui as ui;
+pub use oxide_video as video;
 
 /// Physics (Rapier) with Unity's components and `Physics` API.
 pub struct PhysicsPlugin;
@@ -140,6 +142,7 @@ impl Plugin for ParticlesPlugin {
         systems: &mut Vec<Box<dyn oxide_scene::System>>,
     ) {
         systems.push(oxide_particles::install(world));
+        systems.push(oxide_video::install(world));
     }
 }
 

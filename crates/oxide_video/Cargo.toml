@@ -1,0 +1,24 @@
+[package]
+name = "oxide_video"
+description = "Oxide video: VideoClip assets (H.264 MP4/MOV, animated GIF) and the VideoPlayer component"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+oxide_math.workspace = true
+oxide_core.workspace = true
+oxide_assets.workspace = true
+oxide_scene.workspace = true
+oxide_render.workspace = true
+oxide_audio.workspace = true
+image.workspace = true
+openh264.workspace = true
+mp4.workspace = true
+bytes = "1"
+
+[dev-dependencies]
+pollster.workspace = true
+
+[lints]
+workspace = true

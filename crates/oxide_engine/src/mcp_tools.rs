@@ -1094,6 +1094,7 @@ pub fn build_server(bus: Arc<Bus>) -> McpServer {
     crate::mcp_vfx::register(&mut s, bus);
     crate::mcp_uitk::register(&mut s, bus);
     crate::mcp_accessibility::register(&mut s, bus);
+    crate::mcp_video::register(&mut s, bus);
     crate::mcp_localization::register(&mut s, bus);
     crate::mcp_animation::register_ragdoll(&mut s, bus);
     crate::mcp_terrain::register(&mut s, bus);

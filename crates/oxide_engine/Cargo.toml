@@ -23,6 +23,7 @@ oxide_ui.workspace = true
 oxide_text.workspace = true
 oxide_terrain.workspace = true
 oxide_particles.workspace = true
+oxide_video.workspace = true
 oxide_navigation.workspace = true
 oxide_timeline.workspace = true
 oxide_shadergraph.workspace = true

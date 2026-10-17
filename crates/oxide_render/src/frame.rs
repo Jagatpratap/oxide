@@ -435,6 +435,17 @@ pub enum ParticleBlend {
     Additive,
 }
 
+/// RGBA8 (sRGB) pixels for a Render Texture asset, written before the frame draws. Writes
+/// with a `serial` already written to that target are skipped.
+#[derive(Clone, Debug)]
+pub struct TextureWrite {
+    pub target: AssetId,
+    pub width: u32,
+    pub height: u32,
+    pub rgba: std::sync::Arc<Vec<u8>>,
+    pub serial: u64,
+}
+
 /// How a particle quad is oriented (Unity's Particle System Renderer modes, plus the
 /// segments trails and lines are drawn with).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -1140,6 +1151,8 @@ pub struct RenderFrame {
     pub particles: Vec<ParticleBatch>,
     /// URP Decal Projectors (first camera).
     pub decals: Vec<crate::decals::DecalDraw>,
+    /// Pixels written into Render Textures before drawing (video frames).
+    pub texture_writes: Vec<TextureWrite>,
     /// VFX Graph systems (GPU particles).
     pub vfx: Vec<VfxDraw>,
     /// Terrain grass and detail billboards.

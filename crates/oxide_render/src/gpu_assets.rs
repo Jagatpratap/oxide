@@ -50,6 +50,8 @@ pub struct GpuTexture {
     pub height: u32,
     /// A Render Texture's target (cameras render into it).
     pub render_target: bool,
+    /// Render Textures keep their texture so frames can be written into them (video).
+    pub texture: Option<wgpu::Texture>,
 }
 
 /// Format of Render Textures (tonemapped color, like Unity's default ARGB32 sRGB).
@@ -329,7 +331,8 @@ impl GpuAssets {
             format: RENDER_TEXTURE_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_SRC,
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
             view_formats: &[RENDER_TEXTURE_FORMAT.remove_srgb_suffix()],
         });
         self.textures.insert(
@@ -343,6 +346,7 @@ impl GpuAssets {
                 width,
                 height,
                 render_target: true,
+                texture: Some(texture),
             },
         );
         self.texture_generation += 1;
@@ -396,6 +400,53 @@ impl GpuAssets {
     /// An already uploaded texture's view (see [`Self::texture_view`]).
     pub fn cached_texture_view(&self, id: AssetId) -> Option<&wgpu::TextureView> {
         self.textures.get(&id).map(|t| &t.view)
+    }
+
+    /// Writes RGBA8 (sRGB) pixels into a Render Texture asset (video frames). Pixels must
+    /// match the Render Texture's size.
+    #[allow(clippy::too_many_arguments)]
+    pub fn write_render_texture(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        assets: &AssetServer,
+        id: AssetId,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+    ) -> bool {
+        if !self.ensure_render_texture(device, assets, id) {
+            return false;
+        }
+        let Some(t) = self.textures.get(&id) else {
+            return false;
+        };
+        let Some(tex) = &t.texture else {
+            return false;
+        };
+        if t.width != width || t.height != height || rgba.len() < (width * height * 4) as usize {
+            return false;
+        }
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 4),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        true
     }
 
     /// GPU cube view of a Cubemap asset (uploading it if needed).
@@ -943,6 +994,7 @@ pub(crate) fn upload_layers(
         width: first.width,
         height: first.height,
         render_target: false,
+        texture: None,
     })
 }
 
@@ -1002,5 +1054,6 @@ fn upload_texture(
         width: t.width,
         height: t.height,
         render_target: false,
+        texture: None,
     }
 }
