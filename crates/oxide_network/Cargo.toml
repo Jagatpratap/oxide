@@ -14,9 +14,13 @@ serde.workspace = true
 renet = "2"
 renet_netcode = "2"
 bincode = { version = "2", features = ["serde"] }
+ureq.workspace = true
+oxide_assets.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
-oxide_assets.workspace = true
+tiny_http.workspace = true
+png.workspace = true
 
 [lints]
 workspace = true

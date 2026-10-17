@@ -51,6 +51,7 @@ bytemuck = { version = "1", features = ["derive"] }
 png = "0.18"
 base64 = "0.22"
 tiny_http = "0.12"
+ureq = { version = "3", default-features = false, features = ["rustls", "gzip"] }
 # Intel ISPC texture compressor (BC1-7, ASTC) for texture import.
 intel_tex_2 = "0.5"
 # KTX2 container parsing and its Zstandard supercompression.

@@ -251,7 +251,7 @@ pub mod prelude {
     };
     pub use oxide_network::{
         HOST_CLIENT_ID, NetMode, Network, NetworkExt, NetworkManager, NetworkObject,
-        NetworkTransform,
+        NetworkTransform, UnityWebRequest, WebRequestOperation, WebRequestResult,
     };
     pub use oxide_particles::{
         BlendMode, ParticleShape, ParticleSystem, ParticlesExt, SimulationSpace,

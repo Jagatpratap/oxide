@@ -471,7 +471,10 @@ from the fixed edge and each object along its matching local axis).
   `par_for_each_mut` over borrowed data; Rust's `Send`/`Sync` take the place of Unity's safety checks; jobs
   that panic are logged and still complete; waiting threads help run queued jobs (no pool deadlocks)
   ([Distribute work across threads](https://docs.unity3d.com/Manual/programming-distribute-work-threads.html))
-- ☐ Web requests
+- ☑ Web requests: `UnityWebRequest` (GET, POST raw/form/JSON, PUT, DELETE, HEAD, request headers, timeout,
+  download to file) over HTTP and HTTPS (ureq + rustls), sent in the background; `WebRequestOperation` with
+  `is_done`, `result` (Success / ConnectionError / ProtocolError / DataProcessingError), `response_code`,
+  `error`, response headers, `text` / `data` / `json` / `texture`, awaitable in coroutines (`op.wait().await`)
   ([Web servers](https://docs.unity3d.com/Manual/web-request.html))
 - ☐ Test framework (edit-mode & play-mode tests)
   ([Testing your code](https://docs.unity3d.com/Manual/test-framework/test-framework-introduction.html))

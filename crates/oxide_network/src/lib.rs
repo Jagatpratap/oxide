@@ -17,6 +17,9 @@
 //! The server is authoritative: only it spawns and despawns.
 //! Reference: <https://docs.unity3d.com/Packages/com.unity.netcode.gameobjects@latest>
 
+pub mod web_request;
+pub use web_request::{UnityWebRequest, WebRequestOperation, WebRequestResult};
+
 use oxide_core::reflect::Value;
 use oxide_core::{Reflect, debug_log, debug_log_warning};
 use oxide_math::{Quaternion, Vector3};
