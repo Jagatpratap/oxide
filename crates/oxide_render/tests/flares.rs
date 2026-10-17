@@ -85,6 +85,7 @@ fn frame(assets: &mut AssetServer, wall: bool, msaa: u32) -> RenderFrame {
             lightmap: None,
             light_probe: None,
             sorting: Default::default(),
+            rendering_layers: u32::MAX,
         });
     }
     RenderFrame {
@@ -231,6 +232,7 @@ fn screen_space_lens_flare_mirrors_bright_spots() {
         lightmap: None,
         light_probe: None,
         sorting: Default::default(),
+        rendering_layers: u32::MAX,
     });
     let (sx, sy) = pixel_of(pos);
     let (mx, my) = (SIZE - 1 - sx, SIZE - 1 - sy);

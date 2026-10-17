@@ -307,12 +307,13 @@ fn fs_main(in: VertexOut, @builtin(front_facing) front: bool) -> FragOut {
     let albedo = max(s.base_color, vec3f(0.0));
     let mode = debug_mode();
     if (mode != 0u) {
-        let c = debug_view(mode, in.world_pos, n, geo, albedo, in.receive_shadows != 0u, in.probes, in.clip.xy, in.gi, in.lm_uv);
+        let c = debug_view(mode, in.world_pos, n, geo, albedo, (in.receive_shadows & 1u) != 0u, in.probes, in.clip.xy, in.gi, in.lm_uv);
         out.color = vec4f(c, 1.0);
         return out;
     }
     let t = material_terms(albedo, metallic, s.specular);
-    var color = direct_light(in.world_pos, n, geo, t.diffuse, t.f0, rough, t.model, in.receive_shadows != 0u, in.clip.xy)
+    // Instance flags: bit 0 receive shadows, bits 8.. rendering layers.
+    var color = direct_light(in.world_pos, n, geo, t.diffuse, t.f0, rough, t.model, (in.receive_shadows & 1u) != 0u, in.clip.xy, in.receive_shadows >> 8u)
         + indirect_light(in.world_pos, n, geo, t.diffuse, t.f0, rough, ao, t.model, in.probes, in.clip.xy, in.gi, in.lm_uv);
     color += s.emission;
     out.color = vec4f(apply_fog(color, in.world_pos), alpha);
@@ -356,10 +357,11 @@ fn fs_gbuffer(in: VertexOut, @builtin(front_facing) front: bool) -> GBufferOut {
     let ao = clamp(s.occlusion, 0.0, 1.0);
     let albedo = max(s.base_color, vec3f(0.0));
     let t = material_terms(albedo, metallic, s.specular);
-    let flags = select(0u, 1u, in.receive_shadows != 0u);
+    let flags = select(0u, 1u, (in.receive_shadows & 1u) != 0u);
     out.normals = vec4f(oct_encode(n), oct_encode(geo));
     let indirect = indirect_light(in.world_pos, n, geo, t.diffuse, t.f0, rough, ao, t.model, in.probes, in.clip.xy, in.gi, in.lm_uv);
-    out.indirect = vec4f(indirect + s.emission, 1.0);
+    // Alpha keeps the rendering layers for the lighting pass.
+    out.indirect = vec4f(indirect + s.emission, f32((in.receive_shadows >> 8u) & 0xffu));
     out.diffuse_code = vec4f(t.diffuse, f32(t.model * 3u + flags) / 15.0);
     out.f0_rough = vec4f(t.f0, rough);
     return out;

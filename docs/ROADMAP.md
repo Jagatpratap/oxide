@@ -376,7 +376,11 @@ from the fixed edge and each object along its matching local axis).
 **Exit:** Sponza-class glTF scene renders with PBR, multiple cameras, transparent sorting, 60 fps on a laptop GPU.
 
 ### P5 — Lighting, shadows, post-processing
-- ◐ Lights: Directional, Point, Spot, Area (baked); intensity units, cookies, layers
+- ☑ Lights: Directional, Point, Spot; Area lights (Rectangle / Disc, baked only as in URP: sampled emitters in
+  lightmaps and light probes, one-sided, gizmos, GameObject > Light > Area Light); light cookies on Spot
+  (projected through the cone) and Directional lights (Cookie Size / Offset tiling) from a cookie texture array;
+  Rendering Layers (light Rendering Layers × renderer Rendering Layer Mask, 8 layers, Forward+ and Deferred).
+  Not yet: Point light (cubemap) cookies, physical intensity units
   ([Light sources](https://docs.unity3d.com/Manual/lighting-light-sources.html))
 - ☑ Shadows: 4 sun cascades, soft PCF, point/spot shadows in a 4096 atlas (nearest lights
   first), shadow distance/bias/normal bias

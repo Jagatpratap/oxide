@@ -222,6 +222,10 @@ pub enum LightType {
     #[default]
     Point,
     Spot,
+    /// Area light, a rectangle `area_size` wide emitting along +Z (baked only, as in URP).
+    Rectangle,
+    /// Area light, a disc of radius `area_size.x` emitting along +Z (baked only).
+    Disc,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Reflect)]
@@ -255,6 +259,7 @@ pub enum ReceiveGI {
 
 /// Unity `Light`. <https://docs.unity3d.com/Manual/class-Light.html>
 #[derive(Clone, Debug, Reflect)]
+#[reflect(default)]
 pub struct Light {
     pub light_type: LightType,
     pub color: Color,
@@ -274,6 +279,18 @@ pub struct Light {
     pub culling_mask: u32,
     /// Realtime, Mixed or Baked (Light "Mode").
     pub lightmap_bake_type: LightmapBakeType,
+    /// Area lights: rectangle width × height, or the disc's radius in `x`.
+    pub area_size: oxide_math::Vector2,
+    /// Light cookie (Unity `Light.cookie`): projected through a Spot light's cone, or tiled
+    /// across the world by a Directional light. RGB × alpha tints the light.
+    pub cookie: Option<Handle<oxide_assets::Texture2D>>,
+    /// Directional cookie tile size in metres (URP "Cookie Size").
+    pub cookie_size: oxide_math::Vector2,
+    /// Directional cookie offset in metres (URP "Cookie Offset").
+    pub cookie_offset: oxide_math::Vector2,
+    /// The rendering layers this light affects (URP light "Rendering Layers"; a renderer
+    /// is lit when its Rendering Layer Mask overlaps). 8 layers are used for lighting.
+    pub rendering_layers: u32,
 }
 
 impl Default for Light {
@@ -291,6 +308,11 @@ impl Default for Light {
             shadow_normal_bias: 0.4,
             culling_mask: u32::MAX,
             lightmap_bake_type: LightmapBakeType::Realtime,
+            area_size: oxide_math::Vector2::ONE,
+            cookie: None,
+            cookie_size: oxide_math::Vector2::ONE,
+            cookie_offset: oxide_math::Vector2::ZERO,
+            rendering_layers: 1,
         }
     }
 }
@@ -362,6 +384,9 @@ pub struct MeshRenderer {
     pub sorting_order: i32,
     /// Transparent draw order before distance (URP "Priority", `Renderer.rendererPriority`).
     pub renderer_priority: i32,
+    /// Rendering layers (Unity `Renderer.renderingLayerMask`): lights reach this renderer when
+    /// their Rendering Layers overlap.
+    pub rendering_layer_mask: u32,
 }
 
 impl Default for MeshRenderer {
@@ -379,6 +404,7 @@ impl Default for MeshRenderer {
             sorting_layer: "Default".into(),
             sorting_order: 0,
             renderer_priority: 0,
+            rendering_layer_mask: 1,
         }
     }
 }
@@ -417,6 +443,9 @@ pub struct SkinnedMeshRenderer {
     pub sorting_order: i32,
     /// Transparent draw order before distance (URP "Priority", `Renderer.rendererPriority`).
     pub renderer_priority: i32,
+    /// Rendering layers (Unity `Renderer.renderingLayerMask`): lights reach this renderer when
+    /// their Rendering Layers overlap.
+    pub rendering_layer_mask: u32,
 }
 
 impl Default for SkinnedMeshRenderer {
@@ -432,6 +461,7 @@ impl Default for SkinnedMeshRenderer {
             sorting_layer: "Default".into(),
             sorting_order: 0,
             renderer_priority: 0,
+            rendering_layer_mask: 1,
         }
     }
 }

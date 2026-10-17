@@ -40,6 +40,7 @@ fn floor_frame() -> RenderFrame {
             lightmap: None,
             light_probe: None,
             sorting: Default::default(),
+            rendering_layers: u32::MAX,
         }],
         environment: Environment {
             sky_exposure: 0.0,
@@ -92,6 +93,7 @@ fn point(pos: Vector3, range: f32, color: [f32; 3]) -> PunctualLight {
         color,
         spot: None,
         shadow: None,
+        ..Default::default()
     }
 }
 
@@ -230,6 +232,7 @@ fn spot_and_point_lights_cast_shadows() {
                 color: [30.0; 3],
                 spot: Some((Vector3::NEG_Y, 100.0, 80.0)),
                 shadow: None,
+                ..Default::default()
             },
         ),
         ("point", point(Vector3::new(0.0, 5.0, 0.0), 12.0, [30.0; 3])),
@@ -262,4 +265,102 @@ fn spot_and_point_lights_cast_shadows() {
             lum(&unshadowed, beside)
         );
     }
+}
+
+#[test]
+fn rendering_layers_pick_which_lights_reach_objects() {
+    let Some(gpu) = Gpu::headless() else {
+        eprintln!("no GPU; skipped");
+        return;
+    };
+    let assets = AssetServer::new(std::env::temp_dir());
+    let mut r = SceneRenderer::new(&gpu);
+    let mut f = floor_frame();
+    f.draws[0].rendering_layers = 0b01;
+    let centre = pixel_of(&f, Vector3::ZERO).unwrap();
+    for path in [RenderingPath::ForwardPlus, RenderingPath::Deferred] {
+        f.rendering_path = path;
+        for (light_layers, lit) in [(0b01, true), (0b10, false), (0b11, true)] {
+            f.lights = vec![PunctualLight {
+                rendering_layers: light_layers,
+                ..point(Vector3::new(0.0, 3.0, 0.0), 25.0, [8.0; 3])
+            }];
+            f.sun = Some(SunLight {
+                rendering_layers: light_layers,
+                color: [0.5; 3],
+                ..Default::default()
+            });
+            let img = render(&gpu, &mut r, &assets, &f);
+            let v = img.pixel(centre.0, centre.1)[0];
+            assert_eq!(v > 60, lit, "{path:?}, light layers {light_layers:b}: {v}");
+        }
+    }
+}
+
+#[test]
+fn spot_and_directional_cookies_shape_the_light() {
+    let Some(gpu) = Gpu::headless() else {
+        eprintln!("no GPU; skipped");
+        return;
+    };
+    let mut assets = AssetServer::new(std::env::temp_dir());
+    // Left half black, right half white.
+    let half: Vec<u8> = (0..16 * 16)
+        .flat_map(|i| if i % 16 < 8 { [0, 0, 0, 255] } else { [255; 4] })
+        .collect();
+    let cookie = assets
+        .textures
+        .insert(
+            "test:cookie.png",
+            oxide_assets::Texture2D::from_rgba8("cookie", 16, 16, half, false),
+        )
+        .id();
+    let mut r = SceneRenderer::new(&gpu);
+    let mut f = floor_frame();
+    let lum = |img: &CapturedImage, f: &RenderFrame, p: Vector3| {
+        let (x, y) = pixel_of(f, p).unwrap();
+        img.pixel(x, y)[0] as i32
+    };
+    // Spot straight down; the light's right is +X, so the cookie's white half lights x > 0.
+    f.lights = vec![PunctualLight {
+        spot: Some((Vector3::NEG_Y, 100.0, 80.0)),
+        cookie: Some(cookie),
+        right: Vector3::X,
+        ..point(Vector3::new(0.0, 5.0, 0.0), 12.0, [30.0; 3])
+    }];
+    let img = render(&gpu, &mut r, &assets, &f);
+    let (left, right) = (
+        lum(&img, &f, Vector3::new(-1.5, 0.0, 0.0)),
+        lum(&img, &f, Vector3::new(1.5, 0.0, 0.0)),
+    );
+    assert!(
+        right > 80 && left < 10,
+        "spot cookie: left {left}, right {right}"
+    );
+
+    // Directional light, cookie tiles 4 m wide: the black half covers x in [0, 2), white
+    // [2, 4), repeating.
+    f.lights.clear();
+    f.sun = Some(SunLight {
+        direction: Vector3::NEG_Y,
+        color: [1.0; 3],
+        cookie: Some(SunCookie {
+            texture: cookie,
+            size: [4.0, 4.0],
+            offset: [0.0, 0.0],
+        }),
+        right: Vector3::X,
+        ..Default::default()
+    });
+    let img = render(&gpu, &mut r, &assets, &f);
+    let z = -1.0;
+    let (black, white, black2) = (
+        lum(&img, &f, Vector3::new(1.0, 0.0, z)),
+        lum(&img, &f, Vector3::new(3.0, 0.0, z)),
+        lum(&img, &f, Vector3::new(5.0, 0.0, z)),
+    );
+    assert!(
+        white > 80 && black < 10 && black2 < 10,
+        "sun cookie tiles: {black} {white} {black2}"
+    );
 }

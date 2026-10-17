@@ -97,6 +97,10 @@ fn create_items(prefix: &str) -> Vec<MenuItem> {
         Action::Create(Create::SpotLight),
     ));
     v.push(item(
+        &format!("{prefix}Light/Area Light"),
+        Action::Create(Create::AreaLight),
+    ));
+    v.push(item(
         &format!("{prefix}Light/Reflection Probe"),
         Action::Create(Create::ReflectionProbe),
     ));

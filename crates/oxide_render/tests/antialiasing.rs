@@ -53,6 +53,7 @@ fn frame(assets: &mut AssetServer, mode: AntiAliasing, msaa: u32, x: f32) -> Ren
             lightmap: None,
             light_probe: None,
             sorting: Default::default(),
+            rendering_layers: u32::MAX,
         }],
         environment: Environment {
             post: PostSettings::neutral(),

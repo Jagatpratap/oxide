@@ -32,9 +32,10 @@ fn fs_light(@builtin(position) p: vec4f) -> @location(0) vec4f {
     let code = u32(dc.a * 15.0 + 0.5);
     let model = code / 3u;
     let flags = code % 3u;
-    var color = textureLoad(gb_indirect, xy, 0).rgb;
+    let indirect = textureLoad(gb_indirect, xy, 0);
+    var color = indirect.rgb;
     if (flags != 2u) {
-        color += direct_light(world_pos, oct_decode(normals.xy), oct_decode(normals.zw), dc.rgb, fr.rgb, fr.a, model, flags == 1u, p.xy);
+        color += direct_light(world_pos, oct_decode(normals.xy), oct_decode(normals.zw), dc.rgb, fr.rgb, fr.a, model, flags == 1u, p.xy, u32(indirect.a + 0.5));
     }
     return vec4f(apply_fog(color, world_pos), 1.0);
 }

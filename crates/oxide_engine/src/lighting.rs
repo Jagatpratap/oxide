@@ -177,13 +177,33 @@ pub fn start(world: &mut World) -> Result<usize, String> {
                     direction: world.forward(id),
                     color: color.to_array(),
                     shadows: None,
+                    ..Default::default()
                 },
             ));
         }
-        if l.lightmap_bake_type == LightmapBakeType::Realtime {
+        // Area lights are always baked (Unity's Mode for them is Baked).
+        let area = matches!(l.light_type, LightType::Rectangle | LightType::Disc);
+        if l.lightmap_bake_type == LightmapBakeType::Realtime && !area {
             continue;
         }
         let kind = match l.light_type {
+            LightType::Rectangle | LightType::Disc => {
+                let r = world.rotation(id);
+                let disc = l.light_type == LightType::Disc;
+                let (hx, hy) = if disc {
+                    (l.area_size.x, l.area_size.x)
+                } else {
+                    (l.area_size.x * 0.5, l.area_size.y * 0.5)
+                };
+                BakeLightKind::Area {
+                    position: world.position(id),
+                    right: r * Vector3::X * hx.max(1e-3),
+                    up: r * Vector3::Y * hy.max(1e-3),
+                    normal: world.forward(id),
+                    disc,
+                    range: l.range.max(0.01),
+                }
+            }
             LightType::Directional => BakeLightKind::Directional {
                 direction: world.forward(id),
             },
@@ -212,7 +232,7 @@ pub fn start(world: &mut World) -> Result<usize, String> {
         lights.push(BakeLight {
             kind,
             color,
-            baked_direct: l.lightmap_bake_type == LightmapBakeType::Baked,
+            baked_direct: area || l.lightmap_bake_type == LightmapBakeType::Baked,
             cast_shadows: l.shadows != oxide_scene::LightShadows::None,
         });
     }

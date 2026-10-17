@@ -26,6 +26,7 @@ fn draw(id: u64, mesh: PrimitiveType, material: AssetId, model: Matrix4x4) -> Dr
         lightmap: None,
         light_probe: None,
         sorting: Default::default(),
+        rendering_layers: u32::MAX,
     }
 }
 
@@ -66,6 +67,7 @@ fn scene(assets: &mut AssetServer) -> RenderFrame {
                 bias: 0.05,
                 normal_bias: 0.4,
             }),
+            ..Default::default()
         }),
         lights: vec![PunctualLight {
             position: Vector3::new(-2.0, 1.0, -1.0),
@@ -73,6 +75,7 @@ fn scene(assets: &mut AssetServer) -> RenderFrame {
             color: [0.0, 6.0, 0.0],
             spot: None,
             shadow: None,
+            ..Default::default()
         }],
         draws: vec![
             draw(

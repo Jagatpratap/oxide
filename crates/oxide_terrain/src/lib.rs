@@ -937,6 +937,7 @@ pub fn extract_details(
                             lightmap: None,
                             light_probe: None,
                             sorting: Default::default(),
+                            rendering_layers: u32::MAX,
                         });
                     }
                 }
@@ -1009,6 +1010,7 @@ pub fn extract(
                     lightmap: None,
                     light_probe: None,
                     sorting: Default::default(),
+                    rendering_layers: u32::MAX,
                 });
             }
         }
@@ -1064,6 +1066,7 @@ pub fn extract(
                     lightmap: None,
                     light_probe: None,
                     sorting: Default::default(),
+                    rendering_layers: u32::MAX,
                 });
             }
         }

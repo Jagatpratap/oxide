@@ -203,3 +203,45 @@ fn cancel_stops_the_bake() {
     p.cancel.store(true, Ordering::Relaxed);
     assert!(bake(&input(vec![floor], vec![], vec![]), &p).is_err());
 }
+
+#[test]
+fn area_lights_bake_soft_one_sided_light() {
+    let floor = || {
+        object(
+            PrimitiveType::Plane,
+            Vector3::ZERO,
+            Vector3::ONE,
+            Vector3::splat(0.8),
+            true,
+        )
+    };
+    let area = |normal: Vector3, disc: bool| BakeLight {
+        kind: BakeLightKind::Area {
+            position: Vector3::new(0.0, 1.0, 0.0),
+            right: Vector3::X,
+            up: Vector3::Z,
+            normal,
+            disc,
+            range: 20.0,
+        },
+        color: Vector3::splat(4.0),
+        baked_direct: true,
+        cast_shadows: true,
+    };
+    // A 2 m square 1 m above the floor, facing down: its form factor there is ≈ 0.55.
+    let mut inp = input(vec![floor()], vec![area(Vector3::NEG_Y, false)], vec![]);
+    inp.ambient_intensity = 0.0;
+    inp.settings.bounces = 0;
+    let out = bake(&inp, &Progress::default()).unwrap();
+    let under = floor_light(&inp, &out, 0, Vector3::ZERO);
+    let far = floor_light(&inp, &out, 0, Vector3::new(4.0, 0.0, 4.0));
+    assert!((1.5..3.0).contains(&under.x), "under the light {under:?}");
+    assert!(far.x < under.x * 0.1, "falls off: {far:?} vs {under:?}");
+    // Facing up, it lights nothing below (one-sided).
+    let mut inp = input(vec![floor()], vec![area(Vector3::Y, true)], vec![]);
+    inp.ambient_intensity = 0.0;
+    inp.settings.bounces = 0;
+    let out = bake(&inp, &Progress::default()).unwrap();
+    let under = floor_light(&inp, &out, 0, Vector3::ZERO);
+    assert!(under.x < 0.01, "back side {under:?}");
+}

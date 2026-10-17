@@ -20,7 +20,9 @@ struct Frame {
     cascade_texel: vec4f,   // world-space texel size of each cascade
     ssao: vec4f,            // x = 1 when the AO texture is valid, y = direct lighting strength
     cluster_viewport: vec4f, // camera viewport in pixels: x, y (from the top), width, height
-    cluster_params: vec4f,  // depth slice = floor(ln(view z) * x + y)
+    cluster_params: vec4f,  // depth slice = floor(ln(view z) * x + y), z = sun rendering layers
+    sun_cookie: vec4f,      // xy cookie tile size (m), zw offset (m)
+    sun_right: vec4f,       // xyz the sun's right vector, w cookie layer (-1 = none)
 };
 
 struct PunctualLight {
@@ -29,6 +31,8 @@ struct PunctualLight {
     dir: vec4f,             // spot direction
     spot: vec4f,            // x = cos(outer/2), y = 1 / (cos(inner/2) - cos(outer/2)), z = first shadow tile + 1, w = shadow strength
     shadow: vec4f,          // x depth bias, y normal bias, z soft, w texel size per metre
+    extra: vec4f,           // x rendering layers, y cookie layer (-1 = none)
+    right: vec4f,           // xyz the light's right vector (cookie orientation)
 };
 
 @group(0) @binding(0) var<uniform> frame: Frame;

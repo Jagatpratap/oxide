@@ -288,7 +288,20 @@ fn env_specular(r: vec3f, pos: vec3f, rough: f32, sel: vec2u) -> vec3f {
 
 // Direct light: the sun (with cascaded shadows) and the clustered point/spot lights.
 // Baked Lit (model 2) gets none.
-fn direct_light(world_pos: vec3f, n: vec3f, geo_n: vec3f, diffuse: vec3f, f0: vec3f, rough: f32, model: u32, receive_shadows: bool, frag_xy: vec2f) -> vec3f {
+@group(0) @binding(15) var light_cookies: texture_2d_array<f32>;
+@group(0) @binding(16) var cookie_sampler: sampler;
+
+// A cookie's tint: RGB × alpha of layer `layer` at `uv`.
+fn cookie(layer: f32, uv: vec2f) -> vec3f {
+    let c = textureSampleLevel(light_cookies, cookie_sampler, uv, i32(layer), 0.0);
+    return c.rgb * c.a;
+}
+
+// Rendering layers for lighting (8, which the deferred G-buffer keeps).
+const LIGHT_LAYERS: u32 = 0xffu;
+
+// `layers`: the object's rendering layers; lights reach it when their layers overlap.
+fn direct_light(world_pos: vec3f, n: vec3f, geo_n: vec3f, diffuse: vec3f, f0: vec3f, rough: f32, model: u32, receive_shadows: bool, frag_xy: vec2f, layers: u32) -> vec3f {
     if (model == 2u) {
         return vec3f(0.0);
     }
@@ -296,18 +309,29 @@ fn direct_light(world_pos: vec3f, n: vec3f, geo_n: vec3f, diffuse: vec3f, f0: ve
     let direct_ao = mix(1.0, screen_ao(frag_xy), frame.ssao.y);
     let v = normalize(frame.camera_pos.xyz - world_pos);
     var color = vec3f(0.0);
-    if (frame.sun_dir.w > 0.5) {
+    if (frame.sun_dir.w > 0.5 && (u32(frame.cluster_params.z) & layers & LIGHT_LAYERS) != 0u) {
         let view_depth = (frame.view * vec4f(world_pos, 1.0)).z;
         var shadow = 1.0;
         if (receive_shadows) {
             shadow = sun_shadow(world_pos, geo_n, view_depth);
         }
-        color += light_brdf(model, n, v, sun_to_light(), diffuse, f0, rough) * frame.sun_color.rgb * shadow * direct_ao;
+        var tint = vec3f(1.0);
+        if (frame.sun_right.w >= 0.0) {
+            // Tiled across the world along the light's right and up vectors.
+            let right = frame.sun_right.xyz;
+            let up = cross(frame.sun_dir.xyz, right);
+            let uv = (vec2f(dot(world_pos, right), -dot(world_pos, up)) + frame.sun_cookie.zw) / frame.sun_cookie.xy;
+            tint = cookie(frame.sun_right.w, fract(uv));
+        }
+        color += light_brdf(model, n, v, sun_to_light(), diffuse, f0, rough) * frame.sun_color.rgb * tint * shadow * direct_ao;
     }
     let view_z = (frame.view * vec4f(world_pos, 1.0)).z;
     let cluster = cluster_of(frag_xy, view_z);
     for (var j = 0u; j < cluster.y; j++) {
         let L = lights[cluster_lights[cluster.x + j]];
+        if ((u32(L.extra.x) & layers & LIGHT_LAYERS) == 0u) {
+            continue;
+        }
         let to_l = L.pos_range.xyz - world_pos;
         let d2 = dot(to_l, to_l);
         let r = L.pos_range.w;
@@ -324,10 +348,22 @@ fn direct_light(world_pos: vec3f, n: vec3f, geo_n: vec3f, diffuse: vec3f, f0: ve
             let s = clamp((cd - L.spot.x) * L.spot.y, 0.0, 1.0);
             atten *= s * s;
         }
+        var tint = vec3f(1.0);
+        if (L.extra.y >= 0.0 && L.color.w > 0.5 && atten > 0.0) {
+            // Projected through the cone: the cookie fills the outer angle.
+            let fwd = L.dir.xyz;
+            let right = L.right.xyz;
+            let up = cross(fwd, right);
+            let p = -to_l;
+            let z = max(dot(p, fwd), 1e-4);
+            let tan_half = sqrt(max(1.0 - L.spot.x * L.spot.x, 0.0)) / max(L.spot.x, 1e-4);
+            let uv = vec2f(dot(p, right), -dot(p, up)) / (z * tan_half) * 0.5 + 0.5;
+            tint = cookie(L.extra.y, clamp(uv, vec2f(0.0), vec2f(1.0)));
+        }
         if (L.spot.z > 0.5 && receive_shadows && atten > 0.0) {
             atten *= punctual_shadow(L, world_pos, geo_n, sqrt(d2));
         }
-        color += light_brdf(model, n, v, l, diffuse, f0, rough) * L.color.rgb * atten * direct_ao;
+        color += light_brdf(model, n, v, l, diffuse, f0, rough) * L.color.rgb * tint * atten * direct_ao;
     }
     return color;
 }
@@ -352,7 +388,7 @@ fn indirect_light(world_pos: vec3f, n: vec3f, geo_n: vec3f, diffuse: vec3f, f0: 
 fn shade(world_pos: vec3f, n: vec3f, geo_n: vec3f, albedo: vec3f, metallic: f32, rough: f32, ao_in: f32, receive_shadows: bool, probe_sel: vec2u, frag_xy: vec2f, gi: u32, lm_uv: vec2f) -> vec3f {
     let diffuse = albedo * (1.0 - metallic);
     let f0 = mix(vec3f(0.04), albedo, metallic);
-    return direct_light(world_pos, n, geo_n, diffuse, f0, rough, 0u, receive_shadows, frag_xy)
+    return direct_light(world_pos, n, geo_n, diffuse, f0, rough, 0u, receive_shadows, frag_xy, 0xffffffffu)
         + indirect_light(world_pos, n, geo_n, diffuse, f0, rough, ao_in, 0u, probe_sel, frag_xy, gi, lm_uv);
 }
 

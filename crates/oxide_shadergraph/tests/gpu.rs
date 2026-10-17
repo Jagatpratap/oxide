@@ -40,6 +40,7 @@ fn frame(material: AssetId) -> RenderFrame {
             lightmap: None,
             light_probe: None,
             sorting: Default::default(),
+            rendering_layers: u32::MAX,
         }],
         environment: Environment {
             post: PostSettings {

@@ -1180,6 +1180,7 @@ fn update_previews(w: &mut ShaderGraphWindow, engine: &mut Engine, ctx: &egui::C
             lightmap: None,
             light_probe: None,
             sorting: Default::default(),
+            rendering_layers: u32::MAX,
         });
     }
     let frame = RenderFrame {

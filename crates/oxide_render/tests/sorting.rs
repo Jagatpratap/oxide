@@ -30,6 +30,7 @@ fn quad(material: AssetId, z: f32, sorting: DrawSorting) -> DrawItem {
         lightmap: None,
         light_probe: None,
         sorting,
+        rendering_layers: u32::MAX,
     }
 }
 

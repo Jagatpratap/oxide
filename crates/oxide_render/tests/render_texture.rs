@@ -45,6 +45,7 @@ fn draw(
         lightmap: None,
         light_probe: None,
         sorting: Default::default(),
+        rendering_layers: u32::MAX,
     }
 }
 

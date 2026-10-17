@@ -106,6 +106,110 @@ pub enum BakeLightKind {
         cos_outer: f32,
         inv_cone: f32,
     },
+    /// Rectangle or disc area light emitting along `normal` (one-sided, Lambertian): the
+    /// light's colour is its radiance × π, so a large one gives irradiance ≈ colour.
+    Area {
+        position: Vector3,
+        /// Half-extent vectors (a disc's radius along both).
+        right: Vector3,
+        up: Vector3,
+        normal: Vector3,
+        disc: bool,
+        range: f32,
+    },
+}
+
+impl BakeLightKind {
+    /// Rays from `p` to the light: (direction to the light, distance, irradiance factor
+    /// before the surface cosine). Area lights give one per sample of their surface.
+    pub fn rays(&self, p: Vector3) -> Vec<(Vector3, f32, f32)> {
+        let window = |d2: f32, range: f32| {
+            let k = d2 / (range * range);
+            let w = (1.0 - k * k).clamp(0.0, 1.0);
+            w * w
+        };
+        match *self {
+            BakeLightKind::Directional { direction } => {
+                vec![(-direction.normalize_or(Vector3::NEG_Y), 1e4, 1.0)]
+            }
+            BakeLightKind::Point { position, range }
+            | BakeLightKind::Spot {
+                position, range, ..
+            } => {
+                let d = position - p;
+                let d2 = d.length_squared();
+                if d2 > range * range {
+                    return Vec::new();
+                }
+                let dir = d / d2.sqrt().max(1e-4);
+                let mut a = window(d2, range) / d2.max(0.01);
+                if let BakeLightKind::Spot {
+                    direction,
+                    cos_outer,
+                    inv_cone,
+                    ..
+                } = *self
+                {
+                    let s = ((direction.dot(-dir) - cos_outer) * inv_cone).clamp(0.0, 1.0);
+                    a *= s * s;
+                }
+                vec![(dir, d2.sqrt(), a)]
+            }
+            BakeLightKind::Area {
+                position,
+                right,
+                up,
+                normal,
+                disc,
+                range,
+            } => {
+                const N: usize = 4;
+                let area = if disc {
+                    std::f32::consts::PI * right.length() * up.length()
+                } else {
+                    4.0 * right.length() * up.length()
+                };
+                let da = area / (N * N) as f32;
+                let mut out = Vec::with_capacity(N * N);
+                for i in 0..N {
+                    for j in 0..N {
+                        // Stratified cell centres; discs by the concentric mapping.
+                        let (mut u, mut v) = (
+                            (i as f32 + 0.5) / N as f32 * 2.0 - 1.0,
+                            (j as f32 + 0.5) / N as f32 * 2.0 - 1.0,
+                        );
+                        if disc {
+                            let (r, phi) = if u.abs() > v.abs() {
+                                (u, std::f32::consts::FRAC_PI_4 * (v / u))
+                            } else {
+                                (
+                                    v,
+                                    std::f32::consts::FRAC_PI_2
+                                        - std::f32::consts::FRAC_PI_4 * (u / v),
+                                )
+                            };
+                            (u, v) = (r * phi.cos(), r * phi.sin());
+                        }
+                        let q = position + right * u + up * v;
+                        let d = q - p;
+                        let d2 = d.length_squared();
+                        if d2 > range * range || d2 < 1e-8 {
+                            continue;
+                        }
+                        let dir = d / d2.sqrt();
+                        let cos_l = normal.dot(-dir);
+                        if cos_l <= 0.0 {
+                            continue;
+                        }
+                        let a =
+                            cos_l * da / (std::f32::consts::PI * d2.max(1e-4)) * window(d2, range);
+                        out.push((dir, d2.sqrt(), a));
+                    }
+                }
+                out
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -389,44 +493,16 @@ impl<'a> Scene<'a> {
         let mut sum = Vector3::ZERO;
         let o = p + n * 2e-3;
         for l in self.input.lights.iter().filter(|l| include(l)) {
-            let (to_light, dist, atten) = match l.kind {
-                BakeLightKind::Directional { direction } => {
-                    (-direction.normalize_or(Vector3::NEG_Y), 1e4, 1.0)
+            for (to_light, dist, atten) in l.kind.rays(p) {
+                let nl = n.dot(to_light);
+                if nl <= 0.0 || atten <= 0.0 {
+                    continue;
                 }
-                BakeLightKind::Point { position, range }
-                | BakeLightKind::Spot {
-                    position, range, ..
-                } => {
-                    let d = position - p;
-                    let d2 = d.length_squared();
-                    if d2 > range * range {
-                        continue;
-                    }
-                    let k = d2 / (range * range);
-                    let window = (1.0 - k * k).clamp(0.0, 1.0);
-                    let mut a = window * window / d2.max(0.01);
-                    let dir = d / d2.sqrt().max(1e-4);
-                    if let BakeLightKind::Spot {
-                        direction,
-                        cos_outer,
-                        inv_cone,
-                        ..
-                    } = l.kind
-                    {
-                        let s = ((direction.dot(-dir) - cos_outer) * inv_cone).clamp(0.0, 1.0);
-                        a *= s * s;
-                    }
-                    (dir, d2.sqrt() - 2e-3, a)
+                if l.cast_shadows && self.occluded(o, to_light, (dist - 2e-3).max(0.0)) {
+                    continue;
                 }
-            };
-            let nl = n.dot(to_light);
-            if nl <= 0.0 || atten <= 0.0 {
-                continue;
+                sum += l.color * (nl * atten);
             }
-            if l.cast_shadows && self.occluded(o, to_light, dist) {
-                continue;
-            }
-            sum += l.color * (nl * atten);
         }
         sum
     }
@@ -679,30 +755,13 @@ pub fn bake(input: &BakeInput, progress: &Progress) -> Result<BakeOutput, String
         }
         // Baked lights' direct light as impulses (radiance π·I toward the light).
         for l in input.lights.iter().filter(|l| l.baked_direct) {
-            let (dir, atten, dist) = match l.kind {
-                BakeLightKind::Directional { direction } => {
-                    (-direction.normalize_or(Vector3::NEG_Y), 1.0, 1e4)
+            for (dir, dist, atten) in l.kind.rays(p) {
+                if atten <= 0.0 || (l.cast_shadows && scene.occluded(p, dir, dist)) {
+                    continue;
                 }
-                BakeLightKind::Point { position, range }
-                | BakeLightKind::Spot {
-                    position, range, ..
-                } => {
-                    let d = position - p;
-                    let d2 = d.length_squared();
-                    let k = d2 / (range * range);
-                    let window = (1.0 - k * k).clamp(0.0, 1.0);
-                    (
-                        d / d2.sqrt().max(1e-4),
-                        window * window / d2.max(0.01),
-                        d2.sqrt(),
-                    )
+                for (k, y) in sh_basis(dir).iter().enumerate() {
+                    acc[k] += l.color * (std::f32::consts::PI * atten * y);
                 }
-            };
-            if atten <= 0.0 || (l.cast_shadows && scene.occluded(p, dir, dist)) {
-                continue;
-            }
-            for (k, y) in sh_basis(dir).iter().enumerate() {
-                acc[k] += l.color * (std::f32::consts::PI * atten * y);
             }
         }
         // Cosine-lobe convolution per band, divided by π.

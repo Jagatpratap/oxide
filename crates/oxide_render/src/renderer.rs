@@ -54,6 +54,10 @@ struct FrameUniform {
     ssao: [f32; 4],
     cluster_viewport: [f32; 4],
     cluster_params: [f32; 4],
+    /// xy cookie tile size, zw offset.
+    sun_cookie: [f32; 4],
+    /// xyz right vector, w cookie layer (-1 = none).
+    sun_right: [f32; 4],
 }
 
 #[repr(C)]
@@ -67,6 +71,10 @@ struct LightUniform {
     spot: [f32; 4],
     /// x depth bias, y normal bias, z soft, w world texel size per metre of distance.
     shadow: [f32; 4],
+    /// x rendering layers, y cookie layer (-1 = none).
+    extra: [f32; 4],
+    /// xyz right vector (cookie orientation).
+    right: [f32; 4],
 }
 
 /// Additional-light shadow atlas: square tiles, a spot light takes one, a point light six.
@@ -288,6 +296,11 @@ pub struct SceneRenderer {
     /// Baked lightmaps as one texture array, and which assets (and versions) it holds.
     lightmap_array: wgpu::TextureView,
     lightmap_sources: Vec<(AssetId, u64)>,
+    /// Light cookies: one layer each (resampled to `COOKIE_SIZE`), by texture.
+    cookie_array: wgpu::TextureView,
+    cookie_sampler: wgpu::Sampler,
+    cookie_sources: Vec<(AssetId, u64)>,
+    cookie_layers: HashMap<AssetId, u32>,
     lightmap_count: usize,
     gi_buffer: wgpu::Buffer,
     fullscreen: crate::fullscreen::FullscreenGpu,
@@ -543,6 +556,22 @@ impl SceneRenderer {
                     count: None,
                 },
                 storage_entry(14, wgpu::ShaderStages::VERTEX_FRAGMENT),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 15,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 16,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
                 wgpu::BindGroupLayoutEntry {
                     binding: 12,
                     visibility: wgpu::ShaderStages::FRAGMENT,
@@ -848,6 +877,17 @@ impl SceneRenderer {
             rt_frames: HashMap::new(),
             lightmap_array: lightmap_array(device, &gpu.queue, &[], 1),
             lightmap_sources: Vec::new(),
+            cookie_array: cookie_array(device, &gpu.queue, &[]),
+            cookie_sampler: device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("cookies"),
+                address_mode_u: wgpu::AddressMode::ClampToEdge,
+                address_mode_v: wgpu::AddressMode::ClampToEdge,
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                ..Default::default()
+            }),
+            cookie_sources: Vec::new(),
+            cookie_layers: HashMap::new(),
             lightmap_count: 0,
             gi_buffer: buf("baked lighting", 176 * 64, wgpu::BufferUsages::STORAGE),
             fullscreen: crate::fullscreen::FullscreenGpu::new(device, &gpu.queue),
@@ -1604,6 +1644,14 @@ impl SceneRenderer {
                             binding: 14,
                             resource: self.gi_buffer.as_entire_binding(),
                         },
+                        wgpu::BindGroupEntry {
+                            binding: 15,
+                            resource: wgpu::BindingResource::TextureView(&self.cookie_array),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 16,
+                            resource: wgpu::BindingResource::Sampler(&self.cookie_sampler),
+                        },
                     ],
                 })
             })
@@ -2256,6 +2304,7 @@ impl SceneRenderer {
         let mut gis: Vec<InstanceGi> = Vec::new();
         let exclude = capture.and_then(|c| c.exclude);
         self.update_lightmaps(gpu, assets, &frame.lightmaps);
+        self.update_cookies(gpu, assets, frame);
         let mut resolved = Vec::with_capacity(frame.draws.len());
         for d in &frame.draws {
             if !self.gpu_assets.ensure_mesh(device, assets, d.mesh) {
@@ -2468,12 +2517,18 @@ impl SceneRenderer {
                     spot[3] = s.strength.clamp(0.0, 1.0);
                     shadow = [s.bias, s.normal_bias, s.soft as u32 as f32, t.texel];
                 }
+                let cookie = l
+                    .cookie
+                    .and_then(|c| self.cookie_layers.get(&c))
+                    .map_or(-1.0, |&i| i as f32);
                 LightUniform {
                     pos_range: l.position.extend(l.range.max(0.01)).to_array(),
                     color: [l.color[0], l.color[1], l.color[2], ty],
                     dir: dir.extend(0.0).to_array(),
                     spot,
                     shadow,
+                    extra: [(l.rendering_layers & 0xFF) as f32, cookie, 0.0, 0.0],
+                    right: l.right.normalize_or(Vector3::X).extend(0.0).to_array(),
                 }
             })
             .collect();
@@ -2563,7 +2618,8 @@ impl SceneRenderer {
                 normal: [n.x_axis.to_array(), n1, n.z_axis.to_array()],
                 extra: [
                     d.joint_offset.unwrap_or(0),
-                    d.receive_shadows as u32,
+                    // Bit 0 receive shadows, bits 8.. rendering layers (8 for lighting).
+                    d.receive_shadows as u32 | (d.rendering_layers & 0xFF) << 8,
                     r.probes[0],
                     r.probes[1],
                 ],
@@ -3240,7 +3296,28 @@ impl SceneRenderer {
                         ph.max(1.0),
                     ]
                 },
-                cluster_params: [grids[ci].scale, grids[ci].bias, 0.0, 0.0],
+                cluster_params: [
+                    grids[ci].scale,
+                    grids[ci].bias,
+                    frame.sun.as_ref().map_or(0, |s| s.rendering_layers & 0xFF) as f32,
+                    0.0,
+                ],
+                sun_cookie: frame
+                    .sun
+                    .as_ref()
+                    .and_then(|s| s.cookie)
+                    .map_or([1.0, 1.0, 0.0, 0.0], |c| {
+                        [c.size[0], c.size[1], c.offset[0], c.offset[1]]
+                    }),
+                sun_right: {
+                    let sun = frame.sun.as_ref();
+                    let right = sun.map_or(Vector3::X, |s| s.right.normalize_or(Vector3::X));
+                    let layer = sun
+                        .and_then(|s| s.cookie)
+                        .and_then(|c| self.cookie_layers.get(&c.texture))
+                        .map_or(-1.0, |&i| i as f32);
+                    right.extend(layer).to_array()
+                },
             };
             queue.write_buffer(&self.frame_buffers[ci], 0, bytemuck::bytes_of(&u));
         }
@@ -4042,7 +4119,107 @@ fn lightmap_array(
         })
 }
 
+/// Light cookie layer size.
+const COOKIE_SIZE: u32 = 256;
+
+/// Cookies (RGBA8, `COOKIE_SIZE`², linear) as a texture array; one white layer when there
+/// are none.
+fn cookie_array(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    layers: &[Vec<u8>],
+) -> wgpu::TextureView {
+    use wgpu::util::DeviceExt;
+    let (data, size, count) = if layers.is_empty() {
+        (vec![255u8; 4], 1, 1)
+    } else {
+        (layers.concat(), COOKIE_SIZE, layers.len() as u32)
+    };
+    device
+        .create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("light cookies"),
+                size: wgpu::Extent3d {
+                    width: size,
+                    height: size,
+                    depth_or_array_layers: count,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &data,
+        )
+        .create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        })
+}
+
+/// Bilinear resample of an RGBA8 image to a `COOKIE_SIZE` square.
+fn resample_cookie(t: &Texture2D) -> Vec<u8> {
+    let src = &t.mips[0];
+    let (w, h) = (t.width as f32, t.height as f32);
+    let px = |x: i64, y: i64, c: usize| -> f32 {
+        let x = x.clamp(0, t.width as i64 - 1) as u32;
+        let y = y.clamp(0, t.height as i64 - 1) as u32;
+        src[((y * t.width + x) * 4) as usize + c] as f32
+    };
+    let mut out = Vec::with_capacity((COOKIE_SIZE * COOKIE_SIZE * 4) as usize);
+    for y in 0..COOKIE_SIZE {
+        for x in 0..COOKIE_SIZE {
+            let fx = (x as f32 + 0.5) / COOKIE_SIZE as f32 * w - 0.5;
+            let fy = (y as f32 + 0.5) / COOKIE_SIZE as f32 * h - 0.5;
+            let (x0, y0) = (fx.floor(), fy.floor());
+            let (tx, ty) = (fx - x0, fy - y0);
+            let (x0, y0) = (x0 as i64, y0 as i64);
+            for c in 0..4 {
+                let top = px(x0, y0, c) * (1.0 - tx) + px(x0 + 1, y0, c) * tx;
+                let bottom = px(x0, y0 + 1, c) * (1.0 - tx) + px(x0 + 1, y0 + 1, c) * tx;
+                out.push((top * (1.0 - ty) + bottom * ty).round() as u8);
+            }
+        }
+    }
+    out
+}
+
 impl SceneRenderer {
+    /// Rebuilds the cookie array when the frame's light cookies (or their files) change.
+    fn update_cookies(&mut self, gpu: &Gpu, assets: &AssetServer, frame: &RenderFrame) {
+        let mut ids: Vec<AssetId> = frame
+            .lights
+            .iter()
+            .filter_map(|l| l.cookie)
+            .chain(frame.sun.as_ref().and_then(|s| s.cookie).map(|c| c.texture))
+            .collect();
+        ids.sort();
+        ids.dedup();
+        let sources: Vec<(AssetId, u64)> = ids
+            .iter()
+            .map(|id| (*id, assets.textures.version(*id).unwrap_or(0)))
+            .collect();
+        if sources == self.cookie_sources {
+            return;
+        }
+        self.cookie_sources = sources;
+        self.cookie_layers.clear();
+        let mut layers = Vec::new();
+        for id in ids {
+            // Cookies need CPU pixels (not pre-compressed KTX2).
+            if let Some(t) = assets.textures.get_by_id(id).filter(|t| !t.mips.is_empty()) {
+                self.cookie_layers.insert(id, layers.len() as u32);
+                layers.push(resample_cookie(t));
+            }
+        }
+        self.cookie_array = cookie_array(&gpu.device, &gpu.queue, &layers);
+        self.groups_dirty = true;
+    }
+
     /// Rebuilds the lightmap array when the scene's lightmaps (or their files) change.
     fn update_lightmaps(&mut self, gpu: &Gpu, assets: &AssetServer, ids: &[AssetId]) {
         let sources: Vec<(AssetId, u64)> = ids

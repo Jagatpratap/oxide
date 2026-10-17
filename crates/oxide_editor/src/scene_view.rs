@@ -844,6 +844,21 @@ fn draw_selection(st: &EditorState, world: &World, proj: &Projector, p: &egui::P
                         line(p, proj, pos, end + d * r, s);
                     }
                 }
+                // Area lights: their outline and the side they light.
+                LightType::Rectangle => {
+                    let (hx, hy) = (l.area_size.x * 0.5, l.area_size.y * 0.5);
+                    let c = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]
+                        .map(|(x, y)| pos + rot * Vector3::new(x * hx, y * hy, 0.0));
+                    for i in 0..4 {
+                        line(p, proj, c[i], c[(i + 1) % 4], s);
+                    }
+                    line(p, proj, pos, pos + rot * Vector3::Z * hx.max(hy), s);
+                }
+                LightType::Disc => {
+                    let fwd = rot * Vector3::Z;
+                    circle(p, proj, pos, fwd, l.area_size.x, s);
+                    line(p, proj, pos, pos + fwd * l.area_size.x, s);
+                }
                 _ => {
                     let fwd = rot * Vector3::Z;
                     let (u, v) = basis(fwd);
@@ -1973,6 +1988,7 @@ pub fn apply_view_options(
             direction: cam_forward,
             color: [1.0, 1.0, 1.0],
             shadows: None,
+            ..Default::default()
         });
         for d in &mut rf.draws {
             d.lightmap = None;

@@ -1211,9 +1211,34 @@ fn hide_inapplicable(
     let hidden: Vec<&str> = match type_name {
         "Light" => {
             let mut h = Vec::new();
+            let cookie_tiling = ["cookie_size", "cookie_offset"];
             match mode("light_type").as_deref() {
-                Some("Directional") => h.extend(["range", "spot_angle", "inner_spot_angle"]),
-                Some("Point") => h.extend(["spot_angle", "inner_spot_angle"]),
+                Some("Directional") => {
+                    h.extend(["range", "spot_angle", "inner_spot_angle", "area_size"])
+                }
+                // URP: Point lights have no cookies (they'd need a cubemap).
+                Some("Point") => h.extend([
+                    "spot_angle",
+                    "inner_spot_angle",
+                    "area_size",
+                    "cookie",
+                    "cookie_size",
+                    "cookie_offset",
+                ]),
+                Some("Spot") => {
+                    h.push("area_size");
+                    h.extend(cookie_tiling);
+                }
+                // Area lights are baked only: no cone, cookie or realtime settings.
+                Some("Rectangle" | "Disc") => h.extend([
+                    "spot_angle",
+                    "inner_spot_angle",
+                    "cookie",
+                    "cookie_size",
+                    "cookie_offset",
+                    "lightmap_bake_type",
+                    "rendering_layers",
+                ]),
                 _ => {}
             }
             if mode("shadows").as_deref() == Some("None") {

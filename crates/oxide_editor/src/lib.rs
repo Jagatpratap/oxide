@@ -184,6 +184,7 @@ pub enum Create {
     DirectionalLight,
     PointLight,
     SpotLight,
+    AreaLight,
     ReflectionProbe,
     LightProbeGroup,
     GlobalVolume,
@@ -222,6 +223,7 @@ impl Create {
             Create::DirectionalLight => "Directional Light",
             Create::PointLight => "Point Light",
             Create::SpotLight => "Spot Light",
+            Create::AreaLight => "Area Light",
             Create::ReflectionProbe => "Reflection Probe",
             Create::LightProbeGroup => "Light Probe Group",
             Create::GlobalVolume => "Global Volume",
@@ -1916,6 +1918,23 @@ fn create(w: &mut World, kind: Create, active: Option<GameObjectId>) -> GameObje
                 Light {
                     light_type: LightType::Spot,
                     range: 10.0,
+                    ..Default::default()
+                },
+            );
+            id
+        }
+        Create::AreaLight => {
+            // Unity's: a Rectangle facing down, baked.
+            let id = w.create_at(
+                "Area Light",
+                Vector3::ZERO,
+                Quaternion::euler(90.0, 0.0, 0.0),
+            );
+            w.add_component(
+                id,
+                Light {
+                    light_type: LightType::Rectangle,
+                    lightmap_bake_type: oxide_scene::LightmapBakeType::Baked,
                     ..Default::default()
                 },
             );

@@ -282,10 +282,14 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
     // Lights: the sun is RenderSettings.sun or the brightest directional light.
     let mut sun: Option<(f32, SunLight)> = None;
     for (id, l) in world.query::<Light>() {
-        // Baked lights only exist in lightmaps and light probes.
-        if l.lightmap_bake_type == oxide_scene::LightmapBakeType::Baked {
+        // Baked lights only exist in lightmaps and light probes; so do area lights (URP).
+        if l.lightmap_bake_type == oxide_scene::LightmapBakeType::Baked
+            || matches!(l.light_type, LightType::Rectangle | LightType::Disc)
+        {
             continue;
         }
+        let right = world.rotation(id) * oxide_math::Vector3::X;
+        let layers = l.rendering_layers;
         let c = l.color.linear();
         let color = [c.r * l.intensity, c.g * l.intensity, c.b * l.intensity];
         match l.light_type {
@@ -303,6 +307,16 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
                             direction: world.forward(id),
                             color,
                             shadows: shadow_settings(l, &quality),
+                            rendering_layers: layers,
+                            cookie: l.cookie.as_ref().map(|c| oxide_render::SunCookie {
+                                texture: c.id(),
+                                size: l
+                                    .cookie_size
+                                    .max(oxide_math::Vector2::splat(1e-3))
+                                    .to_array(),
+                                offset: l.cookie_offset.to_array(),
+                            }),
+                            right,
                         },
                     ));
                 }
@@ -314,7 +328,16 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
                 spot: (l.light_type == LightType::Spot)
                     .then(|| (world.forward(id), l.spot_angle, l.inner_spot_angle)),
                 shadow: shadow_settings(l, &quality),
+                rendering_layers: layers,
+                // URP: cookies on Spot lights (Point cookies need cubemaps).
+                cookie: l
+                    .cookie
+                    .as_ref()
+                    .filter(|_| l.light_type == LightType::Spot)
+                    .map(|c| c.id()),
+                right,
             }),
+            LightType::Rectangle | LightType::Disc => {}
         }
     }
     frame.sun = sun.map(|(_, s)| s);
@@ -413,6 +436,7 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
             order: r.sorting_order,
             priority: r.renderer_priority,
         };
+        let rendering_layers = r.rendering_layer_mask;
         let Some(mesh) = world
             .get_component::<MeshFilter>(id)
             .and_then(|f| f.mesh.as_ref())
@@ -458,6 +482,7 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
                 lightmap,
                 light_probe,
                 sorting,
+                rendering_layers,
             });
         }
     }
@@ -471,6 +496,7 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
             order: r.sorting_order,
             priority: r.renderer_priority,
         };
+        let rendering_layers = r.rendering_layer_mask;
         let light_probe = crate::lighting::probe_sh(&settings, world.position(id));
         let Some(mesh_h) = &r.mesh else { continue };
         let Some(mesh) = assets.meshes.get(mesh_h) else {
@@ -504,6 +530,7 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
                     lightmap: None,
                     light_probe,
                     sorting,
+                    rendering_layers,
                 });
             }
             continue;
@@ -538,6 +565,7 @@ pub fn extract(world: &World, cameras_override: Option<Vec<CameraView>>) -> Rend
                 lightmap: None,
                 light_probe,
                 sorting,
+                rendering_layers,
             });
         }
     }

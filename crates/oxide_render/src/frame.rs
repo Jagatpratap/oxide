@@ -209,6 +209,34 @@ pub struct SunLight {
     /// Linear color × intensity.
     pub color: [f32; 3],
     pub shadows: Option<ShadowSettings>,
+    /// Rendering layers it lights (URP light "Rendering Layers"; objects' masks must overlap).
+    pub rendering_layers: u32,
+    /// Light cookie: the texture tiled across the world, `size` metres per tile and
+    /// `offset`, along [`Self::right`] and its up vector.
+    pub cookie: Option<SunCookie>,
+    /// The light's right vector (cookie orientation).
+    pub right: Vector3,
+}
+
+/// A directional light's cookie (URP "Cookie Size" and "Cookie Offset").
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SunCookie {
+    pub texture: AssetId,
+    pub size: [f32; 2],
+    pub offset: [f32; 2],
+}
+
+impl Default for SunLight {
+    fn default() -> Self {
+        Self {
+            direction: Vector3::NEG_Y,
+            color: [1.0; 3],
+            shadows: None,
+            rendering_layers: u32::MAX,
+            cookie: None,
+            right: Vector3::X,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -221,6 +249,27 @@ pub struct PunctualLight {
     pub spot: Option<(Vector3, f32, f32)>,
     /// Shadow settings when the light casts shadows (rendered into the shadow atlas).
     pub shadow: Option<ShadowSettings>,
+    /// Rendering layers it lights.
+    pub rendering_layers: u32,
+    /// Spot light cookie: the texture projected through the cone.
+    pub cookie: Option<AssetId>,
+    /// The light's right vector (cookie orientation).
+    pub right: Vector3,
+}
+
+impl Default for PunctualLight {
+    fn default() -> Self {
+        Self {
+            position: Vector3::ZERO,
+            range: 10.0,
+            color: [1.0; 3],
+            spot: None,
+            shadow: None,
+            rendering_layers: u32::MAX,
+            cookie: None,
+            right: Vector3::X,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -251,6 +300,9 @@ pub struct DrawItem {
     /// lightmap.
     pub light_probe: Option<[Vector3; 9]>,
     pub sorting: DrawSorting,
+    /// Rendering layers of the renderer (`Renderer.renderingLayerMask`): lights only reach
+    /// objects whose mask overlaps theirs.
+    pub rendering_layers: u32,
 }
 
 /// A renderer's draw-order settings (Unity Sorting Layer, Order in Layer, Priority).

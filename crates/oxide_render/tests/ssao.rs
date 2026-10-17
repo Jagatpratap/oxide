@@ -25,6 +25,7 @@ fn draw(mesh: PrimitiveType, pos: Vector3, scale: Vector3) -> DrawItem {
         lightmap: None,
         light_probe: None,
         sorting: Default::default(),
+        rendering_layers: u32::MAX,
     }
 }
 

@@ -57,7 +57,7 @@ pub fn extract(world: &World, out: &mut Vec<oxide_render::LensFlareSource>) {
                         (l.inner_spot_angle * 0.5).to_radians().cos(),
                     ));
                 }
-                LightType::Point => {}
+                LightType::Point | LightType::Rectangle | LightType::Disc => {}
             }
         }
         out.push(to_source(c, data, position, directional, color, spot));

@@ -24,6 +24,7 @@ fn draw(material: AssetId, pos: Vector3, scale: Vector3, layer: u8) -> DrawItem 
         lightmap: None,
         light_probe: None,
         sorting: Default::default(),
+        rendering_layers: u32::MAX,
     }
 }
 
