@@ -353,6 +353,7 @@ enum Op {
     /// A Prefab Variant of a prefab asset, next to it.
     PrefabVariant(String),
     OpenSceneAdditive(String),
+    ExportPackage(String),
     /// A Font Asset from a font file, next to it (TMP's Create > TextMeshPro > Font Asset).
     FontAsset(String),
 }
@@ -556,6 +557,10 @@ fn item_menu(ui: &mut egui::Ui, path: &str, dir: bool, ops: &mut Vec<Op>, ps: &m
     }
     if path.ends_with(".shadergraph") && ui.button("Create Material").clicked() {
         ops.push(Op::GraphMaterial(path.to_owned()));
+        ui.close();
+    }
+    if ui.button("Export Package…").clicked() {
+        ops.push(Op::ExportPackage(path.to_owned()));
         ui.close();
     }
     if path.ends_with(".scene") && ui.button("Open Scene Additive").clicked() {
@@ -1219,6 +1224,9 @@ fn run(st: &mut EditorState, engine: &mut Engine, root: &Path, op: Op) -> Result
             st.project.selected = Some(path);
             st.project.start_rename();
             st.project.invalidate();
+        }
+        Op::ExportPackage(path) => {
+            st.actions.push(crate::Action::ExportPackage(vec![path]));
         }
         Op::OpenSceneAdditive(path) => {
             st.actions.push(crate::Action::OpenSceneAdditive(path));

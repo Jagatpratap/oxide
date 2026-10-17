@@ -294,7 +294,11 @@ from the fixed edge and each object along its matching local axis).
   Input Actions (+ window), Animation Clip / Controller / Override Controller / Avatar Mask (+ Animation
   and Animator windows), Audio Mixer (+ window), Sprite Atlas, Tile / Animated Tile / Rule Tile,
   Tile Palette (+ window), Sprite Library, Prefab Variants
-- ☐ Package export/import (`.oxidepackage`)
+- ☑ Package export/import (`.oxidepackage`, Unity's `.unitypackage` layout: per-GUID `asset`, `asset.meta`,
+  `pathname` in a gzipped tar; `.unitypackage` files import too): Export Package window with Include dependencies,
+  Import Package window with New / Changed / Moved / Renamed status per asset, GUIDs preserved (an asset already
+  in the project is updated where it is, a taken path gets a free name, folders merge); Assets menu and Project
+  window entries; MCP `asset_packages`
   ([Asset packages](https://docs.unity3d.com/Manual/AssetPackages.html))
 
 **Exit:** drop a glTF + textures into Assets/, it appears in Project window with thumbnail and drags into the scene.

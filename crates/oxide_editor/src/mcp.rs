@@ -101,6 +101,7 @@ pub fn register(s: &mut McpServer, bus: &Arc<Bus>) {
     register_window_tools(s, bus);
     register_scene_tools(s, bus);
     register_overlay_tools(s, bus);
+    register_package_tools(s, bus);
     tool(s, bus, ToolDef::new("editor_get_state", "Get editor state",
         "Editor mode (edit/playing/paused), open scene and unsaved flag, selection, active tool, open windows, \
          undo/redo history and the Scene view camera.",
@@ -1563,6 +1564,107 @@ fn register_overlay_tools(s: &mut McpServer, bus: &Arc<Bus>) {
                     })).collect::<Vec<_>>(),
                     "presets": st.prefs.overlay_presets.keys().collect::<Vec<_>>(),
                 }))
+            })
+        },
+    );
+}
+
+fn register_package_tools(s: &mut McpServer, bus: &Arc<Bus>) {
+    tool(
+        s,
+        bus,
+        ToolDef::new(
+            "asset_packages",
+            "Export and import asset packages",
+            "Asset packages (.oxidepackage, Unity's .unitypackage layout; .unitypackage files import too). \
+             `action`: export (`paths` assets/folders, `include_dependencies` default true, `out` file path) \
+             writes a package; list (`package`) shows its assets with what importing each would do (New, Changed, \
+             Unchanged, Moved, Conflict); import (`package`, optional `paths` to import only some) imports them \
+             with their GUIDs; open_export / open_import show Unity's windows.",
+            schema(
+                json!({
+                    "action": { "type": "string", "enum": ["export", "list", "import", "open_export", "open_import"] },
+                    "paths": { "type": "array", "items": { "type": "string" } },
+                    "include_dependencies": { "type": "boolean" },
+                    "out": { "type": "string" },
+                    "package": { "type": "string" }
+                }),
+                &["action"],
+            ),
+        ),
+        |args, e| {
+            with_editor(e, |ed, e| {
+                let paths: Vec<String> = args
+                    .get("paths")
+                    .and_then(Json::as_array)
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str().map(str::to_owned))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let package = args
+                    .get("package")
+                    .and_then(Json::as_str)
+                    .map(std::path::PathBuf::from);
+                let res = match args.get("action").and_then(Json::as_str).unwrap_or("") {
+                    "export" => (|| {
+                        let out = args
+                            .get("out")
+                            .and_then(Json::as_str)
+                            .ok_or("`out` is required")?;
+                        let deps = args
+                            .get("include_dependencies")
+                            .and_then(Json::as_bool)
+                            .unwrap_or(true);
+                        let assets = e.world.resource_mut::<AssetServer>();
+                        if !assets.database.is_scanned() {
+                            assets.database.refresh();
+                        }
+                        let root = assets.full_path("");
+                        let all =
+                            oxide_assets::package::collect(&root, &assets.database, &paths, deps);
+                        let n = crate::packages_window::export(e, &all, std::path::Path::new(out))?;
+                        Ok(json!({ "exported": n, "assets": all, "out": out }))
+                    })(),
+                    "list" | "import" => (|| {
+                        let package = package.ok_or("`package` is required")?;
+                        let items = oxide_assets::package::read(&package)?;
+                        let assets = e.world.resource_mut::<AssetServer>();
+                        if !assets.database.is_scanned() {
+                            assets.database.refresh();
+                        }
+                        let root = assets.full_path("");
+                        let listed: Vec<Json> = items
+                            .iter()
+                            .map(|i| json!({
+                                "path": i.path, "guid": i.guid, "folder": i.asset.is_none(),
+                                "status": format!("{:?}", oxide_assets::package::status(&root, &assets.database, i)),
+                            }))
+                            .collect();
+                        if args.get("action").and_then(Json::as_str) == Some("list") {
+                            return Ok(json!({ "package": package, "assets": listed }));
+                        }
+                        let chosen: Vec<_> = items
+                            .into_iter()
+                            .filter(|i| paths.is_empty() || paths.contains(&i.path))
+                            .collect();
+                        let written = crate::packages_window::import(&mut ed.st, e, &chosen)?;
+                        Ok(json!({ "imported": written }))
+                    })(),
+                    "open_export" => crate::packages_window::open_export(&mut ed.st, e, paths)
+                        .map(|m| json!({ "message": m })),
+                    "open_import" => match package {
+                        Some(p) => crate::packages_window::open_import(&mut ed.st, e, Some(p))
+                            .map(|m| json!({ "message": m })),
+                        None => Err("`package` is required".to_owned()),
+                    },
+                    other => Err(format!("unknown action `{other}`")),
+                };
+                match res {
+                    Ok(j) => ToolResult::json(j),
+                    Err(err) => ToolResult::error(err),
+                }
             })
         },
     );

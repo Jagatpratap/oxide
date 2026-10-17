@@ -503,9 +503,7 @@ fn prefab_edited_on_disk_updates_instances_keeping_overrides() {
     }
     let b = w
         .hierarchy_order()
-        .into_iter()
-        .filter(|&id| w.get(id).unwrap().name == "Crate")
-        .next_back()
+        .into_iter().rfind(|&id| w.get(id).unwrap().name == "Crate")
         .unwrap();
     assert_eq!(w.position(b), Vector3::new(5.0, 0.0, 0.0));
 }

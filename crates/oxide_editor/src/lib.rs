@@ -29,6 +29,7 @@ mod menus;
 mod navigation_window;
 mod node_canvas;
 pub mod overlays;
+pub mod packages_window;
 pub mod player_build;
 pub mod prefs;
 mod previews;
@@ -271,6 +272,10 @@ pub enum Action {
     RemoveScene(Option<SceneHandle>, Option<String>),
     /// Selects an asset in the Project window and opens its folder (Unity's ping).
     PingAsset(String),
+    /// Assets > Export Package… for these paths (empty: the Project window selection).
+    ExportPackage(Vec<String>),
+    /// Assets > Import Package > Custom Package… (asks for a file when `None`).
+    ImportPackage(Option<String>),
     /// Moves root objects into another loaded scene (drag onto a scene header).
     MoveToScene(Vec<GameObjectId>, SceneHandle),
     Undo,
@@ -388,6 +393,8 @@ pub struct EditorState {
     db_synced: f64,
     /// Scene view overlays (sizes, drag, menu, camera preview).
     pub overlays: overlays::OverlayState,
+    /// Export Package / Import Package windows.
+    pub packages: packages_window::PackageDialogs,
     /// Requested from inside window code; applied after the UI pass.
     pub actions: Vec<Action>,
     /// Scene view NavMesh display options (Navigation window).
@@ -465,6 +472,7 @@ impl EditorState {
             save_as_scene: SceneHandle::MAIN,
             db_synced: 0.0,
             overlays: Default::default(),
+            packages: Default::default(),
             actions: Vec::new(),
             nav_display: Default::default(),
             nav_window: Default::default(),
@@ -1104,6 +1112,17 @@ impl Editor {
                 st.unloaded_scenes.retain(|p| *p != path);
                 launch::remember_scene_setup(w, &st.unloaded_scenes);
                 format!("Removed {path} from the Hierarchy")
+            }
+            Action::ExportPackage(paths) => {
+                let paths = if paths.is_empty() {
+                    st.project.selected.clone().into_iter().collect()
+                } else {
+                    paths
+                };
+                packages_window::open_export(st, engine, paths)?
+            }
+            Action::ImportPackage(file) => {
+                packages_window::open_import(st, engine, file.map(std::path::PathBuf::from))?
             }
             Action::PingAsset(path) => {
                 st.project.show(&path);
@@ -2235,6 +2254,7 @@ impl Shell for Editor {
             });
         self.modal_ui(&ctx, engine);
         search_window::ui(&mut self.st, engine, &ctx);
+        packages_window::ui(&mut self.st, engine, &ctx);
 
         for a in std::mem::take(&mut self.st.actions) {
             if let Err(e) = self.apply(engine, a) {
