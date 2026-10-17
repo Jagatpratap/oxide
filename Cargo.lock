@@ -3257,7 +3257,9 @@ version = "0.1.0"
 dependencies = [
  "oxide_assets",
  "oxide_core",
+ "oxide_input",
  "oxide_math",
+ "oxide_physics",
  "oxide_render",
  "oxide_scene",
 ]

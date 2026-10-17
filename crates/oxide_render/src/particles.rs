@@ -114,7 +114,11 @@ impl ParticleGpu {
                     buffers: &[Some(wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<ParticleInstance>() as u64,
                         step_mode: wgpu::VertexStepMode::Instance,
-                        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32, 2 => Float32x4, 3 => Float32],
+                        attributes: &wgpu::vertex_attr_array![
+                            0 => Float32x3, 1 => Float32, 2 => Float32x4, 3 => Float32,
+                            4 => Float32, 5 => Float32x2, 6 => Float32x4, 7 => Float32x3,
+                            8 => Float32
+                        ],
                     })],
                 },
                 primitive: wgpu::PrimitiveState::default(),
@@ -125,12 +129,19 @@ impl ParticleGpu {
                     stencil: Default::default(),
                     bias: Default::default(),
                 }),
-                multisample: wgpu::MultisampleState { count: samples, ..Default::default() },
+                multisample: wgpu::MultisampleState {
+                    count: samples,
+                    ..Default::default()
+                },
                 fragment: Some(wgpu::FragmentState {
                     module: &self.module,
                     entry_point: Some("fs_main"),
                     compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState { format: HDR_FORMAT, blend: Some(blend), write_mask: wgpu::ColorWrites::ALL })],
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: HDR_FORMAT,
+                        blend: Some(blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
                 }),
                 multiview_mask: None,
                 cache: None,

@@ -435,6 +435,24 @@ pub enum ParticleBlend {
     Additive,
 }
 
+/// How a particle quad is oriented (Unity's Particle System Renderer modes, plus the
+/// segments trails and lines are drawn with).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ParticleMode {
+    /// Faces the camera.
+    #[default]
+    Billboard = 0,
+    /// Stretched along `axis` (its half length), `size` wide.
+    Stretched = 1,
+    /// Flat on the XZ plane.
+    Horizontal = 2,
+    /// Faces the camera but stays upright.
+    Vertical = 3,
+    /// A ribbon piece: `position` is the middle, `axis` half the segment, `size` the width;
+    /// it turns to face the camera around the segment.
+    Segment = 4,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ParticleInstance {
@@ -443,7 +461,43 @@ pub struct ParticleInstance {
     /// Linear RGB (may exceed 1 for HDR glow) and alpha.
     pub color: [f32; 4],
     pub rotation: f32,
-    pub _pad: [f32; 3],
+    /// [`ParticleMode`] as a float.
+    pub mode: f32,
+    pub _pad: [f32; 2],
+    /// Texture rectangle (min x, min y, width, height; origin top left).
+    pub uv: [f32; 4],
+    /// Stretched / Segment: the half-length vector.
+    pub axis: [f32; 3],
+    /// Height ÷ width (non-uniform sizes).
+    pub aspect: f32,
+}
+
+impl ParticleInstance {
+    /// A camera-facing particle covering the whole texture.
+    pub fn billboard(position: [f32; 3], size: f32, color: [f32; 4], rotation: f32) -> Self {
+        Self {
+            position,
+            size,
+            color,
+            rotation,
+            mode: ParticleMode::Billboard as u8 as f32,
+            _pad: [0.0; 2],
+            uv: [0.0, 0.0, 1.0, 1.0],
+            axis: [0.0; 3],
+            aspect: 1.0,
+        }
+    }
+
+    pub fn with_mode(mut self, mode: ParticleMode, axis: [f32; 3]) -> Self {
+        self.mode = mode as u8 as f32;
+        self.axis = axis;
+        self
+    }
+
+    pub fn with_uv(mut self, uv: [f32; 4]) -> Self {
+        self.uv = uv;
+        self
+    }
 }
 
 /// One sprite quad for the sprite pass: the unit square (0..1) placed by `model`.
