@@ -872,6 +872,8 @@ mod tests {
         create_project(&dir, Path::new("/engine")).unwrap();
 
         let skill = std::fs::read_to_string(dir.join(".claude/skills/oxide/SKILL.md")).unwrap();
+        // Windows checkouts may have CRLF line endings.
+        let skill = skill.replace("\r\n", "\n");
         assert!(skill.starts_with("---\nname: oxide\n"), "{skill}");
         assert!(dir.join(".claude/skills/oxide/references/mcp.md").exists());
         assert_eq!(
