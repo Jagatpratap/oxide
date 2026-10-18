@@ -316,7 +316,8 @@ impl OpenJob {
             let mut c = match spawned {
                 Ok(c) => c,
                 Err(e) => {
-                    let _ = tx.send(JobMsg::Done(Err(format!("cannot run cargo: {e}"))));
+                    let msg = project_files::cargo_missing_message(&e);
+                    let _ = tx.send(JobMsg::Done(Err(msg)));
                     return;
                 }
             };

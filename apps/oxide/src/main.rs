@@ -22,7 +22,7 @@ use oxide_engine::prelude::*;
 use oxide_engine::{App, EngineConfig};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: oxide [--scene PATH] [--sample demo|vehicle|character|open_world|city] [--project DIR] [--player] [--mcp-addr HOST:PORT] [--no-mcp] [--size WxH]";
+const USAGE: &str = "usage: oxide [hub | new DIR | open DIR | --version]\n       oxide [--scene PATH] [--sample demo|vehicle|character|open_world|city] [--project DIR] [--player] [--mcp-addr HOST:PORT] [--no-mcp] [--size WxH]";
 
 struct Args {
     config: EngineConfig,
@@ -70,11 +70,9 @@ fn parse_args() -> Result<Args, String> {
     Ok(a)
 }
 
-/// The engine source tree this launcher was built from.
+/// The engine source tree projects build against (`oxide_editor::project_files::engine_root`).
 fn engine_root() -> std::path::PathBuf {
-    let here = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let root = here.join("../..");
-    std::fs::canonicalize(&root).unwrap_or(root)
+    oxide_editor::project_files::engine_root()
 }
 
 /// `oxide new|open DIR [args]`: prepares the project and runs its editor through cargo.
@@ -117,7 +115,10 @@ fn launch_project(create: bool, dir: &str, rest: Vec<String>) -> ExitCode {
         Ok(s) if s.success() => ExitCode::SUCCESS,
         Ok(s) => ExitCode::from(s.code().unwrap_or(1).clamp(1, 255) as u8),
         Err(e) => {
-            eprintln!("oxide: could not run cargo: {e}");
+            eprintln!(
+                "oxide: {}",
+                oxide_editor::project_files::cargo_missing_message(&e)
+            );
             ExitCode::FAILURE
         }
     }
@@ -158,8 +159,14 @@ fn main() -> ExitCode {
         return run_hub(std::iter::empty());
     }
     let mut raw = std::env::args().skip(1);
-    if raw.next().as_deref() == Some("hub") {
-        return run_hub(raw);
+    match raw.next().as_deref() {
+        Some("hub") => return run_hub(raw),
+        Some("-V" | "--version" | "version") => {
+            println!("oxide {}", env!("CARGO_PKG_VERSION"));
+            println!("engine: {}", engine_root().display());
+            return ExitCode::SUCCESS;
+        }
+        _ => {}
     }
     let mut raw = std::env::args().skip(1);
     if let Some(cmd @ ("new" | "open")) = raw.next().as_deref() {

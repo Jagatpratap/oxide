@@ -71,11 +71,17 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
     // Control map rows go along +Z (bottom-left origin like the heightmap).
     var weights: array<f32, 16>;
     var total = 0.0;
+    // Derivatives taken outside the loops: Direct3D's compiler rejects implicit-gradient
+    // samples in loops with a varying number of iterations.
+    let uv_dx = dpdx(in.uv);
+    let uv_dy = dpdy(in.uv);
+    let wp_dx = dpdx(in.world_pos.xz);
+    let wp_dy = dpdy(in.world_pos.xz);
     for (var m = 0; m < 4; m++) {
         if (m >= maps) {
             break;
         }
-        let w = textureSample(control_maps, control_sampler, in.uv, m);
+        let w = textureSampleGrad(control_maps, control_sampler, in.uv, m, uv_dx, uv_dy);
         weights[m * 4] = w.r;
         weights[m * 4 + 1] = w.g;
         weights[m * 4 + 2] = w.b;
@@ -108,14 +114,17 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
         let off = terrain.offsets[i];
         // World-space tiling, with a second, larger scale mixed in to hide repetition.
         let uv = in.world_pos.xz * tl.xy + off.xy * tl.xy;
-        let c1 = textureSample(layer_maps, layer_sampler, uv, i).rgb;
-        let c2 = textureSample(layer_maps, layer_sampler, uv * 0.13 + vec2f(0.37, 0.71), i).rgb;
+        let dx = wp_dx * tl.xy;
+        let dy = wp_dy * tl.xy;
+        let c1 = textureSampleGrad(layer_maps, layer_sampler, uv, i, dx, dy).rgb;
+        let uv2 = uv * 0.13 + vec2f(0.37, 0.71);
+        let c2 = textureSampleGrad(layer_maps, layer_sampler, uv2, i, dx * 0.13, dy * 0.13).rgb;
         let c = mix(c1, c1 * c2 * 2.0, 0.35) * terrain.tints[i].rgb;
         albedo += c * wi;
         smooth_ += tl.z * wi;
         metal += tl.w * wi;
         if (off.w > 0.5) {
-            var tn = textureSample(normal_maps, layer_sampler, uv, i).xyz * 2.0 - 1.0;
+            var tn = textureSampleGrad(normal_maps, layer_sampler, uv, i, dx, dy).xyz * 2.0 - 1.0;
             tn = vec3f(tn.xy * off.z, tn.z);
             nrm += (t * tn.x - b * tn.y + geo_n * tn.z) * wi;
         } else {

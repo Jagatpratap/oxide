@@ -18,6 +18,26 @@
 
 use std::path::{Path, PathBuf};
 
+/// The engine source tree that projects build against. `$OXIDE_ENGINE_ROOT` if set; else, in
+/// an unpacked release (`<root>/bin/oxide`), the folder around the program; else the tree this
+/// program was compiled from.
+pub fn engine_root() -> PathBuf {
+    let is_engine = |p: &Path| p.join("crates/oxide_dylib/Cargo.toml").is_file();
+    if let Some(p) = std::env::var_os("OXIDE_ENGINE_ROOT").map(PathBuf::from)
+        && is_engine(&p)
+    {
+        return std::fs::canonicalize(&p).unwrap_or(p);
+    }
+    if let Ok(exe) = std::env::current_exe().and_then(std::fs::canonicalize)
+        && let Some(root) = exe.parent().and_then(Path::parent)
+        && is_engine(root)
+    {
+        return root.to_path_buf();
+    }
+    let built = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    std::fs::canonicalize(&built).unwrap_or(built)
+}
+
 fn write(path: &Path, text: &str) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -170,6 +190,17 @@ pub fn cargo_command() -> PathBuf {
         }
     }
     exe.into()
+}
+
+/// Why `cargo` couldn't start, in words for someone who may not have Rust installed.
+pub fn cargo_missing_message(e: &std::io::Error) -> String {
+    if e.kind() == std::io::ErrorKind::NotFound {
+        "Rust is not installed (cargo was not found). Oxide projects are Rust code: install Rust \
+         from https://rustup.rs, then open the project again."
+            .into()
+    } else {
+        format!("cannot run cargo: {e}")
+    }
 }
 
 /// `PlayerController` → `player_controller`.

@@ -168,7 +168,7 @@ pub fn resolve_source(project: &Path, file: &str) -> Option<PathBuf> {
         return None;
     }
     let p = Path::new(file);
-    let engine_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let engine_root = crate::project_files::engine_root();
     [
         p.to_path_buf(),
         project.join(p),
