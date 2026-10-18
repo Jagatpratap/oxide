@@ -11,7 +11,11 @@ you tag it.
 
 ## [Unreleased]
 
-### Added
+## [0.1.0] - 2026-10-18
+
+The first public version: a Unity-style editor and runtime written in Rust.
+
+### Hub and installs
 - **Oxide Hub as its own app** (`oxide-hub`, Lucide box icon in rust colour) and the main
   download on every release: installs editor versions from the release list in Production,
   Beta and Alpha channels (download with progress, SHA-256 check, side-by-side installs,
@@ -22,22 +26,15 @@ you tag it.
 - `ProjectSettings/ProjectVersion.txt` records the editor version that last opened a project.
 - `oxide create DIR` and `oxide open DIR --build-only`; release builds report the tag's
   version (`oxide --version`).
-
 - **Prebuilt editor in every release** (`bin/oxide-editor` and the engine library in `lib/`,
   made by `scripts/build_sdk.py`): opening a project starts it at once and compiles nothing
   of the engine; only the project's Scripts compile, against the prebuilt library (through
   `sdk/oxide_dylib`). Projects get a `rust-toolchain.toml` for the Rust version the editor was
   built with, which the first open installs if needed.
-
-### Changed
-- `oxide` with no arguments starts the Hub program instead of a Hub built into the editor.
+- `oxide` with no arguments starts the Hub.
 - `Scripts/Cargo.toml` takes the engine from the project workspace (`oxide = { workspace =
   true }`); older projects are updated when opened, so switching editor versions no longer
   leaves the Scripts on the old engine.
-
-## [0.1.0] - Unreleased
-
-The first public version: a Unity-style editor and runtime written in Rust.
 
 ### Editor
 - `oxide new` / `oxide open` project launcher.
