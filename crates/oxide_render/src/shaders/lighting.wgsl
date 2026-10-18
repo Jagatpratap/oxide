@@ -496,30 +496,29 @@ fn debug_mode() -> u32 {
 }
 
 fn debug_view(mode: u32, world_pos: vec3f, n: vec3f, geo_n: vec3f, albedo: vec3f, receive_shadows: bool, probe_sel: vec2u, frag_xy: vec2f, gi: u32, lm_uv: vec2f) -> vec3f {
-    switch mode {
-        case 1u: {
-            return albedo;
-        }
-        case 2u: {
-            return n * 0.5 + 0.5;
-        }
-        case 3u: {
-            return shade(world_pos, n, geo_n, vec3f(0.7), 0.0, 0.6, 1.0, receive_shadows, probe_sel, frag_xy, gi, lm_uv);
-        }
-        case 4u: {
-            let lit = shade(world_pos, n, geo_n, vec3f(0.7), 0.0, 0.6, 1.0, receive_shadows, probe_sel, frag_xy, gi, lm_uv);
-            let view_depth = (frame.view * vec4f(world_pos, 1.0)).z;
-            let colors = array<vec3f, 4>(vec3f(1.0, 0.25, 0.25), vec3f(0.25, 1.0, 0.25), vec3f(0.3, 0.45, 1.0), vec3f(1.0, 1.0, 0.25));
-            let count = i32(frame.shadow_params.w);
-            for (var i = 0; i < count; i++) {
-                if (view_depth < frame.cascade_splits[i]) {
-                    return lit * colors[i];
-                }
+    // One return at the end: D3D's FXC rejects returns inside a switch ("not all control paths
+    // return a value").
+    var out: vec3f;
+    if (mode == 1u) {
+        out = albedo;
+    } else if (mode == 2u) {
+        out = n * 0.5 + 0.5;
+    } else if (mode == 3u) {
+        out = shade(world_pos, n, geo_n, vec3f(0.7), 0.0, 0.6, 1.0, receive_shadows, probe_sel, frag_xy, gi, lm_uv);
+    } else if (mode == 4u) {
+        let lit = shade(world_pos, n, geo_n, vec3f(0.7), 0.0, 0.6, 1.0, receive_shadows, probe_sel, frag_xy, gi, lm_uv);
+        let view_depth = (frame.view * vec4f(world_pos, 1.0)).z;
+        let colors = array<vec3f, 4>(vec3f(1.0, 0.25, 0.25), vec3f(0.25, 1.0, 0.25), vec3f(0.3, 0.45, 1.0), vec3f(1.0, 1.0, 0.25));
+        let count = i32(frame.shadow_params.w);
+        out = lit;
+        for (var i = 0; i < count; i++) {
+            if (view_depth < frame.cascade_splits[i]) {
+                out = lit * colors[i];
+                break;
             }
-            return lit;
         }
-        default: {
-            return diffuse_light(world_pos, n, geo_n, gi, lm_uv);
-        }
+    } else {
+        out = diffuse_light(world_pos, n, geo_n, gi, lm_uv);
     }
+    return out;
 }

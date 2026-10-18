@@ -28,14 +28,17 @@ fn vs_main(@builtin(vertex_index) i: u32) -> VsOut {
 // World direction through texel `uv` (v down) of cube face `face` (D3D/Vulkan/Metal order).
 fn face_dir(face: u32, uv: vec2f) -> vec3f {
     let a = uv * 2.0 - 1.0;
+    // One return at the end: D3D's FXC rejects returns inside a switch.
+    var d = vec3f(-a.x, -a.y, -1.0);
     switch face {
-        case 0u: { return normalize(vec3f(1.0, -a.y, -a.x)); }
-        case 1u: { return normalize(vec3f(-1.0, -a.y, a.x)); }
-        case 2u: { return normalize(vec3f(a.x, 1.0, a.y)); }
-        case 3u: { return normalize(vec3f(a.x, -1.0, -a.y)); }
-        case 4u: { return normalize(vec3f(a.x, -a.y, 1.0)); }
-        default: { return normalize(vec3f(-a.x, -a.y, -1.0)); }
+        case 0u: { d = vec3f(1.0, -a.y, -a.x); }
+        case 1u: { d = vec3f(-1.0, -a.y, a.x); }
+        case 2u: { d = vec3f(a.x, 1.0, a.y); }
+        case 3u: { d = vec3f(a.x, -1.0, -a.y); }
+        case 4u: { d = vec3f(a.x, -a.y, 1.0); }
+        default: {}
     }
+    return normalize(d);
 }
 
 @fragment
