@@ -2,6 +2,7 @@
 //!
 //! Reads newline-delimited JSON-RPC from stdin, forwards each message to the running engine's
 //! HTTP endpoint (`OXIDE_MCP_ADDR`, default `127.0.0.1:47474`) and writes replies to stdout.
+//! A project's editor listens on the project's own port, written in the project's `.mcp.json`.
 //! If the engine isn't running, requests get a JSON-RPC error explaining how to start it.
 
 use serde_json::{Value, json};
@@ -49,7 +50,7 @@ fn main() {
             Err(e) => error_for(
                 &line,
                 &format!(
-                    "Oxide engine is not reachable at {addr} ({e}). Start it with `cargo run -p oxide`."
+                    "Oxide editor is not reachable at {addr} ({e}). Open the project in the Oxide editor, and set OXIDE_MCP_ADDR to the address in the project's .mcp.json."
                 ),
             ),
         };

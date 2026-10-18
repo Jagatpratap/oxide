@@ -8,6 +8,9 @@
 //!   .cargo/config.toml      build output goes to the shared build folder
 //!   Library/                generated, safe to delete (Unity's Library folder)
 //!     Build/editor/         the project's editor crate (engine source checkouts only)
+//!   AGENTS.md, CLAUDE.md    notes for AI coding agents (written once, then the user's)
+//!   .claude/skills/oxide/   the Oxide skill for agents, refreshed on every open
+//!   .mcp.json, .cursor/mcp.json, .vscode/mcp.json   point MCP clients at this project's editor
 //! ```
 //!
 //! A release ships the editor prebuilt ([`prebuilt`]): opening a project starts
@@ -146,6 +149,15 @@ fn write(path: &Path, text: &str) -> Result<(), String> {
     std::fs::write(path, text).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// Writes `text` unless the file already holds it (so watchers don't see a change).
+fn write_if_changed(path: &Path, text: &str) -> Result<(), String> {
+    if std::fs::read_to_string(path).is_ok_and(|old| old == text) {
+        Ok(())
+    } else {
+        write(path, text)
+    }
+}
+
 fn write_if_missing(path: &Path, text: &str) -> Result<(), String> {
     if path.exists() {
         Ok(())
@@ -189,6 +201,13 @@ pub fn project_id(dir: &Path) -> String {
         h = (h ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3);
     }
     format!("{:08x}", (h ^ (h >> 32)) as u32)
+}
+
+/// Where the project's editor serves MCP: a port picked from the project's path, so two open
+/// projects never share one and the project's MCP config files always reach its own editor.
+pub fn mcp_addr(dir: &Path) -> String {
+    let id = u32::from_str_radix(&project_id(dir), 16).unwrap_or(0);
+    format!("127.0.0.1:{}", 47500 + id % 1000)
 }
 
 /// Name of the project's editor executable (the binary of `Library/Build/editor`).
@@ -565,6 +584,7 @@ debug = "line-tables-only"
         &project_version_file(dir),
         &format!("m_EditorVersion: {}\n", oxide_core::ENGINE_VERSION),
     )?;
+    write_agent_files(dir)?;
     // A prebuilt engine library only links with the compiler that built it.
     let toolchain = dir.join("rust-toolchain.toml");
     match &prebuilt {
@@ -653,6 +673,87 @@ fn main() -> std::process::ExitCode {
 }
 "#,
     )
+}
+
+const SKILL: &[(&str, &str)] = &[
+    ("SKILL.md", include_str!("../../../skills/oxide/SKILL.md")),
+    (
+        "references/getting-started.md",
+        include_str!("../../../docs/GETTING_STARTED.md"),
+    ),
+    ("references/mcp.md", include_str!("../../../docs/MCP.md")),
+];
+
+const AGENTS_MD: &str = r#"# Notes for AI agents
+
+This is an [Oxide](https://github.com/Jagatpratap/oxide) game project: a Unity-style editor
+whose game scripts are Rust.
+
+- Read `.claude/skills/oxide/SKILL.md` before changing anything. It covers the project layout,
+  how to write and register scripts, and how to drive the editor.
+- Game code lives in `Scripts/src/`; every component must be listed in the `oxide::scripts!`
+  macro in `Scripts/src/lib.rs`. Saving a file hot-reloads it into the open editor.
+- While the editor is open it serves MCP (see `.mcp.json`). Use its tools to change scenes,
+  objects, materials and prefabs instead of editing those files by hand, then check
+  `get_console_logs` and `capture_screenshot`.
+- Don't edit generated files: `Library/`, the root `Cargo.toml`, `.cargo/`,
+  `rust-toolchain.toml`, `ProjectSettings/ProjectVersion.txt` and `.claude/skills/oxide/`.
+
+## This game
+
+Describe the game, its conventions and anything an agent should know here.
+"#;
+
+/// The files that tell AI coding agents about Oxide: the skill (refreshed every open, so it
+/// matches the editor version), `AGENTS.md` / `CLAUDE.md` (written once, then the user's) and
+/// MCP client configs pointing at this project's editor (only the `oxide` entry is touched).
+fn write_agent_files(dir: &Path) -> Result<(), String> {
+    let skill = dir.join(".claude/skills/oxide");
+    for (name, text) in SKILL {
+        write_if_changed(&skill.join(name), text)?;
+    }
+    write_if_missing(&dir.join("AGENTS.md"), AGENTS_MD)?;
+    write_if_missing(&dir.join("CLAUDE.md"), "@AGENTS.md\n")?;
+    let url = format!("http://{}/mcp", mcp_addr(dir));
+    let configs = [
+        // Claude Code
+        (
+            ".mcp.json",
+            "mcpServers",
+            serde_json::json!({ "type": "http", "url": url }),
+        ),
+        // Cursor
+        (
+            ".cursor/mcp.json",
+            "mcpServers",
+            serde_json::json!({ "url": url }),
+        ),
+        // VS Code (GitHub Copilot)
+        (
+            ".vscode/mcp.json",
+            "servers",
+            serde_json::json!({ "type": "http", "url": url }),
+        ),
+    ];
+    for (file, key, entry) in configs {
+        let path = dir.join(file);
+        let mut doc = match std::fs::read_to_string(&path) {
+            Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
+                Ok(v) if v.is_object() => v,
+                // Not JSON we understand (comments, say): leave the user's file alone.
+                _ => continue,
+            },
+            Err(_) => serde_json::json!({}),
+        };
+        let servers = &mut doc[key];
+        if !servers.is_object() {
+            *servers = serde_json::json!({});
+        }
+        servers["oxide"] = entry;
+        let text = serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())? + "\n";
+        write_if_changed(&path, &text)?;
+    }
+    Ok(())
 }
 
 /// Adds a script file and its line in `lib.rs`. Returns the new file.
@@ -753,6 +854,54 @@ mod tests {
         assert!(lib.contains("Spinner => \"Scripts/Spinner\";\n    tests: tests::spinner_turns"));
         assert!(dir.join("Scripts/src/tests.rs").exists());
         assert!(add_script(&dir.join("Scripts"), "PlayerController").is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn projects_tell_ai_agents_about_oxide() {
+        let dir = std::env::temp_dir().join(format!("oxide-agents-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        // The user already has another MCP server and their own AGENTS.md.
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(".mcp.json"),
+            r#"{"mcpServers":{"github":{"type":"http","url":"https://example.com/mcp"}}}"#,
+        )
+        .unwrap();
+        std::fs::write(dir.join("AGENTS.md"), "my notes\n").unwrap();
+        create_project(&dir, Path::new("/engine")).unwrap();
+
+        let skill = std::fs::read_to_string(dir.join(".claude/skills/oxide/SKILL.md")).unwrap();
+        assert!(skill.starts_with("---\nname: oxide\n"), "{skill}");
+        assert!(dir.join(".claude/skills/oxide/references/mcp.md").exists());
+        assert_eq!(
+            std::fs::read_to_string(dir.join("AGENTS.md")).unwrap(),
+            "my notes\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("CLAUDE.md")).unwrap(),
+            "@AGENTS.md\n"
+        );
+
+        let url = format!("http://{}/mcp", mcp_addr(&dir));
+        let read = |f: &str| -> serde_json::Value {
+            serde_json::from_str(&std::fs::read_to_string(dir.join(f)).unwrap()).unwrap()
+        };
+        let claude = read(".mcp.json");
+        assert_eq!(claude["mcpServers"]["oxide"]["url"], url.as_str());
+        assert_eq!(
+            claude["mcpServers"]["github"]["url"],
+            "https://example.com/mcp"
+        );
+        assert_eq!(
+            read(".cursor/mcp.json")["mcpServers"]["oxide"]["url"],
+            url.as_str()
+        );
+        assert_eq!(read(".vscode/mcp.json")["servers"]["oxide"]["type"], "http");
+
+        // Another folder gets another port (and the default 47474 stays free).
+        assert_ne!(mcp_addr(&dir), mcp_addr(&dir.join("Other")));
+        assert_ne!(mcp_addr(&dir), "127.0.0.1:47474");
         let _ = std::fs::remove_dir_all(dir);
     }
 

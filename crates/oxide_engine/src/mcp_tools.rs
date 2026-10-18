@@ -21,7 +21,9 @@ const INSTRUCTIONS: &str = "\
 Oxide is a Rust game engine modeled on Unity: GameObjects with a Transform hierarchy and \
 Components (Camera, Light, MeshFilter, MeshRenderer, Rigidbody, colliders, scripts...). Space is \
 left-handed, +Y up, +Z forward, angles in degrees, colors sRGB 0-1 or \"#RRGGBB\". \
-Typical flow: get_hierarchy → create_object / add_component / set_component → capture_screenshot \
+Game scripts are Rust files in the project's Scripts/src (listed in the oxide::scripts! macro \
+in Scripts/src/lib.rs); saving one hot-reloads it, and compile errors appear in get_console_logs. \
+Typical flow: get_engine_info (which project) → get_hierarchy → create_object / add_component / set_component → capture_screenshot \
 to look at the result (pass camera_position/look_at for any viewpoint) → get_console_logs \
 (min_type=Warning) to check for problems. Objects are referenced by id, name or \"Parent/Child\" path.";
 
@@ -197,13 +199,14 @@ pub fn build_server(bus: Arc<Bus>) -> McpServer {
     let bus = &bus;
 
     tool(&mut s, bus, ToolDef::new("get_engine_info", "Get engine info",
-        "Engine version, GPU, window size, frame rate, render stats (draw calls, triangles), object count, scene name.", empty.clone()).read_only(),
+        "Engine version, project folder, GPU, window size, frame rate, render stats (draw calls, triangles), object count, scene name.", empty.clone()).read_only(),
         |_, e| {
             let gpu = e.gpu.adapter_info();
             let (w, h) = e.surface.size();
             let (logs, warnings, errors) = debug::counts();
             ToolResult::json(json!({
                 "engine": "Oxide", "version": oxide_core::ENGINE_VERSION,
+                "project": e.world.resource::<AssetServer>().full_path("").display().to_string(),
                 "gpu": { "name": gpu.name, "backend": format!("{:?}", gpu.backend) },
                 "window": { "width": w, "height": h },
                 "fps": e.fps, "paused": e.paused,

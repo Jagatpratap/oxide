@@ -3,8 +3,10 @@
 //!
 //! ```text
 //! oxide-editor [--project DIR] [--scene Assets/Scenes/Main.scene]
-//!              [--mcp-addr 127.0.0.1:47474] [--no-mcp] [--size 1600x960]
+//!              [--mcp-addr HOST:PORT] [--no-mcp] [--size 1600x960]
 //! ```
+//! MCP is served on the project's own port ([`crate::project_files::mcp_addr`]) unless
+//! `--mcp-addr` or `$OXIDE_MCP_ADDR` says otherwise.
 //! Opens the scene given, else the last scene opened in this project, else
 //! `Assets/Scenes/Main.scene`, else a new default scene.
 
@@ -132,6 +134,7 @@ pub fn run_project_editor(build_id: &'static str) -> ExitCode {
         ..Default::default()
     };
     let mut scene = None;
+    let mut addr_given = std::env::var_os("OXIDE_MCP_ADDR").is_some();
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         let mut value = |name: &str| {
@@ -141,8 +144,12 @@ pub fn run_project_editor(build_id: &'static str) -> ExitCode {
         let r: Result<(), String> = match a.as_str() {
             "--project" => value("--project").map(|v| config.project_root = v.into()),
             "--scene" => value("--scene").map(|v| scene = Some(v)),
-            "--mcp-addr" => value("--mcp-addr").map(|v| config.mcp_addr = Some(v)),
+            "--mcp-addr" => value("--mcp-addr").map(|v| {
+                addr_given = true;
+                config.mcp_addr = Some(v)
+            }),
             "--no-mcp" => {
+                addr_given = true;
                 config.mcp_addr = None;
                 Ok(())
             }
@@ -163,6 +170,9 @@ pub fn run_project_editor(build_id: &'static str) -> ExitCode {
     let project =
         std::fs::canonicalize(&config.project_root).unwrap_or(config.project_root.clone());
     config.project_root = project.clone();
+    if !addr_given {
+        config.mcp_addr = Some(crate::project_files::mcp_addr(&project));
+    }
     if let Some(name) = project.file_name() {
         config.title = format!("{} - Oxide Editor", name.to_string_lossy());
     }

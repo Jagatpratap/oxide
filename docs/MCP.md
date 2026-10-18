@@ -4,40 +4,68 @@ Every running Oxide engine serves the [Model Context Protocol](https://modelcont
 so AI agents (Claude Code, Claude Desktop, Cursor, ...) can inspect and drive it: read the Console,
 change object fields, pause/step time and look at rendered frames.
 
-- **Endpoint:** `http://127.0.0.1:47474/mcp` (Streamable HTTP, JSON responses)
-- **Change address:** `OXIDE_MCP_ADDR=127.0.0.1:5000 cargo run -p oxide` or `--mcp-addr 127.0.0.1:5000`
-- **Turn off:** `cargo run -p oxide -- --no-mcp`
+- **Endpoint:** a project's editor listens on the project's own port, picked from its folder
+  path and written into the project's `.mcp.json`; two open projects never share one. The
+  engine on its own (`cargo run -p oxide`, samples, players) uses `http://127.0.0.1:47474/mcp`.
+  Transport is Streamable HTTP with JSON responses.
+- **Change address:** `--mcp-addr 127.0.0.1:5000` or `OXIDE_MCP_ADDR=127.0.0.1:5000`
+- **Turn off:** `--no-mcp`
+- **Which editor am I talking to:** `get_engine_info` returns the `project` folder.
 - **Protocol versions:** 2025-11-25, 2025-06-18, 2025-03-26, 2024-11-05
 - **Code:** protocol and transport in `crates/oxide_mcp`, the engine's tools in
   `crates/oxide_engine/src/mcp_tools.rs`
 
 ## Connect a client
 
-Start the engine first: `cargo run -p oxide`.
+Every project Oxide creates or opens is set up for AI coding agents:
 
-**Claude Code:** this repo's `.mcp.json` already registers the server as `oxide`; approve it when
-Claude Code asks. To add it elsewhere:
+| File | For |
+|---|---|
+| `.mcp.json` | Claude Code |
+| `.cursor/mcp.json` | Cursor |
+| `.vscode/mcp.json` | VS Code (GitHub Copilot agent mode) |
+| `AGENTS.md` | Codex, Cursor, Copilot, Gemini CLI, Zed and other agents that read it; yours to edit |
+| `CLAUDE.md` | Claude Code; it just includes `AGENTS.md` |
+| `.claude/skills/oxide/` | The Oxide skill: scripting, project layout and how to use these tools |
+
+So in most agents you only open the project folder, open the project in the editor, and approve
+the `oxide` server when asked. Oxide only touches the `oxide` entry in the MCP files, so your other
+servers stay. The skill is refreshed on every open to match the editor version; `AGENTS.md` and
+`CLAUDE.md` are written once and then left to you.
+
+**Other clients** take the URL from the project's `.mcp.json`
+(`http://127.0.0.1:<port>/mcp`):
 
 ```sh
-claude mcp add --transport http oxide http://127.0.0.1:47474/mcp
+claude mcp add --transport http oxide http://127.0.0.1:<port>/mcp     # Claude Code, by hand
+codex mcp add oxide --url http://127.0.0.1:<port>/mcp                 # OpenAI Codex CLI
+gemini mcp add --transport http oxide http://127.0.0.1:<port>/mcp     # Gemini CLI
 ```
 
-**stdio-only clients** (for example Claude Desktop's `claude_desktop_config.json`): build the bridge
-with `cargo build -p oxide_mcp_stdio`, then point the client at the binary:
+**stdio-only clients** (for example Claude Desktop's `claude_desktop_config.json`) use the
+`oxide-mcp-stdio` bridge in the install's `bin/` folder (from source:
+`cargo build -p oxide_mcp_stdio`), with the project's address:
 
 ```json
 {
   "mcpServers": {
-    "oxide": { "command": "/path/to/oxide/target/debug/oxide-mcp-stdio" }
+    "oxide": {
+      "command": "/path/to/Oxide/0.1.0/bin/oxide-mcp-stdio",
+      "env": { "OXIDE_MCP_ADDR": "127.0.0.1:<port>" }
+    }
   }
 }
 ```
 
-If the engine isn't running, the bridge returns an error that says how to start it.
+If the editor isn't running, the bridge returns an error that says how to start it.
+
+**Other agents without skill support** can be pointed at the skill directly: it is a plain
+Markdown file, `skills/oxide/SKILL.md` in this repository and `.claude/skills/oxide/SKILL.md` in
+every project. To use it in every Claude Code session, copy that folder to `~/.claude/skills/`.
 
 ## Tools
 
-82 tools (generated from the running editor's `tools/list`). Tools named `editor_*` exist
+105 tools (generated from the running editor's `tools/list`). Tools named `editor_*` exist
 only when the editor is running (not with `--player`).
 
 | Tool | What it does | Changes state |

@@ -232,19 +232,24 @@ tracks what is done, partly done and missing in detail.
   plugins and play-mode tests.
 - An editor extension API and a package system for sharing tools.
 
-## Using Oxide with AI agents (MCP)
+## Using Oxide with AI agents
 
-Every running editor or game serves MCP at `http://127.0.0.1:47474/mcp`. Agents can read the
-Console, list and edit objects and components, create assets, take screenshots, press Play and
-click through the editor UI. With Claude Code:
+Oxide is built to be driven by AI coding agents as well as by hand. Every project comes set up
+for them:
 
-```sh
-claude mcp add --transport http oxide http://127.0.0.1:47474/mcp
-```
+- **MCP server:** the open editor serves the [Model Context Protocol](https://modelcontextprotocol.io)
+  with over 100 tools. Agents can read the Console, list and edit objects and components, create
+  materials and prefabs, take screenshots, press Play and click through the editor UI.
+- **MCP config files:** `.mcp.json` (Claude Code), `.cursor/mcp.json` (Cursor) and
+  `.vscode/mcp.json` (VS Code) point at the project's own editor, on a port of its own.
+- **A skill:** `.claude/skills/oxide/SKILL.md` teaches an agent how an Oxide project is laid out,
+  how to write and register Rust scripts, and how to check its work through MCP. The same file is
+  in this repo at [`skills/oxide/SKILL.md`](skills/oxide/SKILL.md).
+- **`AGENTS.md`:** read by Codex, Cursor, Copilot, Gemini CLI and others; `CLAUDE.md` includes it.
 
-Use `--mcp-addr HOST:PORT` to change the address or `--no-mcp` to turn it off. For clients that
-only speak stdio, use the bundled `oxide-mcp-stdio` bridge. Every tool is listed in
-[docs/MCP.md](docs/MCP.md).
+Open the project in the editor, open the same folder in your agent, and approve the `oxide` MCP
+server. [docs/MCP.md](docs/MCP.md) covers other clients (including stdio-only ones through the
+bundled `oxide-mcp-stdio` bridge) and lists every tool.
 
 ## How Oxide compares to Unity
 
@@ -267,6 +272,7 @@ affiliated with or endorsed by Unity Technologies.
 | `apps/oxide_hub` | The Oxide Hub (`oxide-hub`): installs editor versions, lists and opens projects |
 | `apps/oxide` | The `oxide` program: project launcher, editor sandbox and player |
 | `apps/oxide_mcp_stdio` | The `oxide-mcp-stdio` bridge for stdio-only MCP clients |
+| `skills/oxide` | The Oxide skill for AI agents (copied into every project) |
 | `crates/oxide_math` | Unity math types (`Vector3`, `Quaternion`, `Mathf`, `Bounds`, ...) on glam |
 | `crates/oxide_core` | Time, the Console log, reflection |
 | `crates/oxide_derive` | `#[derive(Reflect)]` |

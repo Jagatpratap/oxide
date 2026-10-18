@@ -352,16 +352,24 @@ OS. Mobile, web and console targets aren't available yet.
 
 ## 8. AI agents (MCP)
 
-Every running editor serves MCP at `http://127.0.0.1:47474/mcp`. An agent connected to it can
-read the Console, inspect and edit objects, create materials and prefabs, take screenshots of
-the editor and the game, enter Play mode and click through the editor UI.
+Every project is ready for AI coding agents (Claude Code, Cursor, VS Code Copilot, Codex,
+Gemini CLI and others). Oxide writes these into the project:
 
-```sh
-claude mcp add --transport http oxide http://127.0.0.1:47474/mcp   # Claude Code
-```
+- **`AGENTS.md`** (and `CLAUDE.md`, which includes it): what an agent should know about an Oxide
+  project. Add notes about your own game under "This game".
+- **`.claude/skills/oxide/`**: the Oxide skill. It teaches an agent the project layout, how to
+  write and register scripts, and how to drive the editor. It's updated whenever the project
+  opens.
+- **`.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`**: connect the agent to this project's
+  editor. Each project's editor serves MCP on its own port, so several open projects don't get
+  mixed up.
 
-Run several editors at once with `--mcp-addr 127.0.0.1:47475` (and so on). For stdio-only
-clients, point them at `bin/oxide-mcp-stdio`. See [MCP.md](MCP.md) for every tool.
+To use it: open the project in the Oxide editor, open the same folder in your agent, and approve
+the `oxide` MCP server when it asks. The agent can then read the Console, inspect and edit
+objects, create materials and prefabs, take screenshots of the editor and the game, enter Play
+mode and click through the editor UI, while editing your scripts as files.
+
+See [MCP.md](MCP.md) for other clients and every tool.
 
 ## 9. Updating Oxide
 

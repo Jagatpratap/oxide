@@ -71,7 +71,10 @@ The first public version: a Unity-style editor and runtime written in Rust.
 - Rust scripting with hot reload: components, coroutines, jobs, timers, web requests, native
   plugins, play-mode tests.
 - Multiplayer basics (renet): NetworkManager, NetworkObject, NetworkTransform, RPCs.
-- An MCP server in every running engine, so AI agents can inspect and drive the editor.
+- An MCP server in every running engine, so AI agents can inspect and drive the editor. A
+  project's editor serves it on the project's own port.
+- Projects are set up for AI coding agents: an Oxide skill (`.claude/skills/oxide`), `AGENTS.md`
+  and `CLAUDE.md`, and MCP configs for Claude Code, Cursor and VS Code.
 - Standalone player builds for the desktop platform you build on.
 
 ### Packages
