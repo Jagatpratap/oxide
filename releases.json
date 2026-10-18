@@ -1,4 +1,58 @@
 {
   "schema": 1,
-  "releases": []
+  "releases": [
+    {
+      "version": "0.1.0",
+      "channel": "production",
+      "date": "2026-10-18",
+      "notes": "https://github.com/Jagatpratap/oxide/releases/tag/v0.1.0",
+      "downloads": {
+        "aarch64-apple-darwin": {
+          "url": "https://github.com/Jagatpratap/oxide/releases/download/v0.1.0/oxide-v0.1.0-aarch64-apple-darwin.tar.gz",
+          "sha256": "0d82c121c0150ec1a9b4ded7ea38e1846e2b66474f6a727a45ab0cd3b781cf21",
+          "size": 240011359
+        },
+        "x86_64-apple-darwin": {
+          "url": "https://github.com/Jagatpratap/oxide/releases/download/v0.1.0/oxide-v0.1.0-x86_64-apple-darwin.tar.gz",
+          "sha256": "46fc9110d556094e6392fc985828d99ef2feb7365c9b6b592a0b4afc97cabfc1",
+          "size": 249822531
+        },
+        "x86_64-pc-windows-msvc": {
+          "url": "https://github.com/Jagatpratap/oxide/releases/download/v0.1.0/oxide-v0.1.0-x86_64-pc-windows-msvc.zip",
+          "sha256": "59cdbfb673b710c7b0cac2baa7cd191ef660f038aa07768a6c52e2ce236f2d1d",
+          "size": 324799355
+        },
+        "x86_64-unknown-linux-gnu": {
+          "url": "https://github.com/Jagatpratap/oxide/releases/download/v0.1.0/oxide-v0.1.0-x86_64-unknown-linux-gnu.tar.gz",
+          "sha256": "7a191ae060bb88caf17a13325e0787668de42ce5be9aaa8143a4905c62090ae6",
+          "size": 326547327
+        }
+      }
+    }
+  ],
+  "hub": {
+    "version": "0.1.0",
+    "downloads": {
+      "aarch64-apple-darwin": {
+        "url": "https://github.com/Jagatpratap/oxide/releases/download/v0.1.0/oxide-hub-v0.1.0-aarch64-apple-darwin.zip",
+        "sha256": "808bfb43936b3e973aa60ed77b554022808766410f34560c0773b91fb26bd40c",
+        "size": 7346687
+      },
+      "x86_64-apple-darwin": {
+        "url": "https://github.com/Jagatpratap/oxide/releases/download/v0.1.0/oxide-hub-v0.1.0-x86_64-apple-darwin.zip",
+        "sha256": "ca916cb3128c81c3f227529a603d06a370dfdeb3fbc56e45c919b7ad8317627a",
+        "size": 8031674
+      },
+      "x86_64-pc-windows-msvc": {
+        "url": "https://github.com/Jagatpratap/oxide/releases/download/v0.1.0/oxide-hub-v0.1.0-x86_64-pc-windows-msvc.zip",
+        "sha256": "f073ebe66a72d96f6e70a2fc74cef53b2c1e129229714fe04b196df16937801a",
+        "size": 8073760
+      },
+      "x86_64-unknown-linux-gnu": {
+        "url": "https://github.com/Jagatpratap/oxide/releases/download/v0.1.0/oxide-hub-v0.1.0-x86_64-unknown-linux-gnu.tar.gz",
+        "sha256": "dd74f0e04ad04c58cf07502256ca33c1f2e68ec15aacfb50a19c14235fd7e373",
+        "size": 11429237
+      }
+    }
+  }
 }
