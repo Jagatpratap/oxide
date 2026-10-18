@@ -1,14 +1,16 @@
 //! `oxide` — the Oxide editor, with the MCP server on.
 //!
 //! ```text
-//! oxide                            the Oxide Hub (Unity Hub): open, add or create projects
-//! oxide hub [--mcp-addr HOST:PORT] the Hub, optionally with MCP (for automation)
+//! oxide                            starts the Oxide Hub (`oxide-hub`, its own program)
 //! oxide new  <DIR> [editor args]   create a game project and open it
 //! oxide open <DIR> [editor args]   open a game project (its Scripts hot-reload)
+//! oxide open <DIR> --build-only    build the project's editor without starting it
+//! oxide create <DIR>               create a game project without opening it
+//! oxide --version                  this editor's version and engine source folder
 //! oxide [--scene Assets/Scenes/Main.scene] [--sample demo|vehicle|character|open_world|city] [--project DIR]
 //!       [--player] [--mcp-addr 127.0.0.1:47474] [--no-mcp] [--size 1280x720]
 //! ```
-//! `new`/`open` are the project launcher (Unity Hub): they build the project's own editor,
+//! `new`/`open` are the project launcher the Hub drives: they build the project's own editor,
 //! which links the engine as a shared library so the project's Rust scripts can be compiled
 //! and reloaded while it runs. Without them, `oxide` is the engine's sandbox editor (no
 //! project scripts).
@@ -22,7 +24,7 @@ use oxide_engine::prelude::*;
 use oxide_engine::{App, EngineConfig};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: oxide [hub | new DIR | open DIR | --version]\n       oxide [--scene PATH] [--sample demo|vehicle|character|open_world|city] [--project DIR] [--player] [--mcp-addr HOST:PORT] [--no-mcp] [--size WxH]";
+const USAGE: &str = "usage: oxide [hub | new DIR | open DIR [--build-only] | create DIR | --version]\n       oxide [--scene PATH] [--sample demo|vehicle|character|open_world|city] [--project DIR] [--player] [--mcp-addr HOST:PORT] [--no-mcp] [--size WxH]";
 
 struct Args {
     config: EngineConfig,
@@ -75,8 +77,13 @@ fn engine_root() -> std::path::PathBuf {
     oxide_editor::project_files::engine_root()
 }
 
-/// `oxide new|open DIR [args]`: prepares the project and runs its editor through cargo.
-fn launch_project(create: bool, dir: &str, rest: Vec<String>) -> ExitCode {
+/// `oxide new|open|create DIR [args]`: prepares the project and runs its editor through
+/// cargo. `create` only writes the new project; `--build-only` builds the editor without
+/// starting it (the Hub does this first, to show build progress).
+fn launch_project(cmd: &str, dir: &str, mut rest: Vec<String>) -> ExitCode {
+    let create = cmd != "open";
+    let build_only = rest.iter().any(|a| a == "--build-only");
+    rest.retain(|a| a != "--build-only");
     let dir = std::path::PathBuf::from(dir);
     let engine = engine_root();
     let prepared = if create {
@@ -98,16 +105,25 @@ fn launch_project(create: bool, dir: &str, rest: Vec<String>) -> ExitCode {
     if create {
         println!("Created project {}", dir.display());
     }
+    if cmd == "create" {
+        return ExitCode::SUCCESS;
+    }
     if !oxide_editor::project_files::editor_exe(&dir).is_file() {
         println!(
             "Building the project's editor (the first build on this machine compiles the engine and takes a few minutes)..."
         );
     }
-    let status = std::process::Command::new(oxide_editor::project_files::cargo_command())
-        .args(["run", "-q", "-p", "oxide-project-editor", "--"])
-        .arg("--project")
-        .arg(&dir)
-        .args(rest)
+    let mut command = std::process::Command::new(oxide_editor::project_files::cargo_command());
+    if build_only {
+        command.args(["build", "-p", "oxide-project-editor"]);
+    } else {
+        command
+            .args(["run", "-q", "-p", "oxide-project-editor", "--"])
+            .arg("--project")
+            .arg(&dir)
+            .args(rest);
+    }
+    let status = command
         .current_dir(&dir)
         .env_remove("CARGO_TARGET_DIR")
         .status();
@@ -124,31 +140,12 @@ fn launch_project(create: bool, dir: &str, rest: Vec<String>) -> ExitCode {
     }
 }
 
-/// The Oxide Hub window (what `oxide` opens with no arguments).
-fn run_hub(mut args: impl Iterator<Item = String>) -> ExitCode {
-    let mut config = EngineConfig {
-        title: "Oxide Hub".into(),
-        width: 1100,
-        height: 680,
-        mcp_addr: None,
-        ..Default::default()
-    };
-    while let Some(a) = args.next() {
-        match a.as_str() {
-            "--mcp-addr" => config.mcp_addr = args.next(),
-            other => {
-                eprintln!("unknown argument `{other}`\nusage: oxide hub [--mcp-addr HOST:PORT]");
-                return ExitCode::from(2);
-            }
-        }
-    }
-    let app = App::with_config(config)
-        .shell(Box::new(oxide_editor::hub::Hub::new(engine_root())))
-        .mcp_tools(oxide_editor::mcp::register_window_tools);
-    match app.run() {
+/// `oxide` with no arguments (or `oxide hub`) starts the Oxide Hub, its own program.
+fn run_hub() -> ExitCode {
+    match oxide_editor::hub::open_hub() {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("oxide: {e}");
+            eprintln!("oxide: {e}\n{USAGE}");
             ExitCode::FAILURE
         }
     }
@@ -156,25 +153,25 @@ fn run_hub(mut args: impl Iterator<Item = String>) -> ExitCode {
 
 fn main() -> ExitCode {
     if std::env::args().len() == 1 {
-        return run_hub(std::iter::empty());
+        return run_hub();
     }
     let mut raw = std::env::args().skip(1);
     match raw.next().as_deref() {
-        Some("hub") => return run_hub(raw),
+        Some("hub") => return run_hub(),
         Some("-V" | "--version" | "version") => {
-            println!("oxide {}", env!("CARGO_PKG_VERSION"));
+            println!("oxide {}", oxide_core::ENGINE_VERSION);
             println!("engine: {}", engine_root().display());
             return ExitCode::SUCCESS;
         }
         _ => {}
     }
     let mut raw = std::env::args().skip(1);
-    if let Some(cmd @ ("new" | "open")) = raw.next().as_deref() {
+    if let Some(cmd @ ("new" | "open" | "create")) = raw.next().as_deref() {
         let Some(dir) = raw.next() else {
             eprintln!("usage: oxide {cmd} <DIR> [editor args]");
             return ExitCode::from(2);
         };
-        return launch_project(cmd == "new", &dir, raw.collect());
+        return launch_project(cmd, &dir, raw.collect());
     }
     let args = match parse_args() {
         Ok(a) => a,

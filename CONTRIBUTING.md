@@ -138,15 +138,51 @@ Maintainers publish releases from tags; the
    git push origin main v0.2.0
    ```
 
-4. The workflow builds macOS (Apple Silicon and Intel), Linux and Windows downloads, each with
-   the engine source and prebuilt `oxide` and `oxide-mcp-stdio`, and publishes a GitHub Release
-   whose notes come from the changelog section. Tags with a hyphen (`v0.2.0-beta.1`) become
-   pre-releases.
+4. The workflow builds macOS (Apple Silicon and Intel), Linux and Windows downloads and
+   publishes a GitHub Release whose notes come from the changelog section. Each platform gets:
+   - **the Oxide Hub** (`oxide-hub-<tag>-<target>`: a macOS `.app`, the Windows program with its
+     icon, or the Linux program with an icon and `.desktop` file), which is what people
+     download;
+   - **the editor** (`oxide-<tag>-<target>`: the engine source plus prebuilt `oxide` and
+     `oxide-mcp-stdio`), which the Hub installs.
+5. The workflow then adds the release to [`releases.json`](releases.json) on `main` (with each
+   download's URL, SHA-256 and size) and pushes that commit as `github-actions[bot]`. Every Hub
+   reads this file, so the new version appears in **Installs → Available** right away. If
+   `main` is protected, allow GitHub Actions to push to it, or run the step by hand:
+
+   ```sh
+   gh release download v0.2.0 -D dist
+   python3 scripts/update_releases.py --version v0.2.0 --repo Jagatpratap/oxide --dist dist
+   ```
+
+The tag decides the channel the Hub shows it in:
+
+| Tag | Channel | GitHub |
+|---|---|---|
+| `v0.2.0` | Production | Release |
+| `v0.3.0-beta.1`, `v0.3.0-rc.1` | Beta | Pre-release |
+| `v0.3.0-alpha.1` | Alpha | Pre-release |
+
+You can edit `releases.json` by hand: change a version's `channel`, or set
+`"deprecated": true` on a broken one so the Hub stops offering it (projects using it still
+show the version). The script keeps those edits when it runs again. The `hub` entry is the Hub
+offered as an update: the newest production release.
 
 To test packaging without publishing, run the workflow from the Actions tab
 (**Release → Run workflow**); the downloads appear as build artifacts. Locally:
 
 ```sh
-cargo build --release -p oxide -p oxide_mcp_stdio
+cargo build --release -p oxide -p oxide_mcp_stdio -p oxide_hub
 python3 scripts/package_release.py --target <your target triple> --version v0.0.0-test --bin-dir target/release
+python3 scripts/package_hub.py --target <your target triple> --version v0.0.0-test --bin-dir target/release
 ```
+
+To try the Hub against a local release list, point it at a file and a scratch install folder:
+`OXIDE_RELEASES_URL=/path/to/releases.json OXIDE_EDITORS_DIR=/tmp/editors cargo run -p oxide_hub`
+(download URLs may be `file://` paths). `OXIDE_HUB_AUTOMATE=<script>` drives the Hub from a
+list of steps and saves screenshots; the steps are documented on `HubApp::automate` in
+`apps/oxide_hub/src/app.rs`.
+
+The Hub icon is Lucide's `box` (ISC licence) in rust colour, in `apps/oxide_hub/assets/`. After
+changing `icon.svg`, run `python3 scripts/make_hub_icons.py` on a Mac to regenerate
+`icon.png`, `icon.icns` and `icon.ico`.

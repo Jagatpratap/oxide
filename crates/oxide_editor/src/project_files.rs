@@ -324,6 +324,21 @@ impl Component for {type_name} {{
     )
 }
 
+/// `ProjectSettings/ProjectVersion.txt`: the engine version that last opened the project.
+pub fn project_version_file(dir: &Path) -> PathBuf {
+    dir.join("ProjectSettings/ProjectVersion.txt")
+}
+
+/// The engine version recorded in the project (`m_EditorVersion: 0.2.0`), if any.
+pub fn project_version(dir: &Path) -> Option<String> {
+    std::fs::read_to_string(project_version_file(dir))
+        .ok()?
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("m_EditorVersion:"))
+        .map(|v| v.trim().to_owned())
+        .filter(|v| !v.is_empty())
+}
+
 /// Creates a new project at `dir` (if missing) and writes its build files.
 pub fn create_project(dir: &Path, engine_root: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dir.join("Assets/Scenes")).map_err(|e| e.to_string())?;
@@ -380,6 +395,12 @@ debug = "line-tables-only"
     if old_target.is_dir() && old_target != target {
         let _ = std::fs::remove_dir_all(&old_target);
     }
+    // The engine version the project was last opened with (Unity's ProjectVersion.txt); the
+    // Hub opens the project with that version.
+    write(
+        &project_version_file(dir),
+        &format!("m_EditorVersion: {}\n", oxide_core::ENGINE_VERSION),
+    )?;
     let id = project_id(dir);
     // Player builds need the engine source too.
     write(

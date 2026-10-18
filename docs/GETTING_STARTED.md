@@ -51,58 +51,103 @@ mixed). That happens automatically; you only need Rust installed.
 
 Check it worked with `cargo --version`.
 
-### Install Oxide from a release
+### Install the Oxide Hub
 
-1. Download the archive for your computer from the
-   [Releases page](https://github.com/Jagatpratap/oxide/releases):
-   `aarch64-apple-darwin` (Apple Silicon Mac), `x86_64-apple-darwin` (Intel Mac),
-   `x86_64-unknown-linux-gnu` (Linux) or `x86_64-pc-windows-msvc` (Windows).
+Oxide installs like Unity: the **Oxide Hub** is the app you download, and it installs editor
+versions and opens your projects.
+
+1. Download the Hub for your computer from the
+   [latest release](https://github.com/Jagatpratap/oxide/releases/latest):
+   `oxide-hub-<version>-aarch64-apple-darwin.zip` (Apple Silicon Mac),
+   `oxide-hub-<version>-x86_64-apple-darwin.zip` (Intel Mac),
+   `oxide-hub-<version>-x86_64-pc-windows-msvc.zip` (Windows) or
+   `oxide-hub-<version>-x86_64-unknown-linux-gnu.tar.gz` (Linux).
 2. Optionally check the download against its `.sha256` file:
-   `shasum -a 256 -c oxide-*.tar.gz.sha256` (Windows: `certutil -hashfile <file> SHA256`).
-3. Unpack it somewhere permanent, for example `~/Applications/Oxide` or `C:\Oxide`.
-4. **macOS only:** clear the download flag so macOS lets the program run:
-   `xattr -dr com.apple.quarantine <the unpacked folder>`.
-5. Run `bin/oxide` (Windows: `bin\oxide.exe`). Optionally add the `bin` folder to your `PATH`
-   so `oxide` works in any terminal.
+   `shasum -a 256 -c oxide-hub-*.sha256` (Windows: `certutil -hashfile <file> SHA256`).
+3. Install it:
+   - **macOS:** unzip and drag **Oxide Hub** into Applications. The Hub isn't notarized yet, so
+     the first time, right-click it → **Open** (or run
+     `xattr -dr com.apple.quarantine "/Applications/Oxide Hub.app"`).
+   - **Windows:** unzip anywhere and run `Oxide Hub\oxide-hub.exe`.
+   - **Linux:** unpack, then run `./install.sh` to add it to your applications menu (or just
+     run `./oxide-hub`).
+4. Open the Hub, go to **Installs → Install Editor**, and install a version (see below).
 
-The unpacked folder is the engine: it holds the engine source next to the `oxide` program, and
-projects compile against it. Run `oxide --version` to see which folder is in use. If you move
-the folder, projects follow it the next time you open them from the moved `oxide`. To point
-`oxide` at a different engine folder, set `OXIDE_ENGINE_ROOT`.
+The `oxide-<version>-<platform>` archives on a release page are the editors themselves: the
+engine source plus the prebuilt `oxide` program. The Hub downloads, checks and unpacks them for
+you, but you can also unpack one by hand and add it with **Installs → Locate**.
 
 ### Install Oxide from source
 
 ```sh
 git clone https://github.com/Jagatpratap/oxide.git
 cd oxide
-cargo run --release -p oxide     # opens the Hub
+cargo build --release -p oxide       # the editor
+cargo run --release -p oxide_hub     # the Hub, which lists this checkout as an editor
 ```
 
-Projects you create this way compile against your checkout, so engine changes you make show up
-in your projects the next time they open.
+Projects opened with that editor compile against your checkout, so engine changes you make
+show up in your projects the next time they open.
 
 ## 2. The Oxide Hub
 
-Running `oxide` with no arguments opens the Hub.
+### Installs
 
-- **Projects:** every project you've opened. Click one to open it. Its ⋮ menu has Show in
-  Finder and Remove from list.
-- **New project:** choose a name, a location and a template, then **Create**.
-- **Add:** open an existing project folder from disk.
-- **Installs:** which engine folder is in use, and the shared build cache with its size.
+**Installs → Available** lists the versions in the release list, in three channels:
 
-The first project you open on a machine compiles the engine into the shared build cache, which
-takes a few minutes; the Hub shows the progress. After that, every project opens in seconds and
-only compiles its own scripts. Two projects can't compile at the same moment; the second one
-waits and says so.
+| Channel | What it is |
+|---|---|
+| **Production** | Tested releases (`v0.2.0`). Use these for your projects. |
+| **Beta** | Previews of the next version (`v0.3.0-beta.1`, `v0.3.0-rc.1`). Back up projects before opening them. |
+| **Alpha** | Early builds (`v0.3.0-alpha.1`), for testing only. |
 
-From a terminal:
+Click **Install** to download a version. The Hub shows the progress, checks the download's
+SHA-256, and unpacks it into `~/Library/Application Support/Oxide/Editors/<version>` (macOS),
+`%LOCALAPPDATA%\Oxide\Editors\<version>` (Windows) or `~/.local/share/oxide/editors/<version>`
+(Linux). Set `OXIDE_EDITORS_DIR` to install somewhere else. Versions install side by side.
+
+**Installs → Installed** lists what you have. Each version's ••• menu has Show in Finder,
+Release notes and **Uninstall** (which deletes it). **Locate** adds an editor folder you already
+have (an unpacked editor archive, or an engine checkout built with `cargo build -p oxide`);
+removing a located editor only takes it off the list.
+
+The release list is [`releases.json`](../releases.json) in the repository, which the release
+workflow updates whenever a version is published. **Refresh** reads it again. A newer Hub shows
+up as a link at the bottom of the sidebar.
+
+### Projects
+
+- **Projects** lists every project you've opened, with the **editor version** it uses (read
+  from `ProjectSettings/ProjectVersion.txt`, which the editor writes) and when you last opened
+  it. Click a project to open it with its version.
+- The version cell is a menu: pick another installed version to open the project with it. The
+  Hub asks first, because the project is then rebuilt and saved for that version.
+- If a project's version isn't installed, the Hub offers to **install** it (then opens the
+  project when it's done) or to open it with a version you have.
+- **New project:** pick the editor version, a name, a location and a template, then **Create
+  project**.
+- **Open:** add a project folder from disk.
+- A project's ••• menu has Open, Show in Finder and Remove from list.
+
+The first project opened with a version compiles that version's engine into the shared build
+cache, which takes a few minutes; the Hub shows the progress. After that, projects open in
+seconds and only compile their own scripts. Two projects can't compile at the same moment; the
+second waits and says so. Once the editor starts, the Hub closes; **File → New Project / Open
+Project** in the editor brings it back.
+
+If Rust isn't installed, the Hub says so at the top of the Projects page, with a link to
+rustup.rs.
+
+### From a terminal
+
+Each editor's `oxide` program (in its `bin/` folder) also works on its own:
 
 ```sh
 oxide new ~/Games/MyGame      # create and open
 oxide open ~/Games/MyGame     # open
-oxide hub                     # the Hub
+oxide create ~/Games/MyGame   # create without opening
 oxide --version               # version and engine folder
+oxide                         # starts the Hub
 ```
 
 ## 3. The editor
@@ -315,21 +360,25 @@ clients, point them at `bin/oxide-mcp-stdio`. See [MCP.md](MCP.md) for every too
 
 ## 9. Updating Oxide
 
-- **Release install:** unpack the new version next to the old one and open your projects from
-  the new `bin/oxide`. The first project you open compiles the new engine (a few minutes), then
-  the others open quickly again. Delete the old folder when you're happy. Read the
-  [changelog](../CHANGELOG.md) for breaking changes first.
-- **Source install:** `git pull`, then reopen your projects.
+- **New editor version:** install it from **Installs → Available**, then pick it in a project's
+  version menu. The first project you open with it compiles the new engine (a few minutes),
+  then others open quickly again. Read the [changelog](../CHANGELOG.md) for breaking changes
+  first, and uninstall the old version when you no longer need it.
+- **New Hub:** when the release list has a newer Hub, the sidebar shows a link to download it.
+  Replace the old app with the new one; your installs and project list stay.
+- **Source install:** `git pull`, rebuild, then reopen your projects.
 
 ## 10. Troubleshooting
 
 | Problem | What to do |
 |---|---|
 | "Rust is not installed (cargo was not found)" | Install Rust from [rustup.rs](https://rustup.rs), then open a new terminal (or log out and in) so `cargo` is on your `PATH`. |
-| macOS says `oxide` "can't be opened" | Run `xattr -dr com.apple.quarantine` on the unpacked folder. |
+| macOS says "Oxide Hub" "can't be opened" | Right-click it → **Open**, or run `xattr -dr com.apple.quarantine "/Applications/Oxide Hub.app"`. |
+| "Cannot download the release list" in Installs | Check your internet connection and click **Refresh**. You can still open projects with versions you have, and add editors with **Locate**. |
+| A project's version shows ⚠ | That version isn't installed. Open the project and choose **Install**, or pick another version from its version menu. |
 | The first open takes several minutes | Expected once per machine and engine version: the engine is compiling. Later projects open in seconds. |
-| Disk is filling up | Delete the build cache (Hub → Installs shows where; it's safe), or move it with `OXIDE_BUILD_DIR`. |
+| Disk is filling up | Uninstall editor versions you don't use, and delete the build cache (`~/Library/Caches/Oxide/Build`, `%LOCALAPPDATA%\Oxide\Build` or `~/.cache/oxide/build`; it's safe), or move it with `OXIDE_BUILD_DIR`. |
 | Linux build fails on `alsa-sys`, `libudev-sys` or `libdbus-sys` | Install the development packages listed in [Install Rust](#install-rust). |
 | Scripts don't reload | Look at the Console for compile errors. A component type that isn't listed in `oxide::scripts!` won't appear in Add Component. |
-| A project won't open after moving the Oxide folder | Open it from the moved `bin/oxide`, or set `OXIDE_ENGINE_ROOT` to the new folder. |
+| A project won't open after moving an editor folder | Add the moved folder with **Installs → Locate**, or set `OXIDE_ENGINE_ROOT` to it. |
 | Something else | Check the editor log (`~/Library/Logs/Oxide/Editor.log` on macOS, `%LOCALAPPDATA%\Oxide\Editor.log` on Windows, `~/.local/share/Oxide/Editor.log` on Linux) and [open an issue](https://github.com/Jagatpratap/oxide/issues/new/choose) with it. |

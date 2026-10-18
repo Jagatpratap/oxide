@@ -35,34 +35,46 @@ the editor.
 
 ## Install
 
-Oxide projects are Rust code, so you need **Rust** on every machine that opens the editor.
+Oxide is installed the way Unity is: download the **Oxide Hub**, and the Hub installs editor
+versions and opens your projects.
 
-1. **Install Rust** from [rustup.rs](https://rustup.rs) (Rust 1.88 or newer). On Windows, rustup
-   also asks for the Visual Studio C++ Build Tools; install them when it does.
-2. **Get Oxide**, one of two ways:
-   - **Download a release** (recommended): open the
-     [Releases page](https://github.com/Jagatpratap/oxide/releases), download the archive for
-     your computer and unpack it anywhere.
+1. **Install Rust** from [rustup.rs](https://rustup.rs) (Rust 1.88 or newer). Oxide projects
+   are Rust code, so every machine that opens the editor needs it. On Windows, rustup also asks
+   for the Visual Studio C++ Build Tools; install them when it does.
+2. **Download the Oxide Hub** from the
+   [latest release](https://github.com/Jagatpratap/oxide/releases/latest):
 
-     | Computer | File |
-     |---|---|
-     | Mac with Apple Silicon (M1 or later) | `oxide-<version>-aarch64-apple-darwin.tar.gz` |
-     | Mac with Intel | `oxide-<version>-x86_64-apple-darwin.tar.gz` |
-     | Linux (x86-64) | `oxide-<version>-x86_64-unknown-linux-gnu.tar.gz` |
-     | Windows (x86-64) | `oxide-<version>-x86_64-pc-windows-msvc.zip` |
+   | Computer | File | Then |
+   |---|---|---|
+   | Mac with Apple Silicon (M1 or later) | `oxide-hub-<version>-aarch64-apple-darwin.zip` | Unzip and move **Oxide Hub** to Applications |
+   | Mac with Intel | `oxide-hub-<version>-x86_64-apple-darwin.zip` | Unzip and move **Oxide Hub** to Applications |
+   | Windows (x86-64) | `oxide-hub-<version>-x86_64-pc-windows-msvc.zip` | Unzip and run `Oxide Hub\oxide-hub.exe` |
+   | Linux (x86-64) | `oxide-hub-<version>-x86_64-unknown-linux-gnu.tar.gz` | Unpack and run `./install.sh` (adds it to your app menu), or run `./oxide-hub` |
 
-   - **Build from source**: see [Building from source](#building-from-source).
-3. **Start the Oxide Hub**: run `bin/oxide` in the unpacked folder (Windows: `bin\oxide.exe`).
+3. **Install an editor**: in the Hub, open **Installs → Install Editor**, pick a version and
+   click **Install**. Versions come in three channels:
 
-The archive contains the engine source next to the prebuilt `oxide` program. Your projects
-compile against that source, so keep the folder where it is (or set `OXIDE_ENGINE_ROOT` to its
-new location if you move it). `oxide --version` shows which engine folder is in use.
+   | Channel | Tags | For |
+   |---|---|---|
+   | **Production** | `v0.2.0` | Your projects: tested and recommended |
+   | **Beta** | `v0.3.0-beta.1`, `v0.3.0-rc.1` | Trying the next version (back up first) |
+   | **Alpha** | `v0.3.0-alpha.1` | Early testing only |
 
-**First launch on macOS:** the downloads aren't notarized yet, so macOS may refuse to open
-`oxide` from a browser download. Remove the download flag once:
+   You can install several versions side by side. Editors go into
+   `~/Library/Application Support/Oxide/Editors` (macOS), `%LOCALAPPDATA%\Oxide\Editors`
+   (Windows) or `~/.local/share/oxide/editors` (Linux); set `OXIDE_EDITORS_DIR` to use another
+   folder. **Locate** adds an editor folder you already have, such as an engine checkout you
+   built yourself.
+
+The Hub reads the list of versions from [`releases.json`](releases.json) in this repository,
+which the release workflow updates whenever a version is published. Each download is checked
+against its SHA-256 before it is unpacked.
+
+**First launch on macOS:** the Hub isn't notarized yet, so macOS may refuse to open it after a
+browser download. Right-click **Oxide Hub** → **Open** once, or remove the download flag:
 
 ```sh
-xattr -dr com.apple.quarantine ~/Downloads/oxide-*-apple-darwin
+xattr -dr com.apple.quarantine "/Applications/Oxide Hub.app"
 ```
 
 **Linux** needs a GPU driver with Vulkan support, and the development packages Rust uses to
@@ -74,9 +86,11 @@ The full walkthrough, including troubleshooting, is in
 
 ## Your first project
 
-1. In the Hub, click **New project**, choose a name and folder, and click **Create**.
-2. The first project on a machine compiles the engine, which takes a few minutes. Every
-   project after that opens in seconds, because all projects share one build cache.
+1. In the Hub, click **New project**, pick the **Editor version**, a name and a folder, and
+   click **Create project**.
+2. The first project opened with a version compiles that version's engine, which takes a few
+   minutes. Every project after that opens in seconds, because all projects share one build
+   cache.
 3. The editor opens on a starter scene. From here it works like Unity:
    - **GameObject** menu → create cubes, lights, cameras, terrain, UI.
    - Drag models (`.glb`, `.gltf`, `.fbx`, `.obj`), textures and audio from Finder or Explorer
@@ -87,12 +101,18 @@ The full walkthrough, including troubleshooting, is in
      scene goes back to how it was.
    - **File → Build Settings** builds a standalone game for the computer you're on.
 
+The **Projects** page lists every project with the editor version it uses
+(`ProjectSettings/ProjectVersion.txt`). Click a project to open it with that version; use its
+version menu to open it with another one (the Hub asks first, since the project is then saved
+for that version). If the version isn't installed, the Hub offers to install it. **Open** adds
+a project folder you already have.
+
 You can do the same from a terminal:
 
 ```sh
 oxide new ~/Games/MyRacer     # create a project and open it
 oxide open ~/Games/MyRacer    # open it again later
-oxide                         # the Hub
+oxide --version               # this editor's version and engine folder
 ```
 
 A project looks like this:
@@ -102,7 +122,7 @@ A project looks like this:
 | `Assets/` | Scenes (`.scene`), prefabs (`.prefab`), materials (`.mat`), models, textures, audio, every other asset, each with a `.meta` file holding its GUID |
 | `Scripts/` | Your game code: a Rust crate of components |
 | `Packages/` | `manifest.json` listing the packages the project uses (created when you add one) |
-| `ProjectSettings/` | Tags and layers, input, physics, quality, graphics and other settings (created when you change one) |
+| `ProjectSettings/` | `ProjectVersion.txt` (the editor version), tags and layers, input, physics, quality, graphics and other settings |
 | `Cargo.toml`, `Cargo.lock` | A small Rust workspace that ties your scripts to the engine; written by Oxide |
 | `Library/` | Generated files and editor state; safe to delete |
 
@@ -178,7 +198,7 @@ Each item links to Unity's own concept where it follows it. The [roadmap](docs/R
 tracks what is done, partly done and missing in detail.
 
 **Editor**
-- Oxide Hub, dockable windows with saved layouts, Unity's menus and shortcuts.
+- Oxide Hub (editor versions in Production / Beta / Alpha channels, projects with their versions), dockable windows with saved layouts, Unity's menus and shortcuts.
 - Scene view with Hand / Move / Rotate / Scale / Rect / Transform tools, snapping, overlays,
   picking, visibility, draw modes and 2D mode.
 - Inspector with multi-object editing, presets, custom editors, import settings and previews.
@@ -243,7 +263,8 @@ affiliated with or endorsed by Unity Technologies.
 
 | Path | What |
 |---|---|
-| `apps/oxide` | The `oxide` program: Hub, project launcher, editor sandbox and player |
+| `apps/oxide_hub` | The Oxide Hub (`oxide-hub`): installs editor versions, lists and opens projects |
+| `apps/oxide` | The `oxide` program: project launcher, editor sandbox and player |
 | `apps/oxide_mcp_stdio` | The `oxide-mcp-stdio` bridge for stdio-only MCP clients |
 | `crates/oxide_math` | Unity math types (`Vector3`, `Quaternion`, `Mathf`, `Bounds`, ...) on glam |
 | `crates/oxide_core` | Time, the Console log, reflection |
@@ -252,7 +273,7 @@ affiliated with or endorsed by Unity Technologies.
 | `crates/oxide_scene` | GameObjects, components and their lifecycle, scenes, prefabs, coroutines |
 | `crates/oxide_render` | The wgpu renderer |
 | `crates/oxide_engine` | Window, player loop, scene extraction, built-in objects, MCP tools |
-| `crates/oxide_editor` | The editor and Hub |
+| `crates/oxide_editor` | The editor |
 | `crates/oxide_physics`, `oxide_audio`, `oxide_animation`, `oxide_timeline` | Physics, audio, animation, Timeline |
 | `crates/oxide_ui`, `oxide_uitk`, `oxide_text`, `oxide_localization` | Canvas UI, UI Toolkit, text, Localization |
 | `crates/oxide_shadergraph`, `oxide_vfx`, `oxide_particles`, `oxide_lightmapper` | Shader Graph, VFX Graph, particles, lightmapper |
@@ -262,19 +283,23 @@ affiliated with or endorsed by Unity Technologies.
 | `crates/oxide_player` | What a built game links (no editor) |
 | `packages/` | Built-in packages (BlenderKit) |
 | `docs/` | Roadmap, MCP reference, getting-started guide, Unity feature checklist |
-| `scripts/` | Development helpers (MCP client, release packaging) |
+| `scripts/` | Development helpers (MCP client, release packaging, releases.json, Hub icons) |
+| `releases.json` | The release list the Hub reads (versions, channels, downloads) |
 
 ## Building from source
 
 ```sh
 git clone https://github.com/Jagatpratap/oxide.git
 cd oxide
-cargo run -p oxide                         # the Hub
+cargo build -p oxide && cargo run -p oxide_hub   # the Hub, with this checkout as an editor
 cargo run -p oxide -- new ~/Games/MyGame   # create a project with this engine checkout
 cargo run -p oxide -- --sample vehicle     # the editor on a built-in sample
 cargo run -p oxide -- --player --sample vehicle   # the sample as a game, without the editor
 cargo test --workspace
 ```
+
+A Hub built from source lists the checkout it was built in as an editor ("Located"), next to
+any versions you install, so you can open projects with your own engine build.
 
 On Linux, install the development headers first:
 

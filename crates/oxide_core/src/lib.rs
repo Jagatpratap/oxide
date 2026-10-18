@@ -24,5 +24,10 @@ pub use player_prefs::PlayerPrefs;
 pub use random::Random;
 pub use time::Time;
 
-/// Engine version reported to tools and the MCP server.
-pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Engine version reported to tools, the MCP server and the Hub (`ProjectVersion.txt`).
+/// Release builds bake in the tag's version (`OXIDE_VERSION=0.2.0-beta.1`, which can carry a
+/// pre-release suffix); other builds use the crate version.
+pub const ENGINE_VERSION: &str = match option_env!("OXIDE_VERSION") {
+    Some(v) => v,
+    None => env!("CARGO_PKG_VERSION"),
+};

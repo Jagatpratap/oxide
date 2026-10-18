@@ -6,6 +6,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+oxide_core.workspace = true
 oxide_engine.workspace = true
 oxide_editor.workspace = true
 

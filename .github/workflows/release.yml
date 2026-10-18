@@ -2,7 +2,12 @@ name: Release
 
 # Push a version tag to publish a release:
 #   git tag v0.2.0 && git push origin v0.2.0
-# Tags with a hyphen (v0.2.0-beta.1) are published as pre-releases.
+# Tags with a hyphen (v0.2.0-beta.1) are published as pre-releases. The channel the Oxide Hub
+# shows comes from the tag too: -alpha... is Alpha, -beta... or -rc... is Beta, none is
+# Production.
+# Each platform gets two downloads: the Oxide Hub (the one people download) and the editor
+# (engine source + prebuilt oxide), which the Hub installs. After publishing, the release is
+# added to releases.json on main, the list every Hub reads.
 # "Run workflow" on the Actions tab builds the downloads without publishing (for testing).
 
 on:
@@ -46,14 +51,21 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev libx11-dev \
             libasound2-dev libdbus-1-dev libudev-dev
-      - name: Build
-        run: cargo build --release --locked --target ${{ matrix.target }} -p oxide -p oxide_mcp_stdio
-      - name: Package
+      - name: Version
         shell: bash
         run: |
           version="${GITHUB_REF_NAME}"
-          if [[ "$GITHUB_REF_TYPE" != "tag" ]]; then version="dev-${GITHUB_SHA::7}"; fi
-          python3 scripts/package_release.py --target ${{ matrix.target }} --version "$version" --out dist
+          if [[ "$GITHUB_REF_TYPE" != "tag" ]]; then version="v0.0.0-dev.${GITHUB_SHA::7}"; fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          # Baked into the editor (oxide --version, ProjectVersion.txt): no leading "v".
+          echo "OXIDE_VERSION=${version#v}" >> "$GITHUB_ENV"
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }} -p oxide -p oxide_mcp_stdio -p oxide_hub
+      - name: Package
+        shell: bash
+        run: |
+          python3 scripts/package_release.py --target ${{ matrix.target }} --version "$VERSION" --out dist
+          python3 scripts/package_hub.py --target ${{ matrix.target }} --version "$VERSION" --out dist
       - uses: actions/upload-artifact@v4
         with:
           name: oxide-${{ matrix.target }}
@@ -67,6 +79,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -87,9 +101,18 @@ jobs:
           ## Install
 
           1. Install Rust from https://rustup.rs (Oxide projects are Rust code, so the editor needs it).
-          2. Download the archive for your computer below and unpack it anywhere.
-          3. Run `bin/oxide` (Windows: `bin\oxide.exe`) to open the Oxide Hub.
+          2. Download **Oxide Hub** for your computer:
 
+             | Computer | Download |
+             |---|---|
+             | Mac (Apple Silicon) | `oxide-hub-${{ github.ref_name }}-aarch64-apple-darwin.zip` |
+             | Mac (Intel) | `oxide-hub-${{ github.ref_name }}-x86_64-apple-darwin.zip` |
+             | Windows | `oxide-hub-${{ github.ref_name }}-x86_64-pc-windows-msvc.zip` |
+             | Linux | `oxide-hub-${{ github.ref_name }}-x86_64-unknown-linux-gnu.tar.gz` |
+
+          3. Open the Hub, go to **Installs → Install Editor** and install this version, then create or open a project.
+
+          The `oxide-${{ github.ref_name }}-*` archives are the editor itself; the Hub downloads them for you.
           Full guide: [docs/GETTING_STARTED.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/GETTING_STARTED.md).
           Each archive has a `.sha256` file to check the download.
           NOTES
@@ -101,3 +124,13 @@ jobs:
           if [[ "$GITHUB_REF_NAME" == *-* ]]; then prerelease="--prerelease"; fi
           gh release create "$GITHUB_REF_NAME" dist/* \
             --title "Oxide $GITHUB_REF_NAME" --notes-file notes.md $prerelease
+      - name: Add the release to releases.json
+        run: |
+          git checkout -B main origin/main
+          python3 scripts/update_releases.py --version "$GITHUB_REF_NAME" \
+            --repo "${{ github.repository }}" --dist dist --file releases.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add releases.json
+          git commit -m "releases.json: add $GITHUB_REF_NAME"
+          git push origin main

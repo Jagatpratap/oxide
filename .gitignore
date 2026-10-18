@@ -4,3 +4,5 @@
 .DS_Store
 /Assets/
 /Library/
+# The Hub icon is source, not output.
+!apps/oxide_hub/assets/icon.png

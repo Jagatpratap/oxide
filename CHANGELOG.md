@@ -11,12 +11,27 @@ you tag it.
 
 ## [Unreleased]
 
+### Added
+- **Oxide Hub as its own app** (`oxide-hub`, Lucide box icon in rust colour) and the main
+  download on every release: installs editor versions from the release list in Production,
+  Beta and Alpha channels (download with progress, SHA-256 check, side-by-side installs,
+  Uninstall, Locate), lists projects with the editor version each uses, opens a project with
+  its version (or installs it first), switches a project's version after asking, and creates
+  new projects with a chosen version.
+- `releases.json`: the release list the Hub reads, updated by the release workflow.
+- `ProjectSettings/ProjectVersion.txt` records the editor version that last opened a project.
+- `oxide create DIR` and `oxide open DIR --build-only`; release builds report the tag's
+  version (`oxide --version`).
+
+### Changed
+- `oxide` with no arguments starts the Hub program instead of a Hub built into the editor.
+
 ## [0.1.0] - Unreleased
 
 The first public version: a Unity-style editor and runtime written in Rust.
 
 ### Editor
-- Oxide Hub (projects, new project, add from disk, installs) and `oxide new` / `oxide open`.
+- `oxide new` / `oxide open` project launcher.
 - Dockable windows with saved layouts: Hierarchy, Scene, Game, Inspector, Project, Console,
   plus 30+ tool windows.
 - Scene view tools (Hand, Move, Rotate, Scale, Rect, Transform), pivot/center, global/local,

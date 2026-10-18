@@ -1,0 +1,31 @@
+[package]
+name = "oxide_hub"
+description = "Oxide Hub: installs Oxide editor versions and opens, adds and creates projects"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The Hub doesn't link the engine: one Hub runs every installed engine version through that
+# version's own `oxide` program.
+[[bin]]
+name = "oxide-hub"
+path = "src/main.rs"
+
+[dependencies]
+eframe = "0.36"
+egui.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml_ng.workspace = true
+ureq.workspace = true
+image = { workspace = true }
+flate2 = "1"
+tar = "0.4"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+sha2 = "0.10"
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
+[lints]
+workspace = true
