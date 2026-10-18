@@ -45,6 +45,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: release-${{ matrix.target }}
+      # Windows runners have no reliable `python3`; setup-python gives `python` everywhere.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - name: Linux system libraries
         if: runner.os == 'Linux'
         run: |
@@ -62,12 +66,12 @@ jobs:
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }} -p oxide -p oxide_mcp_stdio -p oxide_hub
       - name: Prebuilt project editor
-        run: python3 scripts/build_sdk.py --target ${{ matrix.target }} --out sdk-out
+        run: python scripts/build_sdk.py --target ${{ matrix.target }} --out sdk-out
       - name: Package
         shell: bash
         run: |
-          python3 scripts/package_release.py --target ${{ matrix.target }} --version "$VERSION" --sdk sdk-out --out dist
-          python3 scripts/package_hub.py --target ${{ matrix.target }} --version "$VERSION" --out dist
+          python scripts/package_release.py --target ${{ matrix.target }} --version "$VERSION" --sdk sdk-out --out dist
+          python scripts/package_hub.py --target ${{ matrix.target }} --version "$VERSION" --out dist
       - uses: actions/upload-artifact@v4
         with:
           name: oxide-${{ matrix.target }}
