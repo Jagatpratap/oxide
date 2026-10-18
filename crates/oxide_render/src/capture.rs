@@ -116,7 +116,9 @@ pub fn capture_frame(
     gpu.device
         .poll(wgpu::PollType::Wait {
             submission_index: Some(submission),
-            timeout: Some(Duration::from_secs(5)),
+            // Generous: software renderers (CI's WARP) can take many seconds on a first frame
+            // that also compiles its shaders.
+            timeout: Some(Duration::from_secs(60)),
         })
         .map_err(|e| format!("GPU readback failed: {e}"))?;
     rx.recv()
