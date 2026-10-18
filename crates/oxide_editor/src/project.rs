@@ -246,6 +246,7 @@ pub fn list_dir(root: &Path, rel: &str) -> Vec<Entry> {
             .collect();
     }
     let in_package = rel.starts_with("Packages/");
+    let in_scripts = rel == "Scripts" || rel.starts_with("Scripts/");
     let mut v: Vec<Entry> = std::fs::read_dir(disk_path(root, rel))
         .into_iter()
         .flatten()
@@ -257,6 +258,9 @@ pub fn list_dir(root: &Path, rel: &str) -> Vec<Entry> {
             }
             // Unity hides `~` folders (`Samples~`, `Documentation~`) in packages.
             if in_package && (name.ends_with('~') || name == "target") {
+                return None;
+            }
+            if in_scripts && (name == "target" || name == "Cargo.lock") {
                 return None;
             }
             let path = format!("{rel}/{name}");
@@ -423,7 +427,7 @@ fn folder_tree(
             ps.search.clear();
         }
         drop_target(&r, rel, ops);
-        if rel != "Assets" && rel != "Packages" {
+        if rel != "Assets" && rel != "Packages" && rel != "Scripts" {
             r.context_menu(|ui| item_menu(ui, rel, true, ops, ps));
         }
     };
@@ -492,6 +496,10 @@ fn import_files(root: &Path, folder: &str, sources: &[PathBuf]) -> (usize, Vec<S
 
 /// Dropping an asset onto a folder moves it there.
 fn drop_target(r: &egui::Response, folder: &str, ops: &mut Vec<Op>) {
+    // The script crate isn't an asset folder.
+    if folder == "Scripts" || folder.starts_with("Scripts/") {
+        return;
+    }
     if let Some(p) = r.dnd_hover_payload::<AssetPayload>()
         && p.0 != folder
     {
@@ -930,6 +938,11 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
                     folder_tree(ui, &root, "Assets", ps, &mut ops, 0);
                     if PACKAGE_ROOTS.read().is_ok_and(|r| !r.is_empty()) {
                         folder_tree(ui, &root, "Packages", ps, &mut ops, 0);
+                    }
+                    // The project's script crate (Unity keeps scripts under Assets; Oxide's are a
+                    // Rust crate next to it). Script files drag onto objects from here.
+                    if root.join("Scripts/src").is_dir() {
+                        folder_tree(ui, &root, "Scripts", ps, &mut ops, 0);
                     }
                 });
         });
