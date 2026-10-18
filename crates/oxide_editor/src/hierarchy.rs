@@ -4,6 +4,7 @@
 
 use crate::{Action, EditorState, menus};
 use egui::{Color32, Sense, Stroke, pos2, vec2};
+use oxide_assets::AssetServer;
 use oxide_engine::Engine;
 use oxide_scene::{GameObjectId, World};
 use std::collections::HashSet;
@@ -156,6 +157,9 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
     }
 
     let mut drop: Option<(Vec<GameObjectId>, Option<GameObjectId>, DropAt)> = None;
+    // A Project asset dropped on a row.
+    let mut asset_drop: Option<(String, GameObjectId, DropAt)> = None;
+    let mut root_asset_drop: Option<String> = None;
     let mut clicked: Option<(GameObjectId, bool, bool)> = None;
     let mut toggle: Option<GameObjectId> = None;
     let mut vis_toggle: Option<(GameObjectId, bool)> = None;
@@ -363,38 +367,75 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
                     };
                     resp.dnd_set_drag_payload(HierarchyDrag(dragged));
                 }
-                if let Some(payload) = resp.dnd_hover_payload::<HierarchyDrag>() {
+                let objects = resp.dnd_hover_payload::<HierarchyDrag>();
+                let asset = resp.dnd_hover_payload::<crate::project::AssetPayload>();
+                if objects.is_some() || asset.is_some() {
                     let y = ui
                         .input(|i| i.pointer.hover_pos())
                         .map_or(rect.center().y, |p| p.y);
-                    let at = if y < rect.top() + ROW_H * 0.25 {
+                    let mut at = if y < rect.top() + ROW_H * 0.25 {
                         DropAt::Before
                     } else if y > rect.bottom() - ROW_H * 0.25 {
                         DropAt::After
                     } else {
                         DropAt::Into
                     };
-                    let line_col = Color32::from_rgb(90, 160, 255);
-                    match at {
-                        DropAt::Before => ui.painter().hline(
-                            rect.x_range(),
-                            rect.top(),
-                            Stroke::new(2.0, line_col),
-                        ),
-                        DropAt::After => ui.painter().hline(
-                            rect.x_range(),
-                            rect.bottom(),
-                            Stroke::new(2.0, line_col),
-                        ),
-                        DropAt::Into => ui.painter().rect_stroke(
-                            rect,
-                            0.0,
-                            Stroke::new(1.5, line_col),
-                            egui::StrokeKind::Inside,
-                        ),
+                    // Assets that act on the object (materials, scripts) only drop Into it.
+                    let kind = asset.as_ref().map(|p| {
+                        crate::drag_drop::scene_drop_kind(world.resource::<AssetServer>(), &p.0)
+                    });
+                    use crate::drag_drop::SceneDrop;
+                    let accepts = match (&asset, kind.flatten()) {
+                        (None, _) => true,
+                        (Some(_), Some(SceneDrop::Instantiate | SceneDrop::AudioClip)) => true,
+                        (Some(_), Some(SceneDrop::Scene)) => true,
+                        (Some(_), Some(SceneDrop::Material)) => {
+                            at = DropAt::Into;
+                            crate::drag_drop::materials_of(world, id).is_some()
+                        }
+                        (Some(p), Some(SceneDrop::Script)) => {
+                            at = DropAt::Into;
+                            !crate::drag_drop::script_components(world, &p.0).is_empty()
+                        }
+                        (Some(_), None) => false,
                     };
-                    if resp.dnd_release_payload::<HierarchyDrag>().is_some() {
+                    let line_col = Color32::from_rgb(90, 160, 255);
+                    if accepts {
+                        crate::drag_drop::accept_cursor(ui.ctx());
+                        match at {
+                            DropAt::Before => ui.painter().hline(
+                                rect.x_range(),
+                                rect.top(),
+                                Stroke::new(2.0, line_col),
+                            ),
+                            DropAt::After => ui.painter().hline(
+                                rect.x_range(),
+                                rect.bottom(),
+                                Stroke::new(2.0, line_col),
+                            ),
+                            DropAt::Into => ui.painter().rect_stroke(
+                                rect,
+                                0.0,
+                                Stroke::new(1.5, line_col),
+                                egui::StrokeKind::Inside,
+                            ),
+                        };
+                    } else {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::NoDrop);
+                    }
+                    if let Some(payload) = objects
+                        && resp.dnd_release_payload::<HierarchyDrag>().is_some()
+                    {
                         drop = Some((payload.0.clone(), Some(id), at));
+                    }
+                    if accepts
+                        && let Some(p) = resp.dnd_release_payload::<crate::project::AssetPayload>()
+                    {
+                        if kind.flatten() == Some(SceneDrop::Scene) {
+                            actions.push(Action::OpenSceneAdditive(p.0.clone()));
+                        } else {
+                            asset_drop = Some((p.0.clone(), id, at));
+                        }
                     }
                 }
             }
@@ -451,15 +492,25 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
             if let Some(payload) = resp.dnd_release_payload::<HierarchyDrag>() {
                 drop = Some((payload.0.clone(), None, DropAt::Into));
             }
-            if let Some(payload) = resp.dnd_release_payload::<crate::project::AssetPayload>() {
-                let p = payload.0.to_ascii_lowercase();
-                if p.ends_with(".prefab") {
-                    actions.push(Action::InstantiatePrefab(payload.0.clone()));
-                } else if oxide_assets::is_model_path(&p) {
-                    actions.push(Action::InstantiateModel(payload.0.clone()));
-                } else if p.ends_with(".scene") {
-                    // Unity: dragging a scene into the Hierarchy opens it additively.
-                    actions.push(Action::OpenSceneAdditive(payload.0.clone()));
+            if let Some(p) = resp.dnd_hover_payload::<crate::project::AssetPayload>() {
+                use crate::drag_drop::SceneDrop;
+                let kind = crate::drag_drop::scene_drop_kind(world.resource::<AssetServer>(), &p.0);
+                let ok = matches!(
+                    kind,
+                    Some(SceneDrop::Instantiate | SceneDrop::AudioClip | SceneDrop::Scene)
+                );
+                crate::drag_drop::mark(ui.ctx(), resp.rect, ok);
+                if ok
+                    && resp
+                        .dnd_release_payload::<crate::project::AssetPayload>()
+                        .is_some()
+                {
+                    if kind == Some(SceneDrop::Scene) {
+                        // Unity: dragging a scene into the Hierarchy opens it additively.
+                        actions.push(Action::OpenSceneAdditive(p.0.clone()));
+                    } else {
+                        root_asset_drop = Some(p.0.clone());
+                    }
                 }
             }
             if resp.clicked() {
@@ -527,6 +578,14 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
     }
     if let Some((dragged, target, at)) = drop {
         reparent(st, &mut engine.world, &dragged, target, at, now);
+    }
+    if let Some(path) = root_asset_drop {
+        let r = crate::drag_drop::instantiate_asset(st, &mut engine.world, &path, None, None, None);
+        st.status = r.map_or_else(|e| e, |_| format!("Instantiated {path}"));
+    }
+    if let Some((path, target, at)) = asset_drop {
+        st.status =
+            drop_asset_on_row(st, &mut engine.world, &path, target, at).unwrap_or_else(|e| e);
     }
     st.actions.extend(actions);
 }
@@ -620,6 +679,35 @@ fn is_ancestor(world: &World, ancestor: GameObjectId, mut id: GameObjectId) -> b
             Some(p) => id = p,
             None => return false,
         }
+    }
+}
+
+/// A Project asset dropped on a Hierarchy row (Unity): prefabs and models become a child
+/// (or a sibling before/after it), materials are assigned to it, scripts add components.
+fn drop_asset_on_row(
+    st: &mut EditorState,
+    w: &mut World,
+    path: &str,
+    target: GameObjectId,
+    at: DropAt,
+) -> Result<String, String> {
+    use crate::drag_drop::SceneDrop;
+    match crate::drag_drop::scene_drop_kind(w.resource::<AssetServer>(), path) {
+        Some(SceneDrop::Material) => crate::drag_drop::assign_material(st, w, target, 0, path),
+        Some(SceneDrop::Script) => crate::drag_drop::add_script(st, w, target, path),
+        Some(SceneDrop::Instantiate | SceneDrop::AudioClip) => {
+            let (parent, sibling) = match at {
+                DropAt::Into => (Some(target), None),
+                DropAt::Before => (w.parent(target), Some(w.sibling_index(target))),
+                DropAt::After => (w.parent(target), Some(w.sibling_index(target) + 1)),
+            };
+            if at == DropAt::Into {
+                st.hierarchy.expanded.insert(target);
+            }
+            crate::drag_drop::instantiate_asset(st, w, path, parent, sibling, None)?;
+            Ok(format!("Instantiated {path}"))
+        }
+        _ => Err(format!("{path} can't be dropped here")),
     }
 }
 

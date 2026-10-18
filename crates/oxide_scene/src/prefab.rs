@@ -18,6 +18,60 @@ use crate::world::World;
 use oxide_core::reflect::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+/// A reference to a prefab asset, for script fields (Unity's `public GameObject prefab;`
+/// holding a prefab). The Inspector shows it as an object field that takes `.prefab` files
+/// dragged from the Project window. Spawn it with [`crate::Ctx::instantiate_prefab`]:
+///
+/// ```ignore
+/// pub struct Gun { pub bullet: Option<Prefab> }
+/// if let Some(b) = &self.bullet { ctx.instantiate_prefab(b); }
+/// ```
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Prefab(pub String);
+
+impl Prefab {
+    pub fn new(path: impl Into<String>) -> Self {
+        Self(path.into())
+    }
+
+    /// The prefab file (`Assets/Bullet.prefab`).
+    pub fn path(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for Prefab {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl oxide_core::reflect::FieldValue for Prefab {
+    const KIND: oxide_core::reflect::ValueKind = oxide_core::reflect::ValueKind::Asset;
+    const TYPE_NAME: Option<&'static str> = Some("Prefab");
+    fn to_value(&self) -> Value {
+        Value::Asset(self.0.clone())
+    }
+    fn from_value(v: Value) -> Option<Self> {
+        match v {
+            Value::Asset(p) | Value::String(p) => Some(Self(p)),
+            _ => None,
+        }
+    }
+}
+
+impl serde::Serialize for Prefab {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&self.0)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Prefab {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        String::deserialize(d).map(Self)
+    }
+}
+
 /// First id given to instance objects that aren't part of the prefab (added objects).
 pub const ADDED_BASE: u64 = 1 << 40;
 

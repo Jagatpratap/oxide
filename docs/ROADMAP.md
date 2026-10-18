@@ -202,6 +202,16 @@ with `.meta` files in P3).
 - ☑ **Project** window: folder tree, Favorites, thumbnails (textures, materials, models, prefabs), grid/list zoom,
   search with `t:`/`l:`, Asset Labels, rename/duplicate/delete/move (references rewritten), drag-into-scene
   ([Project window](https://docs.unity3d.com/Manual/ProjectView.html))
+- ☑ **Drag and drop** (Unity's rules): a label at the cursor and an outline on targets that accept, the
+  "rejected" cursor elsewhere, Esc cancels. Scene view: prefabs, models and audio clips become a preview instance
+  that follows the surface under the mouse and stays on release; materials preview on the object under the mouse
+  and go to the sub-mesh hit; scripts add their components. Hierarchy: prefabs/models as root, child or sibling
+  (before/after a row), materials and scripts onto a row, scenes open additively. Inspector: asset fields take only
+  matching types (a model gives its mesh, a texture its sprite), `Prefab` script fields take `.prefab` files, object
+  fields take Hierarchy objects, list headers append drops, empty space takes scripts and materials. Project
+  window: assets onto folders move, Hierarchy objects become prefabs or replace an existing prefab (asks first),
+  files from Finder/Explorer are imported into the open folder. Component-typed object fields ☐
+  ([Drag and drop](https://docs.unity3d.com/ScriptReference/DragAndDrop.html))
 - ☑ **Game** view: play/pause/step, Display 1-8 (`Camera.targetDisplay`), aspect ratios and fixed resolutions
   plus custom sizes (Add dialog, saved in Preferences), Low Resolution Aspect Ratios, VSync (Game view only),
   Scale, Play Focused / Maximized / Unfocused, Mute Audio, Stats (graphics, culling, skinned meshes, animators,

@@ -172,6 +172,7 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
     };
     refresh_overrides(st, &mut engine.world, id);
     let mut edits: Vec<(Edit, u64)> = Vec::new();
+    let mut space_drop: Option<String> = None;
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
@@ -206,10 +207,50 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
                     ui.add_space(8.0);
                     add_component(ui, st, w);
                     ui.add_space(24.0);
+                    // Empty space below: Unity takes scripts (Add Component) and materials.
+                    let rest = ui.available_rect_before_wrap();
+                    let rest = egui::Rect::from_min_size(
+                        rest.min,
+                        egui::vec2(rest.width(), rest.height().max(60.0)),
+                    );
+                    let r = ui.allocate_rect(rest, egui::Sense::hover());
+                    if let Some(p) = r.dnd_hover_payload::<AssetPayload>() {
+                        use crate::drag_drop::SceneDrop;
+                        let kind =
+                            crate::drag_drop::scene_drop_kind(w.resource::<AssetServer>(), &p.0);
+                        let ok = match kind {
+                            Some(SceneDrop::Script) => {
+                                !crate::drag_drop::script_components(w, &p.0).is_empty()
+                            }
+                            Some(SceneDrop::Material) => {
+                                crate::drag_drop::materials_of(w, id).is_some()
+                            }
+                            _ => false,
+                        };
+                        crate::drag_drop::mark(ui.ctx(), r.rect, ok);
+                        if ok && crate::drag_drop::released_over(&r) {
+                            egui::DragAndDrop::clear_payload(ui.ctx());
+                            space_drop = Some(p.0.clone());
+                        }
+                    }
                 });
         });
     presets(st, engine, &mut edits);
     apply(st, &mut engine.world, &targets, edits);
+    if let Some(path) = space_drop {
+        let w = &mut engine.world;
+        let material = crate::drag_drop::scene_drop_kind(w.resource::<AssetServer>(), &path)
+            == Some(crate::drag_drop::SceneDrop::Material);
+        let mut msg = Ok(String::new());
+        for &t in &targets {
+            msg = if material {
+                crate::drag_drop::assign_material(st, w, t, 0, &path)
+            } else {
+                crate::drag_drop::add_script(st, w, t, &path)
+            };
+        }
+        st.status = msg.unwrap_or_else(|e| e);
+    }
 }
 
 /// Carries out "Save as Preset..." and "Apply Preset" from a component's menu.
@@ -2079,7 +2120,7 @@ fn value_ui(
             let mut changed = false;
             let elem = f.element.unwrap_or(ValueKind::Null);
             ui.vertical(|ui| {
-                ui.horizontal(|ui| {
+                let header = ui.horizontal(|ui| {
                     ui.weak(format!("{} item(s)", items.len()));
                     if ui.small_button("+").clicked() {
                         // Unity duplicates the last element; an empty list gets a default one.
@@ -2092,6 +2133,7 @@ fn value_ui(
                         changed = true;
                     }
                 });
+                changed |= list_drop(ui, w, &header.response, elem, type_name, items);
                 for (n, item) in items.iter_mut().enumerate() {
                     if elem == ValueKind::Object && is_block(f, elem, type_name, item) {
                         // Structs in a list: a foldout per element (Unity's "Element 0").
@@ -2330,11 +2372,60 @@ pub(crate) fn asset_field(
                 }
             }
         });
-    if let Some(payload) = r.response.dnd_release_payload::<AssetPayload>() {
-        *v = Value::Asset(payload.0.clone());
-        changed = true;
+    // Unity: an asset dragged from the Project window goes in if the field can hold it.
+    if let Some(payload) = r.response.dnd_hover_payload::<AssetPayload>() {
+        let candidates = assets_of_type(assets, type_name);
+        let resolved =
+            crate::drag_drop::resolve_for_field(assets, type_name, &payload.0, &candidates);
+        crate::drag_drop::mark(ui.ctx(), r.response.rect, resolved.is_some());
+        if let Some(p) = resolved
+            && crate::drag_drop::released_over(&r.response)
+        {
+            egui::DragAndDrop::clear_payload(ui.ctx());
+            *v = Value::Asset(p);
+            changed = true;
+        }
+    } else if r.response.dnd_hover_payload::<HierarchyDrag>().is_some() {
+        crate::drag_drop::mark(ui.ctx(), r.response.rect, false);
     }
     changed
+}
+
+/// Unity: assets or objects dropped on a list's header are added to the end.
+fn list_drop(
+    ui: &egui::Ui,
+    w: &World,
+    r: &egui::Response,
+    elem: ValueKind,
+    type_name: Option<&str>,
+    items: &mut Vec<Value>,
+) -> bool {
+    let new: Option<Vec<Value>> = match elem {
+        ValueKind::Asset => r.dnd_hover_payload::<AssetPayload>().map(|p| {
+            let assets = w.resource::<AssetServer>();
+            let candidates = assets_of_type(assets, type_name);
+            crate::drag_drop::resolve_for_field(assets, type_name, &p.0, &candidates)
+                .map(Value::Asset)
+                .into_iter()
+                .collect()
+        }),
+        ValueKind::ObjectRef => r.dnd_hover_payload::<HierarchyDrag>().map(|p| {
+            p.0.iter()
+                .map(|id| Value::ObjectRef(id.to_bits()))
+                .collect()
+        }),
+        _ => None,
+    };
+    let Some(new) = new else {
+        return false;
+    };
+    crate::drag_drop::mark(ui.ctx(), r.rect, !new.is_empty());
+    if new.is_empty() || !crate::drag_drop::released_over(r) {
+        return false;
+    }
+    egui::DragAndDrop::clear_payload(ui.ctx());
+    items.extend(new);
+    true
 }
 
 fn object_field(ui: &mut egui::Ui, w: &World, v: &mut Value, salt: &str) -> bool {
@@ -2366,11 +2457,18 @@ fn object_field(ui: &mut egui::Ui, w: &World, v: &mut Value, salt: &str) -> bool
                 }
             }
         });
-    if let Some(payload) = r.response.dnd_release_payload::<HierarchyDrag>()
-        && let Some(id) = payload.0.first()
-    {
-        *v = Value::ObjectRef(id.to_bits());
-        changed = true;
+    if let Some(payload) = r.response.dnd_hover_payload::<HierarchyDrag>() {
+        crate::drag_drop::mark(ui.ctx(), r.response.rect, !payload.0.is_empty());
+        if let Some(id) = payload.0.first()
+            && crate::drag_drop::released_over(&r.response)
+        {
+            egui::DragAndDrop::clear_payload(ui.ctx());
+            *v = Value::ObjectRef(id.to_bits());
+            changed = true;
+        }
+    } else if r.response.dnd_hover_payload::<AssetPayload>().is_some() {
+        // Scene object fields can't hold assets.
+        crate::drag_drop::mark(ui.ctx(), r.response.rect, false);
     }
     changed
 }

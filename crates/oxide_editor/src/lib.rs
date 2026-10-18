@@ -19,6 +19,7 @@ mod audio_mixer_window;
 mod auditor_window;
 mod console;
 mod curve_editor;
+mod drag_drop;
 mod extensions;
 mod font_asset_creator;
 pub(crate) mod game_view;
@@ -415,6 +416,8 @@ pub struct EditorState {
     /// Undo depth when Play started; entries recorded during Play are dropped on Stop.
     play_undo_depth: usize,
     pub undo: undo::UndoStack,
+    /// A Project asset dragged over the Scene view (preview instance or material).
+    pub scene_preview: drag_drop::ScenePreview,
     pub scene_cam: SceneCamera,
     scene_view: view::ViewTarget,
     game_view: view::ViewTarget,
@@ -518,6 +521,7 @@ impl EditorState {
             play_snapshot: None,
             play_undo_depth: 0,
             undo: undo::UndoStack::default(),
+            scene_preview: Default::default(),
             scene_cam: SceneCamera::default(),
             scene_view: view::ViewTarget::default(),
             game_view: view::ViewTarget::default(),
@@ -2417,6 +2421,11 @@ impl Shell for Editor {
         self.modal_ui(&ctx, engine);
         search_window::ui(&mut self.st, engine, &ctx);
         packages_window::ui(&mut self.st, engine, &ctx);
+        drag_drop::overlay(&ctx, &engine.world);
+        // A drag that ended somewhere else (or the Scene view tab closed) leaves no preview.
+        if !drag_drop::is_dragging(&ctx) {
+            self.st.scene_preview.clear(&mut engine.world);
+        }
 
         for p in extensions::pressed_shortcuts(&ctx, &engine.world) {
             self.st.actions.push(Action::ExtensionMenu(p));

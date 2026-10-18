@@ -508,3 +508,33 @@ fn prefab_edited_on_disk_updates_instances_keeping_overrides() {
         .unwrap();
     assert_eq!(w.position(b), Vector3::new(5.0, 0.0, 0.0));
 }
+
+#[derive(Reflect, Default, Clone)]
+struct Gun {
+    bullet: Option<Prefab>,
+}
+
+#[test]
+fn prefab_fields_hold_prefab_paths() {
+    use oxide_core::reflect::Reflect as _;
+    let info = Gun::default().type_info();
+    let f = info.fields.iter().find(|f| f.name == "bullet").unwrap();
+    assert_eq!(f.kind, oxide_core::reflect::ValueKind::Asset);
+    assert_eq!(f.type_name, Some("Prefab"));
+    let mut g = Gun::default();
+    g.set_field(
+        "bullet",
+        oxide_core::reflect::Value::Asset("Assets/Bullet.prefab".into()),
+    )
+    .unwrap();
+    assert_eq!(
+        g.bullet.as_ref().map(Prefab::path),
+        Some("Assets/Bullet.prefab")
+    );
+    assert_eq!(
+        g.get_field("bullet"),
+        Some(oxide_core::reflect::Value::Asset(
+            "Assets/Bullet.prefab".into()
+        ))
+    );
+}

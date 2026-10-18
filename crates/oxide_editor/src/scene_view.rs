@@ -5,7 +5,6 @@
 //! <https://docs.unity3d.com/Manual/PositioningGameObjects.html>,
 //! <https://docs.unity3d.com/Manual/ScenePicking.html>
 
-use crate::project::AssetPayload;
 use crate::view::{Projector, VIEW_FORMAT};
 use crate::{EditorState, Tool};
 use egui::{Color32, Pos2, Sense, Stroke, Vec2, pos2, vec2};
@@ -182,6 +181,11 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
     crate::overlays::ui(st, engine, ui, rect);
 
     let proj = Projector::new(&st.scene_cam.camera_view(), rect);
+    // A Project asset dragged in: placement / material preview instead of the active tool.
+    if crate::drag_drop::scene_view(st, engine, ui, &resp, &|p| proj.ray(p)) {
+        draw_selection(st, &engine.world, &proj, &painter);
+        return;
+    }
     let world = &engine.world;
     st.visibility.prune(world);
     let hidden = st.visibility.hidden_bits(world);
@@ -239,15 +243,6 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
             (None, false) => st.selection.clear(),
             (None, true) => {}
         }
-    }
-
-    // Drop a model from the Project window.
-    if let Some(payload) = resp.dnd_release_payload::<AssetPayload>()
-        && let Some(pos) = resp
-            .interact_pointer_pos()
-            .or(ui.input(|i| i.pointer.hover_pos()))
-    {
-        drop_model(st, engine, &payload.0, &proj.ray(pos));
     }
 }
 
@@ -557,48 +552,36 @@ pub fn pick_where(
     best
 }
 
-fn drop_model(st: &mut EditorState, engine: &mut Engine, path: &str, ray: &Ray) {
-    let lower = path.to_ascii_lowercase();
-    let prefab = lower.ends_with(".prefab");
-    if !(prefab || oxide_assets::is_model_path(&lower)) {
-        st.status = format!("{path}: only prefabs and models can be dropped into the scene");
-        return;
-    }
-    let now = oxide_core::time::realtime_since_startup();
-    let w = &mut engine.world;
-    let point = pick(w, ray)
-        .map(|(_, t)| ray.get_point(t))
-        .or_else(|| {
-            oxide_math::Plane::new(Vector3::Y, Vector3::ZERO)
-                .raycast(ray)
-                .map(|t| ray.get_point(t))
-        })
-        .unwrap_or(st.scene_cam.pivot);
-    if prefab {
-        st.record(w, "Instantiate Prefab", None, now);
-        match w.instantiate_prefab(path, None) {
-            Ok(id) => {
-                w.set_position(id, point);
-                st.select(id);
-                st.status = format!("Instantiated {path}");
-            }
-            Err(e) => st.status = e,
-        }
-        return;
-    }
-    let h = match w.resource_mut::<AssetServer>().load_model(path) {
-        Ok(h) => h,
-        Err(e) => {
-            st.status = format!("cannot import {path}: {e}");
-            return;
-        }
+/// The sub-mesh of `id`'s mesh that `ray` hits first (0 when it has one, or none is hit).
+pub fn submesh_at(world: &World, id: GameObjectId, ray: &Ray) -> usize {
+    let Some((h, skinned)) = mesh_of(world, id) else {
+        return 0;
     };
-    st.record(w, "Instantiate Model", None, now);
-    if let Some(id) = oxide_engine::objects::instantiate_model(w, &h) {
-        w.set_position(id, point);
-        st.select(id);
-        st.status = format!("Instantiated {path}");
+    let assets = world.resource::<AssetServer>();
+    let Some(mesh) = assets.meshes.get(&h) else {
+        return 0;
+    };
+    if skinned || mesh.submeshes.len() < 2 {
+        return 0;
     }
+    let inv = world.local_to_world(id).inverse();
+    let (o, d) = (
+        inv.transform_point3(ray.origin),
+        inv.transform_vector3(ray.direction),
+    );
+    let v = &mesh.vertices;
+    let best = mesh
+        .triangles()
+        .enumerate()
+        .filter_map(|(i, [a, b, c])| {
+            ray_triangle(o, d, v[a as usize], v[b as usize], v[c as usize]).map(|t| (i, t))
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1));
+    best.and_then(|(tri, _)| {
+        let index = tri as u32 * 3;
+        mesh.submeshes.iter().position(|r| r.contains(&index))
+    })
+    .unwrap_or(0)
 }
 
 // ---- bounds & framing ---------------------------------------------------------------------

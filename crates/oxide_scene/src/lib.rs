@@ -50,7 +50,7 @@ pub use lens_flare::{
     LensFlareDistribution, LensFlareType,
 };
 pub use player_input::PlayerInput;
-pub use prefab::{ObjectProperty, PrefabOverride, is_prefab_path};
+pub use prefab::{ObjectProperty, Prefab, PrefabOverride, is_prefab_path};
 pub use presets::{CurvePreset, CurvePresetLibrary, GradientPreset, GradientPresetLibrary};
 pub use quality::{
     AnisotropicFiltering, QualityLevel, QualityOverrides, QualitySettings, ShadowQuality,

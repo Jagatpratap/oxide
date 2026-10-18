@@ -60,6 +60,8 @@ pub struct ProjectState {
     renaming: Option<(String, String)>,
     /// Asks before deleting this asset.
     confirm_delete: Option<String>,
+    /// A Hierarchy object dropped on an existing prefab: asks before replacing it.
+    confirm_replace: Option<(oxide_scene::GameObjectId, String)>,
     /// Icon size in the grid; at the minimum the folder is shown as a list.
     pub zoom: f32,
     /// The window was clicked last (Delete, Duplicate and Rename act on assets).
@@ -88,6 +90,7 @@ impl Default for ProjectState {
             new_script: None,
             renaming: None,
             confirm_delete: None,
+            confirm_replace: None,
             zoom: 64.0,
             focused: false,
             cache: None,
@@ -393,6 +396,8 @@ enum Op {
     /// A Font Asset from a font file, next to it (TMP's Create > TextMeshPro > Font Asset).
     FontAsset(String),
     SpriteAsset(String),
+    /// A Hierarchy object dropped on this prefab file.
+    DropOnPrefab(String, oxide_scene::GameObjectId),
 }
 
 /// A Create menu entry: (menu path, asset type name, sort order).
@@ -439,6 +444,50 @@ fn folder_tree(
                 folder_tree(ui, root, &d.path, ps, ops, depth + 1);
             }
         });
+}
+
+/// Copies files and folders from outside the project into `folder` (renaming on clashes).
+/// Returns how many files were copied and any errors.
+fn import_files(root: &Path, folder: &str, sources: &[PathBuf]) -> (usize, Vec<String>) {
+    fn copy(src: &Path, dst: &Path, n: &mut usize, errors: &mut Vec<String>) {
+        if src.is_dir() {
+            if let Err(e) = std::fs::create_dir_all(dst) {
+                errors.push(format!("{}: {e}", dst.display()));
+                return;
+            }
+            let Ok(rd) = std::fs::read_dir(src) else {
+                return;
+            };
+            for e in rd.flatten() {
+                let name = e.file_name();
+                // Hidden files and another project's .meta files stay behind (new GUIDs).
+                let s = name.to_string_lossy();
+                if s.starts_with('.') || s.ends_with(".meta") {
+                    continue;
+                }
+                copy(&e.path(), &dst.join(&name), n, errors);
+            }
+        } else {
+            match std::fs::copy(src, dst) {
+                Ok(_) => *n += 1,
+                Err(e) => errors.push(format!("{}: {e}", src.display())),
+            }
+        }
+    }
+    let mut n = 0;
+    let mut errors = Vec::new();
+    for src in sources {
+        let Some(name) = src.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+            continue;
+        };
+        // Already inside the project: nothing to copy.
+        if src.starts_with(root.join("Assets")) {
+            continue;
+        }
+        let rel = asset_ops::unique_path(root, &format!("{folder}/{name}"));
+        copy(src, &root.join(&rel), &mut n, &mut errors);
+    }
+    (n, errors)
 }
 
 /// Dropping an asset onto a folder moves it there.
@@ -990,6 +1039,42 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
     if !searching {
         drop_target(&central.response, &folder, &mut ops);
     }
+    // Files dragged in from Finder / Explorer are copied into the open folder and imported,
+    // as in Unity.
+    let writable = folder == "Assets" || folder.starts_with("Assets/");
+    if writable && ui.input(|i| !i.raw.hovered_files.is_empty()) {
+        let r = central.response.rect;
+        ui.ctx().debug_painter().rect_stroke(
+            r.shrink(1.0),
+            2.0,
+            egui::Stroke::new(2.0, Color32::from_rgb(90, 160, 255)),
+            egui::StrokeKind::Inside,
+        );
+        ui.ctx().debug_painter().text(
+            r.center(),
+            egui::Align2::CENTER_CENTER,
+            format!("Import into {folder}"),
+            egui::FontId::proportional(14.0),
+            Color32::from_rgb(150, 190, 255),
+        );
+    }
+    let dropped: Vec<PathBuf> = ui.input(|i| {
+        i.raw
+            .dropped_files
+            .iter()
+            .map(|f| f.path().to_path_buf())
+            .filter(|p| !p.as_os_str().is_empty())
+            .collect()
+    });
+    if writable && !dropped.is_empty() {
+        let (n, errors) = import_files(&root, &folder, &dropped);
+        st.status = match errors.first() {
+            Some(e) => format!("Imported {n} file(s) into {folder}; {e}"),
+            None => format!("Imported {n} file(s) into {folder}"),
+        };
+        st.project.cache = None;
+        st.actions.push(Action::RefreshAssets);
+    }
     if let Some((id, path)) = new_prefab {
         st.select(id);
         st.actions.push(Action::CreatePrefab(path));
@@ -998,6 +1083,7 @@ pub fn ui(st: &mut EditorState, engine: &mut Engine, ui: &mut egui::Ui) {
         st.selection.clear();
     }
     delete_dialog(st, &root, ui.ctx());
+    replace_dialog(st, engine, ui.ctx());
     for op in ops {
         if let Err(e) = run(st, engine, &root, op) {
             oxide_core::debug_log_warning!("{e}");
@@ -1178,6 +1264,14 @@ fn item(
     }
     if e.dir {
         drop_target(&resp, &e.path, ops);
+    } else if e.path.to_ascii_lowercase().ends_with(".prefab")
+        && let Some(p) = resp.dnd_hover_payload::<crate::hierarchy::HierarchyDrag>()
+    {
+        crate::drag_drop::mark(ui.ctx(), rect, p.0.len() == 1);
+        if p.0.len() == 1 && crate::drag_drop::released_over(&resp) {
+            egui::DragAndDrop::clear_payload(ui.ctx());
+            ops.push(Op::DropOnPrefab(e.path.clone(), p.0[0]));
+        }
     }
     let resp = if renaming {
         resp
@@ -1192,6 +1286,44 @@ fn item(
 }
 
 /// "Delete selected asset?" (Unity asks too).
+/// Unity's "Replace Prefab?" when a Hierarchy object is dropped on an existing prefab: the
+/// prefab's content becomes the object's, and the object becomes an instance of it.
+fn replace_dialog(st: &mut EditorState, engine: &mut Engine, ctx: &egui::Context) {
+    let Some((id, path)) = st.project.confirm_replace.clone() else {
+        return;
+    };
+    let name = engine
+        .world
+        .get(id)
+        .map_or("the object".to_owned(), |o| o.name.clone());
+    let mut close = false;
+    let mut replace = false;
+    egui::Modal::new(egui::Id::new("project-replace-prefab")).show(ctx, |ui| {
+        ui.set_width(380.0);
+        ui.heading("Replace Prefab?");
+        ui.add_space(4.0);
+        ui.label(format!("Replace {path} with {name}?"));
+        ui.weak("The prefab file gets this object's content, and the object becomes its instance.");
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if ui.button("Replace").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                replace = true;
+            }
+            if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                close = true;
+            }
+        });
+    });
+    if replace {
+        st.select(id);
+        st.actions.push(Action::CreatePrefab(path));
+        close = true;
+    }
+    if close {
+        st.project.confirm_replace = None;
+    }
+}
+
 fn delete_dialog(st: &mut EditorState, root: &Path, ctx: &egui::Context) {
     let Some(path) = st.project.confirm_delete.clone() else {
         return;
@@ -1257,6 +1389,7 @@ fn run(st: &mut EditorState, engine: &mut Engine, root: &Path, op: Op) -> Result
             st.project.invalidate();
         }
         Op::Reveal(path) => asset_ops::reveal(&root.join(path))?,
+        Op::DropOnPrefab(path, id) => st.project.confirm_replace = Some((id, path)),
         Op::Reimport(path) => {
             let assets = engine.world.resource_mut::<AssetServer>();
             let lower = path.to_lowercase();

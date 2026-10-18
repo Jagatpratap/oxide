@@ -197,8 +197,9 @@ impl<'w> Ctx<'w> {
 
     /// Unity `Instantiate(prefab)` for a prefab file (`Assets/Bullet.prefab`). Errors are
     /// logged and give `None`.
-    pub fn instantiate_prefab(&mut self, path: &str) -> Option<GameObjectId> {
-        match self.world.instantiate_prefab(path, None) {
+    /// Takes a path or a [`crate::Prefab`] field.
+    pub fn instantiate_prefab(&mut self, path: impl AsRef<str>) -> Option<GameObjectId> {
+        match self.world.instantiate_prefab(path.as_ref(), None) {
             Ok(id) => Some(id),
             Err(e) => {
                 oxide_core::debug_log_error!("{e}");
@@ -210,7 +211,7 @@ impl<'w> Ctx<'w> {
     /// Unity `Instantiate(prefab, position, rotation)`.
     pub fn instantiate_prefab_at(
         &mut self,
-        path: &str,
+        path: impl AsRef<str>,
         position: Vector3,
         rotation: Quaternion,
     ) -> Option<GameObjectId> {

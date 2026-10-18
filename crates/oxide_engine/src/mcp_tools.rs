@@ -945,10 +945,15 @@ pub fn build_server(bus: Arc<Bus>) -> McpServer {
             );
             set_fields(&mut mat, values, &mut errors);
             let json = reflect_to_json(None, &mat);
-            e.world
-                .resource_mut::<AssetServer>()
-                .materials
-                .insert(path.clone(), mat);
+            let assets = e.world.resource_mut::<AssetServer>();
+            // Project materials are written to their `.mat` file; other paths stay in memory.
+            if path.starts_with("Assets/") {
+                if let Err(err) = assets.save_material(&path, &mat) {
+                    return ToolResult::error(err);
+                }
+            } else {
+                assets.materials.insert(path.clone(), mat);
+            }
             ToolResult::json(json!({ "path": path, "fields": json, "errors": errors }))
         },
     );
