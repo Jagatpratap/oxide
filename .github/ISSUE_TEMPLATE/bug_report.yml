@@ -1,0 +1,60 @@
+name: Bug report
+description: Something in Oxide doesn't work as it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please search [existing issues](https://github.com/Jagatpratap/oxide/issues) first.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Create a project from the 3D template
+        2. Drag a .glb into the Scene view
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Oxide version
+      description: The output of `oxide --version`, or the commit you built from.
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Windows
+        - Linux
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU
+      description: "Shown in the Console at startup, after \"GPU:\"."
+  - type: textarea
+    id: log
+    attributes:
+      label: Editor log
+      description: |
+        `~/Library/Logs/Oxide/Editor.log` (macOS), `%LOCALAPPDATA%\Oxide\Editor.log` (Windows) or `~/.local/share/Oxide/Editor.log` (Linux). Paste the relevant part.
+      render: text
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Screenshots, a small project that shows the problem, the Unity behaviour you expected.

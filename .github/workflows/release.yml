@@ -77,7 +77,7 @@ jobs:
           # The section for this version: from its "## [x.y.z]" heading to the next "## ".
           awk -v v="$version" '
             /^## / { if (found) exit; if (index($0, "[" v "]")) { found = 1; next } }
-            found { print }
+            found && !/^\[[^]]*\]: http/ { print }
           ' CHANGELOG.md > notes.md
           if [[ ! -s notes.md ]]; then
             echo "No CHANGELOG.md section for $version; see the commit history." > notes.md

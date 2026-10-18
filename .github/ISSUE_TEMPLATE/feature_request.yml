@@ -1,0 +1,27 @@
+name: Feature request
+description: Suggest a feature or a Unity behaviour Oxide is missing.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What you'd like
+      description: What you want to do, and what's stopping you today.
+    validations:
+      required: true
+  - type: input
+    id: unity
+    attributes:
+      label: Unity equivalent
+      description: The Unity feature this matches, ideally with a link to its manual page.
+  - type: textarea
+    id: why
+    attributes:
+      label: Why it matters
+      description: The game or workflow it would help with.
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Contributing
+      options:
+        - label: I'd like to work on this myself.
