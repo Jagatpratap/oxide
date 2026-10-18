@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "apps/*", "packages/*"]
+# Built inside projects only, against a release's prebuilt engine (see sdk/oxide_dylib).
+exclude = ["sdk"]
 
 [workspace.package]
 version = "0.1.0"

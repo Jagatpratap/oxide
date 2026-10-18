@@ -6,3 +6,5 @@
 /Library/
 # The Hub icon is source, not output.
 !apps/oxide_hub/assets/icon.png
+# Copied from the engine's by scripts/build_sdk.py.
+/sdk/oxide_editor/Cargo.lock

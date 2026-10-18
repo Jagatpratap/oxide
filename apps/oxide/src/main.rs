@@ -4,15 +4,16 @@
 //! oxide                            starts the Oxide Hub (`oxide-hub`, its own program)
 //! oxide new  <DIR> [editor args]   create a game project and open it
 //! oxide open <DIR> [editor args]   open a game project (its Scripts hot-reload)
-//! oxide open <DIR> --build-only    build the project's editor without starting it
+//! oxide open <DIR> --build-only    prepare the project's editor without starting it
 //! oxide create <DIR>               create a game project without opening it
 //! oxide --version                  this editor's version and engine source folder
 //! oxide [--scene Assets/Scenes/Main.scene] [--sample demo|vehicle|character|open_world|city] [--project DIR]
 //!       [--player] [--mcp-addr 127.0.0.1:47474] [--no-mcp] [--size 1280x720]
 //! ```
-//! `new`/`open` are the project launcher the Hub drives: they build the project's own editor,
-//! which links the engine as a shared library so the project's Rust scripts can be compiled
-//! and reloaded while it runs. Without them, `oxide` is the engine's sandbox editor (no
+//! `new`/`open` are the project launcher the Hub drives. In a release they start the prebuilt
+//! project editor (`bin/oxide-editor`) right away; from an engine source checkout they build
+//! the project's own editor first. Either way the editor links the engine as a shared
+//! library, so the project's Rust scripts can be compiled and reloaded while it runs. Without them, `oxide` is the engine's sandbox editor (no
 //! project scripts).
 //! With no scene it opens Unity's default new scene (Main Camera + Directional Light);
 //! `--sample` opens a built-in test scene. `--player` runs the game alone in the window, as a
@@ -108,6 +109,9 @@ fn launch_project(cmd: &str, dir: &str, mut rest: Vec<String>) -> ExitCode {
     if cmd == "create" {
         return ExitCode::SUCCESS;
     }
+    if let Some(prebuilt) = oxide_editor::project_files::prebuilt(&engine) {
+        return run_prebuilt(&prebuilt, &dir, build_only, rest);
+    }
     if !oxide_editor::project_files::editor_exe(&dir).is_file() {
         println!(
             "Building the project's editor (the first build on this machine compiles the engine and takes a few minutes)..."
@@ -135,6 +139,40 @@ fn launch_project(cmd: &str, dir: &str, mut rest: Vec<String>) -> ExitCode {
                 "oxide: {}",
                 oxide_editor::project_files::cargo_missing_message(&e)
             );
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// A release: starts its prebuilt editor on the project (nothing is compiled; the editor
+/// compiles the Scripts itself). First makes sure the Rust version the editor was built
+/// with is installed, since the Scripts must be compiled with it. `--build-only` stops
+/// after that check.
+fn run_prebuilt(
+    prebuilt: &oxide_editor::project_files::Prebuilt,
+    dir: &std::path::Path,
+    build_only: bool,
+    rest: Vec<String>,
+) -> ExitCode {
+    if let Err(e) = oxide_editor::project_files::ensure_toolchain(&prebuilt.toolchain()) {
+        eprintln!("oxide: {e}");
+        return ExitCode::FAILURE;
+    }
+    if build_only {
+        return ExitCode::SUCCESS;
+    }
+    let mut command = std::process::Command::new(&prebuilt.editor);
+    command.arg("--project").arg(dir).args(rest);
+    // A toolchain chosen for this process (`cargo +x run`) would override the project's
+    // rust-toolchain.toml in the editor's Scripts builds.
+    for var in ["CARGO", "RUSTC", "RUSTUP_TOOLCHAIN", "CARGO_TARGET_DIR"] {
+        command.env_remove(var);
+    }
+    match command.status() {
+        Ok(s) if s.success() => ExitCode::SUCCESS,
+        Ok(s) => ExitCode::from(s.code().unwrap_or(1).clamp(1, 255) as u8),
+        Err(e) => {
+            eprintln!("oxide: cannot start {}: {e}", prebuilt.editor.display());
             ExitCode::FAILURE
         }
     }

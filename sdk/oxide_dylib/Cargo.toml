@@ -1,0 +1,15 @@
+# The engine for a project's Scripts when the editor is a prebuilt release.
+#
+# A release ships the engine library already compiled (`<install>/lib`). Projects depend on
+# this package instead of the engine source (same package name, so `oxide = { package =
+# "oxide_dylib", ... }` and the derive macros work unchanged); it only re-exports the prebuilt
+# library, so a Scripts build compiles the Scripts and nothing of the engine.
+[package]
+name = "oxide_dylib"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+name = "oxide_sdk"

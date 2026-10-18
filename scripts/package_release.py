@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """Packages an Oxide release download (used by .github/workflows/release.yml).
 
-    scripts/package_release.py --target aarch64-apple-darwin --version v0.2.0 [--bin-dir DIR] [--out dist]
+    scripts/package_release.py --target aarch64-apple-darwin --version v0.2.0 --sdk sdk-out [--bin-dir DIR] [--out dist]
 
-The archive holds the engine source (projects compile against it) plus the prebuilt programs:
+The archive holds the prebuilt editor (from scripts/build_sdk.py), the launcher and the
+engine source (player builds compile it):
 
     oxide-v0.2.0-aarch64-apple-darwin/
-        bin/oxide                the Oxide Hub, project launcher and editor sandbox
+        bin/oxide                the project launcher the Hub runs (and the editor sandbox)
+        bin/oxide-editor         the project editor: opening a project compiles nothing of the engine
         bin/oxide-mcp-stdio      MCP bridge for stdio-only clients
-        crates/ apps/ packages/ docs/ Cargo.toml Cargo.lock README.md ...
+        lib/                     the engine library the editor runs and Scripts compile against
+        sdk/ crates/ apps/ packages/ docs/ Cargo.toml Cargo.lock README.md ...
 
 `bin/oxide` finds the engine source next to itself, so the folder can live anywhere.
 Writes a .tar.gz (macOS, Linux) or .zip (Windows) and a .sha256 file next to it.
@@ -30,6 +33,7 @@ def main():
     ap.add_argument("--version", required=True)
     ap.add_argument("--bin-dir", help="folder with the release binaries (default target/<target>/release)")
     ap.add_argument("--out", default="dist")
+    ap.add_argument("--sdk", required=True, help="output folder of scripts/build_sdk.py")
     a = ap.parse_args()
 
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -45,6 +49,14 @@ def main():
         if not os.path.isfile(src):
             sys.exit(f"missing {src}: build with `cargo build --release -p oxide -p oxide_mcp_stdio`")
         entries.append((f"{name}/bin/{b}{exe}", src, True))
+    sdk = os.path.abspath(a.sdk)
+    if not os.path.isfile(os.path.join(sdk, "lib", "sdk.txt")):
+        sys.exit(f"{sdk} is not a build_sdk.py output folder")
+    for dirpath, _, files in os.walk(sdk):
+        for f in files:
+            src = os.path.join(dirpath, f)
+            rel = os.path.relpath(src, sdk).replace(os.sep, "/")
+            entries.append((f"{name}/{rel}", src, rel.startswith("bin/")))
     for rel in source_files(root):
         entries.append((f"{name}/{rel}", os.path.join(root, rel), os.access(os.path.join(root, rel), os.X_OK)))
 

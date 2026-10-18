@@ -1,0 +1,22 @@
+# oxide-editor: the project editor a release ships prebuilt (scripts/build_sdk.py builds it).
+# It links the engine library dynamically, so a project's Scripts load into it.
+#
+# Its own workspace, like a project's: in the engine workspace, `cargo build --workspace`
+# selects oxide_dylib itself, which Cargo then builds without `-C prefer-dynamic`, and no
+# program can link it.
+[workspace]
+
+[package]
+name = "oxide_editor_app"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[[bin]]
+name = "oxide-editor"
+path = "src/main.rs"
+test = false
+
+[dependencies]
+oxide_dylib = { path = "../../crates/oxide_dylib" }

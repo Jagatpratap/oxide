@@ -4,8 +4,9 @@
 //!
 //! ```text
 //! <data>/Editors/0.2.0/          an unpacked release download
-//!     bin/oxide                  that version's launcher and editor
-//!     crates/ apps/ ...          its engine source (projects compile against it)
+//!     bin/oxide                  that version's launcher (and editor sandbox)
+//!     bin/oxide-editor, lib/     its prebuilt project editor and engine library
+//!     crates/ apps/ ...          its engine source (player builds compile it)
 //! <config>/Installs.json         folders added with Locate
 //! ```
 

@@ -454,7 +454,7 @@ pub fn sync(project: &Path, engine_root: &Path) -> Vec<String> {
     let out = project.join("Library/ScriptAssemblies");
     let engine = EngineDep {
         package: "oxide_dylib",
-        path: engine_root.join("crates/oxide_dylib"),
+        path: crate::project_files::engine_crate(engine_root),
     };
     let written = match generate(&assemblies, &out, &engine, false) {
         Ok(w) => w,
@@ -476,7 +476,7 @@ pub fn sync(project: &Path, engine_root: &Path) -> Vec<String> {
     // Workspace members.
     let root = project.join("Cargo.toml");
     if let Ok(text) = std::fs::read_to_string(&root) {
-        let members: Vec<String> = ["Scripts".to_owned(), "Library/Build/editor".to_owned()]
+        let members: Vec<String> = crate::project_files::base_members(project)
             .into_iter()
             .chain(
                 written

@@ -6,8 +6,8 @@ name: Release
 # shows comes from the tag too: -alpha... is Alpha, -beta... or -rc... is Beta, none is
 # Production.
 # Each platform gets two downloads: the Oxide Hub (the one people download) and the editor
-# (engine source + prebuilt oxide), which the Hub installs. After publishing, the release is
-# added to releases.json on main, the list every Hub reads.
+# (prebuilt editor and engine library, plus the engine source), which the Hub installs.
+# After publishing, the release is added to releases.json on main, the list every Hub reads.
 # "Run workflow" on the Actions tab builds the downloads without publishing (for testing).
 
 on:
@@ -61,10 +61,12 @@ jobs:
           echo "OXIDE_VERSION=${version#v}" >> "$GITHUB_ENV"
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }} -p oxide -p oxide_mcp_stdio -p oxide_hub
+      - name: Prebuilt project editor
+        run: python3 scripts/build_sdk.py --target ${{ matrix.target }} --out sdk-out
       - name: Package
         shell: bash
         run: |
-          python3 scripts/package_release.py --target ${{ matrix.target }} --version "$VERSION" --out dist
+          python3 scripts/package_release.py --target ${{ matrix.target }} --version "$VERSION" --sdk sdk-out --out dist
           python3 scripts/package_hub.py --target ${{ matrix.target }} --version "$VERSION" --out dist
       - uses: actions/upload-artifact@v4
         with:

@@ -88,9 +88,10 @@ The full walkthrough, including troubleshooting, is in
 
 1. In the Hub, click **New project**, pick the **Editor version**, a name and a folder, and
    click **Create project**.
-2. The first project opened with a version compiles that version's engine, which takes a few
-   minutes. Every project after that opens in seconds, because all projects share one build
-   cache.
+2. The editor opens right away: it comes prebuilt, so nothing of the engine is compiled on your
+   machine. Only your project's scripts compile, in the background (the first time a few seconds,
+   then just what you change). The first open with a version may also install the Rust version
+   that editor was built with; the Hub shows the progress.
 3. The editor opens on a starter scene. From here it works like Unity:
    - **GameObject** menu → create cubes, lights, cameras, terrain, UI.
    - Drag models (`.glb`, `.gltf`, `.fbx`, `.obj`), textures and audio from Finder or Explorer
@@ -299,7 +300,10 @@ cargo test --workspace
 ```
 
 A Hub built from source lists the checkout it was built in as an editor ("Located"), next to
-any versions you install, so you can open projects with your own engine build.
+any versions you install, so you can open projects with your own engine build. Unlike an
+installed release, a source checkout has no prebuilt editor: opening a project builds that
+project's editor with Cargo (the engine compiles once into a shared build cache, then projects
+open in seconds). `scripts/build_sdk.py` builds the prebuilt editor a release ships.
 
 On Linux, install the development headers first:
 

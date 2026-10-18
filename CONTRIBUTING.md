@@ -143,8 +143,10 @@ Maintainers publish releases from tags; the
    - **the Oxide Hub** (`oxide-hub-<tag>-<target>`: a macOS `.app`, the Windows program with its
      icon, or the Linux program with an icon and `.desktop` file), which is what people
      download;
-   - **the editor** (`oxide-<tag>-<target>`: the engine source plus prebuilt `oxide` and
-     `oxide-mcp-stdio`), which the Hub installs.
+   - **the editor** (`oxide-<tag>-<target>`: the prebuilt project editor `oxide-editor` with the
+     engine library and the metadata Scripts compile against, from `scripts/build_sdk.py`; the
+     `oxide` launcher and `oxide-mcp-stdio`; and the engine source for player builds), which
+     the Hub installs.
 5. The workflow then adds the release to [`releases.json`](releases.json) on `main` (with each
    download's URL, SHA-256 and size) and pushes that commit as `github-actions[bot]`. Every Hub
    reads this file, so the new version appears in **Installs → Available** right away. If

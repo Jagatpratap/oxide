@@ -23,8 +23,17 @@ you tag it.
 - `oxide create DIR` and `oxide open DIR --build-only`; release builds report the tag's
   version (`oxide --version`).
 
+- **Prebuilt editor in every release** (`bin/oxide-editor` and the engine library in `lib/`,
+  made by `scripts/build_sdk.py`): opening a project starts it at once and compiles nothing
+  of the engine; only the project's Scripts compile, against the prebuilt library (through
+  `sdk/oxide_dylib`). Projects get a `rust-toolchain.toml` for the Rust version the editor was
+  built with, which the first open installs if needed.
+
 ### Changed
 - `oxide` with no arguments starts the Hub program instead of a Hub built into the editor.
+- `Scripts/Cargo.toml` takes the engine from the project workspace (`oxide = { workspace =
+  true }`); older projects are updated when opened, so switching editor versions no longer
+  leaves the Scripts on the old engine.
 
 ## [0.1.0] - Unreleased
 

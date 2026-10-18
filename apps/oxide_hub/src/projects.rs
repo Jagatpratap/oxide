@@ -262,6 +262,7 @@ impl OpenJob {
                     } else if [
                         "Compiling",
                         "Building",
+                        "Installing",
                         "Checking",
                         "Finished",
                         "error",

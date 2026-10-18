@@ -1084,7 +1084,7 @@ impl HubApp {
                 let mut detail = format!("{}:{:02}", secs / 60, secs % 60);
                 if job.compiled > 0 {
                     detail += &format!(
-                        " · {} crates compiled · the first open of a version compiles its engine and takes a few minutes",
+                        " · {} crates compiled · an editor built from source compiles its engine on the first open, which takes a few minutes",
                         job.compiled
                     );
                 }

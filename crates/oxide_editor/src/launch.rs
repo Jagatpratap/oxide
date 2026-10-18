@@ -1,8 +1,9 @@
-//! Entry point of a project's editor executable (generated in `Library/Build/editor`).
+//! Entry point of the project editor: a release's prebuilt `bin/oxide-editor`, or the
+//! executable an engine source checkout generates in a project's `Library/Build/editor`.
 //!
 //! ```text
-//! oxide-project-editor [--project DIR] [--scene Assets/Scenes/Main.scene]
-//!                      [--mcp-addr 127.0.0.1:47474] [--no-mcp] [--size 1600x960]
+//! oxide-editor [--project DIR] [--scene Assets/Scenes/Main.scene]
+//!              [--mcp-addr 127.0.0.1:47474] [--no-mcp] [--size 1600x960]
 //! ```
 //! Opens the scene given, else the last scene opened in this project, else
 //! `Assets/Scenes/Main.scene`, else a new default scene.
@@ -14,7 +15,7 @@ use oxide_engine::{App, EngineConfig, objects};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: oxide-project-editor [--project DIR] [--scene PATH] [--mcp-addr HOST:PORT] [--no-mcp] [--size WxH]";
+const USAGE: &str = "usage: oxide-editor [--project DIR] [--scene PATH] [--mcp-addr HOST:PORT] [--no-mcp] [--size WxH]";
 
 /// File remembering the last scene opened in a project.
 pub fn last_scene_file(project: &Path) -> PathBuf {

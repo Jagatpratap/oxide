@@ -7,11 +7,16 @@
 //!   Cargo.toml              Cargo workspace: Scripts + the editor build
 //!   .cargo/config.toml      build output goes to the shared build folder
 //!   Library/                generated, safe to delete (Unity's Library folder)
-//!     Build/editor/         the project's editor executable
+//!     Build/editor/         the project's editor crate (engine source checkouts only)
 //! ```
 //!
-//! Every project builds into one shared folder ([`shared_build_dir`]), so the engine is
-//! compiled once for all of them and a new project only compiles its own Scripts. Cargo
+//! A release ships the editor prebuilt ([`prebuilt`]): opening a project starts
+//! `bin/oxide-editor` straight away and the Scripts compile against the release's engine
+//! library, so nothing of the engine is compiled. An engine source checkout instead builds
+//! each project's editor (`Library/Build/editor`) with Cargo.
+//!
+//! Every project builds into one shared folder ([`shared_build_dir`]), so with a source
+//! checkout the engine is compiled once for all of them. Cargo
 //! keeps each project's crates apart by their paths; the Scripts library and the editor
 //! executable get per-project names ([`project_id`]) because Cargo doesn't add a hash to
 //! those file names.
@@ -37,6 +42,102 @@ pub fn engine_root() -> PathBuf {
     let built = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     std::fs::canonicalize(&built).unwrap_or(built)
 }
+
+/// The prebuilt editor of a release: `bin/oxide-editor`, plus the engine library in `lib/`
+/// that a project's Scripts compile against through the `sdk/oxide_dylib` crate.
+pub struct Prebuilt {
+    pub editor: PathBuf,
+    /// The crate projects depend on as `oxide` (it re-exports the prebuilt library).
+    pub engine_crate: PathBuf,
+    /// The Rust version the library was built with (`1.99.0`), a rustup channel.
+    pub channel: String,
+    /// `rustc --version` of that compiler; Scripts only link when compiled with exactly it.
+    pub rustc: String,
+}
+
+impl Prebuilt {
+    /// The rustup toolchain the project's Scripts compile with (its `rust-toolchain.toml`): an
+    /// installed one with exactly this compiler (often `stable-<host>`, saving a download), else the
+    /// version itself ([`ensure_toolchain`] installs it).
+    pub fn toolchain(&self) -> String {
+        let installed = rustup_output(&["toolchain", "list"]).unwrap_or_default();
+        for name in installed
+            .lines()
+            .filter_map(|l| l.split_whitespace().next())
+        {
+            if rustup_output(&["run", name, "rustc", "--version"])
+                .as_deref()
+                .map(str::trim)
+                == Some(self.rustc.as_str())
+            {
+                return name.to_owned();
+            }
+        }
+        self.channel.clone()
+    }
+}
+
+/// rustup's default install (`~/.cargo/bin/rustup`), else the one on `PATH`.
+fn rustup_command() -> PathBuf {
+    let exe = format!("rustup{}", std::env::consts::EXE_SUFFIX);
+    std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cargo")))
+        .or_else(|| std::env::var_os("USERPROFILE").map(|h| PathBuf::from(h).join(".cargo")))
+        .map(|h| h.join("bin").join(&exe))
+        .filter(|r| r.is_file())
+        .unwrap_or_else(|| exe.into())
+}
+
+fn rustup_output(args: &[&str]) -> Option<String> {
+    let out = std::process::Command::new(rustup_command())
+        .args(args)
+        .env_remove("RUSTUP_TOOLCHAIN")
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// The prebuilt editor in `engine_root`, if it is a release (`lib/sdk.txt`). `None` for an
+/// engine source checkout, whose projects build their own editor.
+pub fn prebuilt(engine_root: &Path) -> Option<Prebuilt> {
+    let info = std::fs::read_to_string(engine_root.join("lib/sdk.txt")).ok()?;
+    let value = |key: &str| {
+        info.lines()
+            .find_map(|l| l.strip_prefix(key)?.strip_prefix('='))
+            .map(|v| v.trim().to_owned())
+    };
+    let (channel, rustc) = (value("channel")?, value("rustc")?);
+    let editor = engine_root.join(format!("bin/oxide-editor{}", std::env::consts::EXE_SUFFIX));
+    let engine_crate = engine_root.join("sdk/oxide_dylib");
+    (editor.is_file() && engine_crate.join("Cargo.toml").is_file()).then_some(Prebuilt {
+        editor,
+        engine_crate,
+        channel,
+        rustc,
+    })
+}
+
+/// The engine crate a project's Scripts, assemblies and packages use as `oxide`.
+pub fn engine_crate(engine_root: &Path) -> PathBuf {
+    prebuilt(engine_root)
+        .map(|p| p.engine_crate)
+        .unwrap_or_else(|| engine_root.join("crates/oxide_dylib"))
+}
+
+/// The project's Cargo workspace members besides its assembly crates.
+pub fn base_members(dir: &Path) -> Vec<String> {
+    let mut m = vec!["Scripts".to_owned()];
+    if dir.join(EDITOR_CRATE).join("Cargo.toml").is_file() {
+        m.push(EDITOR_CRATE.to_owned());
+    }
+    m
+}
+
+/// The project's own editor crate (engine source checkouts).
+const EDITOR_CRATE: &str = "Library/Build/editor";
 
 fn write(path: &Path, text: &str) -> Result<(), String> {
     if let Some(dir) = path.parent() {
@@ -130,6 +231,32 @@ fn lib_name_in(manifest: &str) -> Option<String> {
     None
 }
 
+/// Points the Scripts manifest's engine dependency at the workspace's (older projects named
+/// the engine path there, which went stale when the project moved to another editor version).
+fn with_workspace_engine(manifest: &str) -> String {
+    let mut out: String = manifest
+        .lines()
+        .map(|l| {
+            let t = l.trim_start();
+            let engine_line = t
+                .strip_prefix("oxide")
+                .is_some_and(|r| r.trim_start().starts_with('='))
+                && t.contains("oxide_dylib")
+                && t.contains("path");
+            if engine_line {
+                "oxide = { workspace = true }"
+            } else {
+                l
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if manifest.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
 /// Sets `[lib] name` in a Scripts manifest, keeping everything else the user wrote.
 fn with_lib_name(manifest: &str, name: &str) -> String {
     let entry = format!("name = \"{name}\"");
@@ -190,6 +317,37 @@ pub fn cargo_command() -> PathBuf {
         }
     }
     exe.into()
+}
+
+/// Installs the Rust toolchain `name` through rustup if it is missing (printing rustup's
+/// progress). Without rustup there is nothing to do here: the Scripts build reports a
+/// wrong compiler version itself.
+pub fn ensure_toolchain(name: &str) -> Result<(), String> {
+    let Some(list) = rustup_output(&["toolchain", "list"]) else {
+        return Ok(());
+    };
+    // Listed with the host: `1.99.0-aarch64-apple-darwin`.
+    let prefix = format!("{name}-");
+    if list
+        .lines()
+        .filter_map(|l| l.split_whitespace().next())
+        .any(|t| t == name || t.starts_with(&prefix))
+    {
+        return Ok(());
+    }
+    eprintln!("Installing Rust {name} (the version this editor was built with)...");
+    let status = std::process::Command::new(rustup_command())
+        .args(["toolchain", "install", name, "--profile", "minimal"])
+        .stdout(std::process::Stdio::null())
+        .status()
+        .map_err(|e| format!("cannot run rustup: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "could not install Rust {name}; run `rustup toolchain install {name}` and open the project again"
+        ))
+    }
 }
 
 /// Why `cargo` couldn't start, in words for someone who may not have Rust installed.
@@ -360,14 +518,20 @@ pub fn create_project(dir: &Path, engine_root: &Path) -> Result<(), String> {
 
 /// (Re)writes the generated workspace files, pointing at the engine at `engine_root`.
 pub fn write_build_files(dir: &Path, engine_root: &Path) -> Result<(), String> {
-    let engine = manifest_path(&engine_root.join("crates/oxide_dylib"));
+    let prebuilt = prebuilt(engine_root);
+    let engine = manifest_path(&engine_crate(engine_root));
+    let members = if prebuilt.is_some() {
+        r#""Scripts""#
+    } else {
+        r#""Scripts", "Library/Build/editor""#
+    };
     write(
         &dir.join("Cargo.toml"),
         &format!(
             r#"# Generated by Oxide: the project's Cargo workspace (your Scripts + the editor build).
 [workspace]
 resolver = "3"
-members = ["Scripts", "Library/Build/editor"]
+members = [{members}]
 
 # Package crates (in Packages/ or Library/PackageCache) use the engine with
 # `oxide = {{ workspace = true }}`.
@@ -401,6 +565,25 @@ debug = "line-tables-only"
         &project_version_file(dir),
         &format!("m_EditorVersion: {}\n", oxide_core::ENGINE_VERSION),
     )?;
+    // A prebuilt engine library only links with the compiler that built it.
+    let toolchain = dir.join("rust-toolchain.toml");
+    match &prebuilt {
+        Some(p) => write(
+            &toolchain,
+            &format!(
+                "# Generated by Oxide: a Rust toolchain with the compiler this editor was built with,\n# {}. Your Scripts compile against its engine library, which needs\n# exactly that compiler.\n[toolchain]\nchannel = \"{}\"\n",
+                p.rustc,
+                p.toolchain()
+            ),
+        )?,
+        None => {
+            if std::fs::read_to_string(&toolchain)
+                .is_ok_and(|t| t.starts_with("# Generated by Oxide"))
+            {
+                let _ = std::fs::remove_file(&toolchain);
+            }
+        }
+    }
     let id = project_id(dir);
     // Player builds need the engine source too.
     write(
@@ -420,17 +603,27 @@ name = "scripts_{id}"
 crate-type = ["dylib"]
 
 [dependencies]
-oxide = {{ package = "oxide_dylib", path = "{engine}" }}
+oxide = {{ workspace = true }}
 "#
         ),
     )?;
-    // Scripts/Cargo.toml is the user's; only its library name is kept up to date.
+    // Scripts/Cargo.toml is the user's; only its library name and engine line are kept up
+    // to date.
     let manifest = dir.join("Scripts/Cargo.toml");
     if let Ok(text) = std::fs::read_to_string(&manifest) {
         let name = format!("scripts_{id}");
-        if lib_name_in(&text).as_deref() != Some(name.as_str()) {
-            write(&manifest, &with_lib_name(&text, &name))?;
+        let mut new = with_workspace_engine(&text);
+        if lib_name_in(&new).as_deref() != Some(name.as_str()) {
+            new = with_lib_name(&new, &name);
         }
+        if new != text {
+            write(&manifest, &new)?;
+        }
+    }
+    if prebuilt.is_some() {
+        // The release's prebuilt editor runs the project; it has no editor crate of its own.
+        let _ = std::fs::remove_dir_all(dir.join(EDITOR_CRATE));
+        return Ok(());
     }
     write(
         &dir.join("Library/Build/editor/Cargo.toml"),
@@ -549,7 +742,9 @@ mod tests {
         create_project(&dir, Path::new("/engine")).unwrap();
         assert!(dir.join("Scripts/src/spinner.rs").exists());
         let cargo = std::fs::read_to_string(dir.join("Scripts/Cargo.toml")).unwrap();
-        assert!(cargo.contains("/engine/crates/oxide_dylib"));
+        assert!(cargo.contains("oxide = { workspace = true }"), "{cargo}");
+        let workspace = std::fs::read_to_string(dir.join("Cargo.toml")).unwrap();
+        assert!(workspace.contains("/engine/crates/oxide_dylib"));
 
         add_script(&dir.join("Scripts"), "PlayerController").unwrap();
         let lib = std::fs::read_to_string(dir.join("Scripts/src/lib.rs")).unwrap();
@@ -602,5 +797,71 @@ mod tests {
             "[package]\nname = \"x\"\n\n[lib]\nname = \"s\"\n"
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A release folder with a prebuilt editor (what scripts/build_sdk.py adds).
+    fn fake_release(root: &Path) {
+        std::fs::create_dir_all(root.join("lib")).unwrap();
+        std::fs::create_dir_all(root.join("bin")).unwrap();
+        std::fs::create_dir_all(root.join("sdk/oxide_dylib")).unwrap();
+        std::fs::write(
+            root.join("lib/sdk.txt"),
+            "rustc=rustc 0.0.1 (000000000 2000-01-01)\nchannel=0.0.1\ntarget=x\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(format!("bin/oxide-editor{}", std::env::consts::EXE_SUFFIX)),
+            "",
+        )
+        .unwrap();
+        std::fs::write(root.join("sdk/oxide_dylib/Cargo.toml"), "").unwrap();
+    }
+
+    #[test]
+    fn release_projects_use_the_prebuilt_editor() {
+        let tmp = std::env::temp_dir().join(format!("oxide-prebuilt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let (release, source) = (tmp.join("release"), tmp.join("source"));
+        fake_release(&release);
+        std::fs::create_dir_all(&source).unwrap();
+        assert!(prebuilt(&source).is_none());
+        let p = prebuilt(&release).expect("release");
+        assert_eq!(p.channel, "0.0.1");
+        // No installed toolchain has this compiler, so the version itself is pinned.
+        assert_eq!(p.toolchain(), "0.0.1");
+
+        // A project made by an editor built from source, before Scripts used the workspace's
+        // engine line.
+        let dir = tmp.join("Game");
+        create_project(&dir, &source).unwrap();
+        let manifest = dir.join("Scripts/Cargo.toml");
+        let old = std::fs::read_to_string(&manifest).unwrap().replace(
+            "oxide = { workspace = true }",
+            "oxide = { package = \"oxide_dylib\", path = \"/old/crates/oxide_dylib\" }\nrand = \"0.8\"",
+        );
+        std::fs::write(&manifest, old).unwrap();
+        assert!(dir.join("Library/Build/editor/Cargo.toml").is_file());
+
+        // Opened with the release: no editor crate, the prebuilt engine, the pinned compiler.
+        write_build_files(&dir, &release).unwrap();
+        assert!(!dir.join("Library/Build/editor").exists());
+        let workspace = std::fs::read_to_string(dir.join("Cargo.toml")).unwrap();
+        assert!(workspace.contains("members = [\"Scripts\"]"), "{workspace}");
+        assert!(workspace.contains(&manifest_path(&release.join("sdk/oxide_dylib"))));
+        let scripts = std::fs::read_to_string(&manifest).unwrap();
+        assert!(
+            scripts.contains("oxide = { workspace = true }\nrand = \"0.8\""),
+            "{scripts}"
+        );
+        assert!(!scripts.contains("/old/"));
+        let toolchain = std::fs::read_to_string(dir.join("rust-toolchain.toml")).unwrap();
+        assert!(toolchain.contains("channel = \"0.0.1\""), "{toolchain}");
+        assert_eq!(base_members(&dir), ["Scripts"]);
+
+        // Back to the source build: its own editor again, and no pinned compiler.
+        write_build_files(&dir, &source).unwrap();
+        assert!(!dir.join("rust-toolchain.toml").exists());
+        assert_eq!(base_members(&dir), ["Scripts", "Library/Build/editor"]);
+        let _ = std::fs::remove_dir_all(tmp);
     }
 }

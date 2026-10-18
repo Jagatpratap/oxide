@@ -74,7 +74,8 @@ versions and opens your projects.
 4. Open the Hub, go to **Installs → Install Editor**, and install a version (see below).
 
 The `oxide-<version>-<platform>` archives on a release page are the editors themselves: the
-engine source plus the prebuilt `oxide` program. The Hub downloads, checks and unpacks them for
+prebuilt editor (`bin/oxide-editor`) with its engine library (`lib/`), the `oxide` launcher,
+and the engine source (player builds compile it). The Hub downloads, checks and unpacks them for
 you, but you can also unpack one by hand and add it with **Installs → Locate**.
 
 ### Install Oxide from source
@@ -129,10 +130,14 @@ up as a link at the bottom of the sidebar.
 - **Open:** add a project folder from disk.
 - A project's ••• menu has Open, Show in Finder and Remove from list.
 
-The first project opened with a version compiles that version's engine into the shared build
-cache, which takes a few minutes; the Hub shows the progress. After that, projects open in
-seconds and only compile their own scripts. Two projects can't compile at the same moment; the
-second waits and says so. Once the editor starts, the Hub closes; **File → New Project / Open
+An installed version's editor is prebuilt, so a project opens right away: nothing of the engine
+is compiled. The editor then compiles the project's scripts in the background against its
+engine library (a few seconds the first time, then only what changed), and the Console shows
+when they're loaded. Scripts must be compiled with the same Rust version the editor was built
+with, so the project gets a `rust-toolchain.toml` naming it, and the first open installs that
+version through rustup if you don't have it (the Hub shows the progress). An editor built from
+source (a **Located** checkout) has no prebuilt editor: its first open compiles the engine into
+the shared build cache, which takes a few minutes. Once the editor starts, the Hub closes; **File → New Project / Open
 Project** in the editor brings it back.
 
 If Rust isn't installed, the Hub says so at the top of the Projects page, with a link to
@@ -361,8 +366,8 @@ clients, point them at `bin/oxide-mcp-stdio`. See [MCP.md](MCP.md) for every too
 ## 9. Updating Oxide
 
 - **New editor version:** install it from **Installs → Available**, then pick it in a project's
-  version menu. The first project you open with it compiles the new engine (a few minutes),
-  then others open quickly again. Read the [changelog](../CHANGELOG.md) for breaking changes
+  version menu. The project opens right away; its scripts recompile against the new version
+  in the background. Read the [changelog](../CHANGELOG.md) for breaking changes
   first, and uninstall the old version when you no longer need it.
 - **New Hub:** when the release list has a newer Hub, the sidebar shows a link to download it.
   Replace the old app with the new one; your installs and project list stay.
@@ -376,7 +381,8 @@ clients, point them at `bin/oxide-mcp-stdio`. See [MCP.md](MCP.md) for every too
 | macOS says "Oxide Hub" "can't be opened" | Right-click it → **Open**, or run `xattr -dr com.apple.quarantine "/Applications/Oxide Hub.app"`. |
 | "Cannot download the release list" in Installs | Check your internet connection and click **Refresh**. You can still open projects with versions you have, and add editors with **Locate**. |
 | A project's version shows ⚠ | That version isn't installed. Open the project and choose **Install**, or pick another version from its version menu. |
-| The first open takes several minutes | Expected once per machine and engine version: the engine is compiling. Later projects open in seconds. |
+| The first open takes several minutes | With an installed version, this is rustup downloading the Rust version the editor was built with (once per version). With an editor built from source, the engine is compiling (once per machine and engine version). |
+| Console: "this Oxide editor was built with rustc …, but the Scripts are being compiled with …" | Run the `rustup toolchain install` command it names. Don't delete the project's `rust-toolchain.toml`; the editor writes it to pick that version. |
 | Disk is filling up | Uninstall editor versions you don't use, and delete the build cache (`~/Library/Caches/Oxide/Build`, `%LOCALAPPDATA%\Oxide\Build` or `~/.cache/oxide/build`; it's safe), or move it with `OXIDE_BUILD_DIR`. |
 | Linux build fails on `alsa-sys`, `libudev-sys` or `libdbus-sys` | Install the development packages listed in [Install Rust](#install-rust). |
 | Scripts don't reload | Look at the Console for compile errors. A component type that isn't listed in `oxide::scripts!` won't appear in Add Component. |
